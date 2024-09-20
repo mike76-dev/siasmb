@@ -71,7 +71,9 @@ const (
 
 const (
 	// Status codes
-	SMB2_STATUS_OK = 0x00000000
+	SMB2_STATUS_OK                = 0x00000000
+	SMB2_STATUS_INVALID_PARAMETER = 0xc000000d
+	SMB2_STATUS_NOT_SUPPORTED     = 0xc00000bb
 )
 
 const (

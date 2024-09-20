@@ -57,6 +57,12 @@ type server struct {
 	mu       sync.Mutex
 }
 
+type response interface {
+	Encode([]byte) error
+	EncodedLength() int
+	GetHeader() smb2.Header
+}
+
 func newServer(l net.Listener) *server {
 	s := &server{
 		serverGuid:                      uuid.New(),
@@ -101,4 +107,22 @@ func (s *server) closeConnection(c *connection) {
 	delete(s.connectionList, c.clientName)
 	s.mu.Unlock()
 	c.conn.Close()
+}
+
+func (s *server) writeResponse(c *connection, resp response) error {
+	buf := make([]byte, resp.EncodedLength())
+	if err := resp.Encode(buf); err != nil {
+		return err
+	}
+
+	if err := writeMessage(c.conn, buf); err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	delete(c.requestList, resp.GetHeader().MessageID)
+	c.mu.Unlock()
+
+	s.stats.bytesSent += uint64(len(buf))
+	return nil
 }

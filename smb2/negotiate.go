@@ -152,22 +152,33 @@ func (nr *NegotiateResponse) EncodedLength() int {
 	return res
 }
 
-func NewNegotiateResponse(h *Header, guid [16]byte) *NegotiateResponse {
+func (nr *NegotiateResponse) GetHeader() Header {
+	return nr.Header
+}
+
+func (req *Request) NewNegotiateResponse(serverGuid [16]byte) *NegotiateResponse {
 	nr := &NegotiateResponse{}
-	if h == nil {
+	if req.Header == nil {
 		nr.Header.Command = SMB2_NEGOTIATE
 	} else {
-		nr.Header = *h
+		nr.Header = *req.Header
 	}
 
 	nr.Header.Status = SMB2_STATUS_OK
+	nr.Header.NextCommand = 0
 	nr.Header.Flags |= SMB2_FLAGS_SERVER_TO_REDIR
 	nr.DialectRevision = SMB_DIALECT_202
 	nr.SecurityMode = SMB2_NEGOTIATE_SIGNING_ENABLED
-	nr.ServerGUID = guid
+	nr.ServerGUID = serverGuid
 	nr.MaxTransactSize = MaxTransactSize
 	nr.MaxReadSize = MaxReadSize
 	nr.MaxWriteSize = MaxWriteSize
+
+	if req.AsyncID > 0 {
+		nr.Header.AsyncID = req.AsyncID
+		nr.Header.Flags |= SMB2_FLAGS_ASYNC_COMMAND
+		nr.Header.Credits = 0
+	}
 
 	return nr
 }
