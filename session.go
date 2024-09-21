@@ -57,9 +57,12 @@ func (s *server) registerSession(connection *connection, req smb2.SessionSetupRe
 			creationTime: time.Now(),
 			idleTime:     time.Now(),
 		}
+		connection.mu.Lock()
+		connection.sessionTable[ss.sessionID] = ss
+		connection.mu.Unlock()
 		s.mu.Lock()
 		s.globalSessionTable[ss.sessionID] = ss
-		s.stats.sOpens += 1
+		s.stats.sOpens++
 		s.mu.Unlock()
 	} else {
 		var found bool
@@ -75,4 +78,22 @@ func (s *server) registerSession(connection *connection, req smb2.SessionSetupRe
 		}
 	}
 	return ss, nil
+}
+
+func (s *server) deregisterSession(connection *connection, req smb2.LogoffRequest) error {
+	_, found := connection.sessionTable[req.Header.SessionID]
+	if !found {
+		return errSessionNotFound
+	}
+
+	connection.mu.Lock()
+	delete(connection.sessionTable, req.Header.SessionID)
+	connection.mu.Unlock()
+
+	s.mu.Lock()
+	delete(s.globalSessionTable, req.Header.SessionID)
+	s.stats.sOpens--
+	s.mu.Unlock()
+
+	return nil
 }
