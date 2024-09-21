@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -28,10 +29,11 @@ type serverStats struct {
 }
 
 type server struct {
-	stats serverStats
+	enabled bool
+	stats   serverStats
 	// shareList
 	// globalOpenTable
-	// globalSessionTable
+	globalSessionTable              map[uint64]*session
 	connectionList                  map[string]*connection
 	serverGuid                      [16]byte
 	isDfsCapable                    bool
@@ -65,11 +67,13 @@ type response interface {
 
 func newServer(l net.Listener) *server {
 	s := &server{
+		enabled:                         true,
 		serverGuid:                      uuid.New(),
 		serverSideCopyMaxNumberOfChunks: 256,
 		serverSideCopyMaxChunkSize:      2 >> 10, // 1MiB
 		serverSideCopyMaxDataSize:       2 >> 14, // 16MiB
 		connectionList:                  make(map[string]*connection),
+		globalSessionTable:              make(map[uint64]*session),
 		listener:                        l,
 	}
 	s.stats.start = time.Now()
@@ -81,6 +85,7 @@ func (s *server) newConnection(conn net.Conn) *connection {
 		commandSequenceWindow: make(map[uint64]struct{}),
 		requestList:           make(map[uint64]smb2.Request),
 		asyncCommandList:      make(map[uint64]smb2.Request),
+		sessionTable:          make(map[uint64]*session),
 		conn:                  conn,
 		negotiateDialect:      smb2.SMB_DIALECT_UNKNOWN,
 		dialect:               "Unknown",
@@ -114,6 +119,7 @@ func (s *server) writeResponse(c *connection, resp response) error {
 	if err := resp.Encode(buf); err != nil {
 		return err
 	}
+	fmt.Println("Encoded response:", buf) //TODO
 
 	if err := writeMessage(c.conn, buf); err != nil {
 		return err
@@ -121,8 +127,8 @@ func (s *server) writeResponse(c *connection, resp response) error {
 
 	c.mu.Lock()
 	delete(c.requestList, resp.GetHeader().MessageID)
+	s.stats.bytesSent += uint64(len(buf))
 	c.mu.Unlock()
 
-	s.stats.bytesSent += uint64(len(buf))
 	return nil
 }

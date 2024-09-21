@@ -2,6 +2,7 @@ package smb2
 
 import (
 	"encoding/binary"
+	"fmt"
 	"time"
 
 	"github.com/mike76-dev/siasmb/smb"
@@ -24,6 +25,7 @@ type NegotiateContext struct {
 
 func (nr *NegotiateRequest) Decode(buf []byte) error {
 	if len(buf) < 36 {
+		fmt.Printf("Wrong buffer length: %d instead of 36\n", len(buf)) //TODO
 		return smb.ErrWrongDataLength
 	}
 
@@ -33,6 +35,7 @@ func (nr *NegotiateRequest) Decode(buf []byte) error {
 
 	dialectCount := binary.LittleEndian.Uint16(buf[2:4])
 	if len(buf) < 36+2*int(dialectCount) {
+		fmt.Printf("Wrong buffer length: %d instead of %d\n", len(buf), 36+2*int(dialectCount)) //TODO
 		return smb.ErrWrongDataLength
 	}
 
@@ -167,6 +170,7 @@ func (req *Request) NewNegotiateResponse(serverGuid [16]byte) *NegotiateResponse
 	nr.Header.Status = SMB2_STATUS_OK
 	nr.Header.NextCommand = 0
 	nr.Header.Flags |= SMB2_FLAGS_SERVER_TO_REDIR
+	nr.Header.Credits = 1
 	nr.DialectRevision = SMB_DIALECT_202
 	nr.SecurityMode = SMB2_NEGOTIATE_SIGNING_ENABLED
 	nr.ServerGUID = serverGuid

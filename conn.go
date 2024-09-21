@@ -1,11 +1,18 @@
 package main
 
 import (
+	"errors"
+	"math"
 	"net"
 	"sync"
 	"time"
 
 	"github.com/mike76-dev/siasmb/smb2"
+)
+
+var (
+	errRequestNotWithinWindow        = errors.New("request out of command sequence window")
+	errCommandSecuenceWindowExceeded = errors.New("command sequence window exceeded")
 )
 
 type connection struct {
@@ -22,7 +29,7 @@ type connection struct {
 	maxReadSize           uint64
 	supportsMultiCredit   bool
 	// transportName
-	// sessionTable
+	sessionTable map[uint64]*session
 	creationTime time.Time
 	// preauthSessionTable
 	// clientGuid: 2.1+
@@ -43,4 +50,24 @@ type connection struct {
 	// serverCertificateMappingEntry: 3.1.1
 	conn net.Conn
 	mu   sync.Mutex
+}
+
+func (c *connection) receiveRequest(req smb2.Request) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	_, ok := c.commandSequenceWindow[req.Header.MessageID]
+	if !ok {
+		return errRequestNotWithinWindow
+	}
+
+	if req.Header.MessageID == math.MaxUint64 {
+		return errCommandSecuenceWindowExceeded
+	}
+
+	delete(c.commandSequenceWindow, req.Header.MessageID)
+	c.commandSequenceWindow[req.Header.MessageID+1] = struct{}{}
+	c.requestList[req.Header.MessageID] = req
+
+	return nil
 }

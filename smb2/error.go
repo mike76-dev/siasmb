@@ -52,6 +52,8 @@ func (req *Request) NewErrorResponse(status uint32, ecc uint8, data []byte) *Err
 		er.Header.AsyncID = req.AsyncID
 		er.Header.Flags |= SMB2_FLAGS_ASYNC_COMMAND
 		er.Header.Credits = 0
+	} else {
+		er.Header.Credits = 1
 	}
 	return er
 }

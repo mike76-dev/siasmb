@@ -30,7 +30,7 @@ const (
 )
 
 const (
-	// Flags
+	// Global flags
 	SMB2_FLAGS_SERVER_TO_REDIR    = 0x00000001
 	SMB2_FLAGS_ASYNC_COMMAND      = 0x00000002
 	SMB2_FLAGS_RELATED_OPERATIONS = 0x00000004
@@ -71,9 +71,10 @@ const (
 
 const (
 	// Status codes
-	SMB2_STATUS_OK                = 0x00000000
-	SMB2_STATUS_INVALID_PARAMETER = 0xc000000d
-	SMB2_STATUS_NOT_SUPPORTED     = 0xc00000bb
+	SMB2_STATUS_OK                   = 0x00000000
+	SMB2_STATUS_INVALID_PARAMETER    = 0xc000000d
+	SMB2_STATUS_NOT_SUPPORTED        = 0xc00000bb
+	SMB2_STATUS_USER_SESSION_DELETED = 0xc0000203
 )
 
 const (
@@ -81,4 +82,11 @@ const (
 	MaxTransactSize = 1048576 * 2
 	MaxReadSize     = 1048576 * 2
 	MaxWriteSize    = 1048576 * 2
+)
+
+const (
+	// Session flags
+	SMB2_SESSION_FLAG_IS_GUEST     = 0x0001
+	SMB2_SESSION_FLAG_IS_NULL      = 0x0002
+	SMB2_SESSION_FLAG_ENCRYPT_DATA = 0x0004
 )
