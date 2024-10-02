@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/smb2"
 )
 
@@ -48,8 +49,10 @@ type connection struct {
 	// signingAlgorithmId: 3.1.1
 	// acceptTransportSecurity: 3.1.1
 	// serverCertificateMappingEntry: 3.1.1
-	conn net.Conn
-	mu   sync.Mutex
+	conn       net.Conn
+	mu         sync.Mutex
+	server     *server
+	ntlmServer *ntlm.Server
 }
 
 func (c *connection) receiveRequest(req smb2.Request) error {

@@ -2,9 +2,9 @@ package smb2
 
 import (
 	"encoding/binary"
-	"fmt"
 	"time"
 
+	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/smb"
 	"github.com/mike76-dev/siasmb/utils"
 )
@@ -25,7 +25,6 @@ type NegotiateContext struct {
 
 func (nr *NegotiateRequest) Decode(buf []byte) error {
 	if len(buf) < 36 {
-		fmt.Printf("Wrong buffer length: %d instead of 36\n", len(buf)) //TODO
 		return smb.ErrWrongDataLength
 	}
 
@@ -35,7 +34,6 @@ func (nr *NegotiateRequest) Decode(buf []byte) error {
 
 	dialectCount := binary.LittleEndian.Uint16(buf[2:4])
 	if len(buf) < 36+2*int(dialectCount) {
-		fmt.Printf("Wrong buffer length: %d instead of %d\n", len(buf), 36+2*int(dialectCount)) //TODO
 		return smb.ErrWrongDataLength
 	}
 
@@ -159,7 +157,7 @@ func (nr *NegotiateResponse) GetHeader() Header {
 	return nr.Header
 }
 
-func (req *Request) NewNegotiateResponse(serverGuid [16]byte) *NegotiateResponse {
+func (req *Request) NewNegotiateResponse(serverGuid [16]byte, ns *ntlm.Server) *NegotiateResponse {
 	nr := &NegotiateResponse{}
 	if req.Header == nil {
 		nr.Header.Command = SMB2_NEGOTIATE
@@ -173,6 +171,7 @@ func (req *Request) NewNegotiateResponse(serverGuid [16]byte) *NegotiateResponse
 	nr.Header.Credits = 1
 	nr.DialectRevision = SMB_DIALECT_202
 	nr.SecurityMode = SMB2_NEGOTIATE_SIGNING_ENABLED
+	nr.Capabilities = SMB2_GLOBAL_CAP_DFS
 	nr.ServerGUID = serverGuid
 	nr.MaxTransactSize = MaxTransactSize
 	nr.MaxReadSize = MaxReadSize
@@ -183,6 +182,13 @@ func (req *Request) NewNegotiateResponse(serverGuid [16]byte) *NegotiateResponse
 		nr.Header.Flags |= SMB2_FLAGS_ASYNC_COMMAND
 		nr.Header.Credits = 0
 	}
+
+	token, err := ns.Negotiate()
+	if err != nil {
+		panic(err)
+	}
+
+	nr.SecurityBuffer = token
 
 	return nr
 }

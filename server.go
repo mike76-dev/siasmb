@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"net"
 	"sync"
 	"time"
@@ -18,7 +17,7 @@ type serverStats struct {
 	sOpens    uint32
 	sTimedOut uint32
 	// sErrorOut uint32
-	// pwErrors uint32
+	pwErrors   uint32
 	permErrors uint32
 	// sysErrors uint32
 	bytesSent uint64
@@ -72,6 +71,7 @@ func newServer(l net.Listener) *server {
 		serverSideCopyMaxNumberOfChunks: 256,
 		serverSideCopyMaxChunkSize:      2 >> 10, // 1MiB
 		serverSideCopyMaxDataSize:       2 >> 14, // 16MiB
+		isDfsCapable:                    true,
 		connectionList:                  make(map[string]*connection),
 		globalSessionTable:              make(map[uint64]*session),
 		listener:                        l,
@@ -94,6 +94,7 @@ func (s *server) newConnection(conn net.Conn) *connection {
 		maxTransactSize:       smb2.MaxTransactSize,
 		maxReadSize:           smb2.MaxReadSize,
 		maxWriteSize:          smb2.MaxWriteSize,
+		server:                s,
 	}
 
 	c.mu.Lock()
@@ -114,12 +115,17 @@ func (s *server) closeConnection(c *connection) {
 	c.conn.Close()
 }
 
-func (s *server) writeResponse(c *connection, resp response) error {
+func (s *server) writeResponse(c *connection, ss *session, resp response) error {
 	buf := make([]byte, resp.EncodedLength())
 	if err := resp.Encode(buf); err != nil {
 		return err
 	}
-	fmt.Println("Encoded response:", buf) //TODO
+
+	if ss != nil && ss.state == sessionValid {
+		if resp.GetHeader().Command == smb2.SMB2_SESSION_SETUP || ss.signingRequired {
+			ss.sign(buf)
+		}
+	}
 
 	if err := writeMessage(c.conn, buf); err != nil {
 		return err
