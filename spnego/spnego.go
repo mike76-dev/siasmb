@@ -24,6 +24,10 @@ type initialContextToken2 struct { // `asn1:"application,tag:0"`
 	Resp     []NegTokenResp        `asn1:"optional,explict,tag:1"`
 }
 
+type finalContextToken struct {
+	Resp []NegTokenResp2 `asn1:"optional,explict,tag:1"`
+}
+
 // initialContextToken ::= [APPLICATION 0] IMPLICIT SEQUENCE {
 //   ThisMech          MechType
 //   InnerContextToken negotiateToken
@@ -68,6 +72,10 @@ type NegTokenResp struct {
 	SupportedMech asn1.ObjectIdentifier `asn1:"optional,explicit,tag:1"`
 	ResponseToken []byte                `asn1:"optional,explicit,tag:2"`
 	MechListMIC   []byte                `asn1:"optional,explicit,tag:3"`
+}
+
+type NegTokenResp2 struct {
+	NegState asn1.Enumerated `asn1:"explicit,tag:0"`
 }
 
 func DecodeNegTokenInit2(bs []byte) (*NegTokenInit2, error) {
@@ -167,4 +175,20 @@ func DecodeNegTokenResp(bs []byte) (*NegTokenResp, error) {
 	}
 
 	return &resp, nil
+}
+
+func EncodeNegTokenResp2() ([]byte, error) {
+	bs, err := asn1.Marshal(
+		finalContextToken{
+			Resp: []NegTokenResp2{
+				{
+					NegState: 0x00,
+				},
+			},
+		})
+	if err != nil {
+		return nil, err
+	}
+
+	return bs, nil
 }

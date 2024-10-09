@@ -11,29 +11,33 @@ import (
 	"encoding/binary"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/mike76-dev/siasmb/spnego"
 	"github.com/mike76-dev/siasmb/utils"
 )
 
 type Server struct {
-	targetName string
-	accounts   map[string]string
+	targetName   string
+	targetDomain string
+	accounts     map[string]string
 
 	nmsg    []byte
 	cmsg    []byte
+	amsg    []byte
 	session *Session
 
 	mechTypes []asn1.ObjectIdentifier
 }
 
-func NewServer(targetName string) *Server {
+func NewServer(targetName, targetDomain string) *Server {
 	mechTypes := make([]asn1.ObjectIdentifier, 1)
 	mechTypes[0] = spnego.NlmpOid
 	return &Server{
-		targetName: targetName,
-		accounts:   make(map[string]string),
-		mechTypes:  mechTypes,
+		targetName:   targetName,
+		targetDomain: targetDomain,
+		accounts:     make(map[string]string),
+		mechTypes:    mechTypes,
 	}
 }
 
@@ -70,6 +74,8 @@ func (s *Server) Challenge(nmsg []byte) (cmsg []byte, err error) {
 	}
 
 	flags := binary.LittleEndian.Uint32(nmsg[12:16]) & defaultFlags
+	flags |= NTLMSSP_NEGOTIATE_TARGET_INFO
+	flags |= NTLMSSP_TARGET_TYPE_SERVER
 
 	//        ChallengeMessage
 	//   0-8: Signature
@@ -89,15 +95,27 @@ func (s *Server) Challenge(nmsg []byte) (cmsg []byte, err error) {
 	}
 
 	targetName := utils.EncodeStringToBytes(s.targetName)
+	targetDomain := utils.EncodeStringToBytes(s.targetDomain)
+	targetNameLow := utils.EncodeStringToBytes(strings.ToLower(s.targetName))
 
-	cmsg = make([]byte, off+len(targetName)+4)
+	length := len(targetName)
+	if flags&NTLMSSP_NEGOTIATE_TARGET_INFO != 0 {
+		length += len(targetName) + 4    // MsvAvNbComputerName
+		length += len(targetName) + 4    // MsvAvNbDomainName
+		length += len(targetNameLow) + 4 // MsvAvDnsComputerName
+		length += len(targetDomain) + 4  // MsvAvDnsDomainName
+		length += 8 + 4                  // MsvAvTimestamp
+		length += 4                      // MsvAvEOL
+	}
+
+	cmsg = make([]byte, off+length)
 
 	copy(cmsg[:8], signature)
 	binary.LittleEndian.PutUint32(cmsg[8:12], NtLmChallenge)
 	binary.LittleEndian.PutUint32(cmsg[20:24], flags)
 
 	if targetName != nil && flags&NTLMSSP_REQUEST_TARGET != 0 {
-		length := copy(cmsg[off:], targetName)
+		length := copy(cmsg[off:off+len(targetName)], targetName)
 		binary.LittleEndian.PutUint16(cmsg[12:14], uint16(length))
 		binary.LittleEndian.PutUint16(cmsg[14:16], uint16(length))
 		binary.LittleEndian.PutUint32(cmsg[16:20], uint32(off))
@@ -105,11 +123,42 @@ func (s *Server) Challenge(nmsg []byte) (cmsg []byte, err error) {
 	}
 
 	if flags&NTLMSSP_NEGOTIATE_TARGET_INFO != 0 {
-		length := copy(cmsg[off:], []byte{0x00, 0x00, 0x00, 0x00}) // AvId: MsvAvEOL, AvLen: 0
+		offset := off
+		binary.LittleEndian.PutUint16(cmsg[offset:offset+2], MsvAvNbComputerName)
+		binary.LittleEndian.PutUint16(cmsg[offset+2:offset+4], uint16(len(targetName)))
+		copy(cmsg[offset+4:offset+4+len(targetName)], targetName)
+		length := 4 + len(targetName)
+		offset += length
+
+		binary.LittleEndian.PutUint16(cmsg[offset:offset+2], MsvAvNbDomainName)
+		binary.LittleEndian.PutUint16(cmsg[offset+2:offset+4], uint16(len(targetName)))
+		copy(cmsg[offset+4:offset+4+len(targetName)], targetName)
+		length += 4 + len(targetName)
+		offset += 4 + len(targetName)
+
+		binary.LittleEndian.PutUint16(cmsg[offset:offset+2], MsvAvDnsComputerName)
+		binary.LittleEndian.PutUint16(cmsg[offset+2:offset+4], uint16(len(targetNameLow)))
+		copy(cmsg[offset+4:offset+4+len(targetNameLow)], targetNameLow)
+		length += 4 + len(targetNameLow)
+		offset += 4 + len(targetNameLow)
+
+		binary.LittleEndian.PutUint16(cmsg[offset:offset+2], MsvAvDnsDomainName)
+		binary.LittleEndian.PutUint16(cmsg[offset+2:offset+4], uint16(len(targetDomain)))
+		copy(cmsg[offset+4:offset+4+len(targetDomain)], targetDomain)
+		length += 4 + len(targetDomain)
+		offset += 4 + len(targetDomain)
+
+		binary.LittleEndian.PutUint16(cmsg[offset:offset+2], MsvAvTimestamp)
+		binary.LittleEndian.PutUint16(cmsg[offset+2:offset+4], 8)
+		binary.LittleEndian.PutUint64(cmsg[offset+4:offset+12], utils.UnixToFiletime(time.Now()))
+		length += 12
+		offset += 12
+
+		copy(cmsg[offset:offset+4], []byte{0x00, 0x00, 0x00, 0x00}) // AvId: MsvAvEOL, AvLen: 0
+		length += 4
 		binary.LittleEndian.PutUint16(cmsg[40:42], uint16(length))
 		binary.LittleEndian.PutUint16(cmsg[42:44], uint16(length))
 		binary.LittleEndian.PutUint32(cmsg[44:48], uint32(off))
-		off += length
 	}
 
 	_, err = rand.Read(cmsg[24:32])
@@ -142,7 +191,7 @@ func (s *Server) Authenticate(amsg []byte) (err error) {
 	//   88-: Payload
 
 	if len(amsg) < 64 {
-		return errors.New("message length is too short")
+		return errors.New("message is too short")
 	}
 
 	if !bytes.Equal(amsg[:8], signature) {
@@ -158,11 +207,11 @@ func (s *Server) Authenticate(amsg []byte) (err error) {
 	ntChallengeResponseLen := binary.LittleEndian.Uint16(amsg[20:22])    // amsg.NtChallengeResponseLen
 	ntChallengeResponseMaxLen := binary.LittleEndian.Uint16(amsg[22:24]) // amsg.NtChallengeResponseMaxLen
 	if ntChallengeResponseMaxLen < ntChallengeResponseLen {
-		return errors.New("invalid LM challenge format")
+		return errors.New("invalid NT challenge format")
 	}
 	ntChallengeResponseBufferOffset := binary.LittleEndian.Uint32(amsg[24:28]) // amsg.NtChallengeResponseBufferOffset
 	if len(amsg) < int(ntChallengeResponseBufferOffset+uint32(ntChallengeResponseLen)) {
-		return errors.New("invalid LM challenge format")
+		return errors.New("invalid NT challenge format")
 	}
 	ntChallengeResponse := amsg[ntChallengeResponseBufferOffset : ntChallengeResponseBufferOffset+uint32(ntChallengeResponseLen)] // amsg.NtChallengeResponse
 
@@ -191,11 +240,11 @@ func (s *Server) Authenticate(amsg []byte) (err error) {
 	encryptedRandomSessionKeyLen := binary.LittleEndian.Uint16(amsg[52:54])    // amsg.EncryptedRandomSessionKeyLen
 	encryptedRandomSessionKeyMaxLen := binary.LittleEndian.Uint16(amsg[54:56]) // amsg.EncryptedRandomSessionKeyMaxLen
 	if encryptedRandomSessionKeyMaxLen < encryptedRandomSessionKeyLen {
-		return errors.New("invalid user name format")
+		return errors.New("invalid session key format")
 	}
 	encryptedRandomSessionKeyBufferOffset := binary.LittleEndian.Uint32(amsg[56:60]) // amsg.EncryptedRandomSessionKeyBufferOffset
 	if len(amsg) < int(encryptedRandomSessionKeyBufferOffset+uint32(encryptedRandomSessionKeyLen)) {
-		return errors.New("invalid user name format")
+		return errors.New("invalid session key format")
 	}
 	encryptedRandomSessionKey := amsg[encryptedRandomSessionKeyBufferOffset : encryptedRandomSessionKeyBufferOffset+uint32(encryptedRandomSessionKeyLen)] // amsg.EncryptedRandomSessionKey
 
@@ -283,11 +332,31 @@ func (s *Server) Authenticate(amsg []byte) (err error) {
 		}
 
 		s.session = session
+		s.amsg = amsg
 
 		return nil
 	}
 
 	return errors.New("credential is empty")
+}
+
+func (s *Server) Signature() []byte {
+	h := hmac.New(md5.New, s.session.SessionKey())
+	h.Reset()
+	h.Write(s.nmsg)
+	h.Write(s.cmsg)
+
+	off := 64
+	flags := binary.LittleEndian.Uint32(s.amsg[60:64])
+	if flags&NTLMSSP_NEGOTIATE_VERSION != 0 {
+		off = 72
+	}
+
+	h.Write(s.amsg[:off])
+	h.Write(zero[:])
+	h.Write(s.amsg[off+16:])
+
+	return h.Sum(nil)
 }
 
 func (s *Server) Session() *Session {
