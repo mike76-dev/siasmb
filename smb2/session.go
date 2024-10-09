@@ -2,7 +2,6 @@ package smb2
 
 import (
 	"encoding/binary"
-	"strings"
 
 	"github.com/mike76-dev/siasmb/smb"
 )
@@ -78,7 +77,7 @@ func (ssr *SessionSetupResponse) GetHeader() Header {
 	return ssr.Header
 }
 
-func (req *Request) NewSessionSetupResponse(sid uint64, user string, token []byte, done bool) *SessionSetupResponse {
+func (req *Request) NewSessionSetupResponse(sid uint64, flags uint16, token []byte, done bool) *SessionSetupResponse {
 	ssr := &SessionSetupResponse{Header: *req.Header}
 
 	ssr.Header.Status = SMB2_STATUS_OK
@@ -97,14 +96,7 @@ func (req *Request) NewSessionSetupResponse(sid uint64, user string, token []byt
 		ssr.Header.Status = SMB2_STATUS_MORE_PROCESSING_REQUIRED
 	}
 
-	switch strings.ToLower(user) {
-	case "":
-		ssr.SessionFlags |= SMB2_SESSION_FLAG_IS_NULL
-	case "guest":
-		ssr.SessionFlags |= SMB2_SESSION_FLAG_IS_GUEST
-	default:
-	}
-
+	ssr.SessionFlags = flags
 	ssr.SecurityBuffer = token
 
 	return ssr
