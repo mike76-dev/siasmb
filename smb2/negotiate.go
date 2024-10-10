@@ -2,193 +2,231 @@ package smb2
 
 import (
 	"encoding/binary"
+	"errors"
 	"time"
 
 	"github.com/mike76-dev/siasmb/ntlm"
-	"github.com/mike76-dev/siasmb/smb"
 	"github.com/mike76-dev/siasmb/utils"
 )
 
+const (
+	SMBNegotiateRequestMinSize = 5
+
+	SMB2NegotiateRequestMinSize       = 36
+	SMB2NegotiateRequestStructureSize = 36
+
+	SMB2NegotiateResponseMinSize       = 64
+	SMB2NegotiateResponseStructureSize = 65
+)
+
+const (
+	MaxTransactSize = 1048576 * 2
+	MaxReadSize     = 1048576 * 2
+	MaxWriteSize    = 1048576 * 2
+)
+
+const (
+	SMB_DIALECT_1     = "NT LM 0.12"
+	SMB_DIALECT_2     = "SMB 2.002"
+	SMB_DIALECT_MULTI = "SMB 2.???"
+
+	SMB_DIALECT_202         = 0x0202
+	SMB_DIALECT_21          = 0x0210
+	SMB_DIALECT_30          = 0x0300
+	SMB_DIALECT_302         = 0x0302
+	SMB_DIALECT_311         = 0x0311
+	SMB_DIALECT_MULTICREDIT = 0x02ff
+	SMB_DIALECT_UNKNOWN     = 0xffff
+)
+
+const (
+	NEGOTIATE_SIGNING_ENABLED  = 0x0001
+	NEGOTIATE_SIGNING_REQUIRED = 0x0002
+)
+
+const (
+	GLOBAL_CAP_DFS                = 0x00000001
+	GLOBAL_CAP_LEASING            = 0x00000002
+	GLOBAL_CAP_LARGE_MTU          = 0x00000004
+	GLOBAL_CAP_MULTI_CHANNEL      = 0x00000008
+	GLOBAL_CAP_PERSISTENT_HANDLES = 0x00000010
+	GLOBAL_CAP_DIRECTORY_LEASING  = 0x00000020
+	GLOBAL_CAP_ENCRYPTION         = 0x00000040
+	GLOBAL_CAP_NOTIFICATIONS      = 0x00000080
+)
+
+var (
+	ErrDialectNotSupported = errors.New("dialect not supported")
+)
+
 type NegotiateRequest struct {
-	Header            Header
-	SecurityMode      uint16
-	Capabilities      uint32
-	ClientGUID        [16]byte
-	Dialects          []uint16
-	NegotiateContexts []NegotiateContext
+	Request
 }
 
-type NegotiateContext struct {
-	ContextType uint16
-	Data        []byte
-}
-
-func (nr *NegotiateRequest) Decode(buf []byte) error {
-	if len(buf) < 36 {
-		return smb.ErrWrongDataLength
-	}
-
-	if binary.LittleEndian.Uint16(buf[:2]) != 36 {
-		return smb.ErrWrongStructureLength
-	}
-
-	dialectCount := binary.LittleEndian.Uint16(buf[2:4])
-	if len(buf) < 36+2*int(dialectCount) {
-		return smb.ErrWrongDataLength
-	}
-
-	nr.SecurityMode = binary.LittleEndian.Uint16(buf[4:6])
-	nr.Capabilities = binary.LittleEndian.Uint32(buf[8:12])
-	copy(nr.ClientGUID[:], buf[12:28])
-
-	var is311 bool
-	var nco uint32
-	var ncc uint16
-	for i := 0; i < int(dialectCount); i++ {
-		dialect := binary.LittleEndian.Uint16(buf[36+i*2 : 38+i*2])
-		nr.Dialects = append(nr.Dialects, dialect)
-		if dialect == SMB_DIALECT_311 {
-			is311 = true
-			nco = binary.LittleEndian.Uint32(buf[28:32])
-			ncc = binary.LittleEndian.Uint16(buf[32:34])
-		}
-	}
-
-	if is311 {
-		nco -= 64
-		for ncc > 0 {
-			var nc NegotiateContext
-			nc.ContextType = binary.LittleEndian.Uint16(buf[nco : nco+2])
-			length := binary.LittleEndian.Uint16(buf[nco+2 : nco+4])
-			nc.Data = make([]byte, length)
-			copy(nc.Data, buf[nco+8:nco+8+uint32(length)])
-			nr.NegotiateContexts = append(nr.NegotiateContexts, nc)
-			nco += uint32(utils.Roundup(8+int(length), 8))
-			ncc--
-		}
-	}
-
-	return nil
-}
-
-func (nr *NegotiateRequest) HasDialect(dialect uint16) bool {
-	for _, d := range nr.Dialects {
-		if d == dialect {
-			return true
-		}
-	}
-	return false
-}
-
-type NegotiateResponse struct {
-	Header            Header
-	SecurityMode      uint16
-	DialectRevision   uint16
-	ServerGUID        [16]byte
-	Capabilities      uint32
-	MaxTransactSize   uint32
-	MaxReadSize       uint32
-	MaxWriteSize      uint32
-	SecurityBuffer    []byte
-	NegotiateContexts []NegotiateContext
-}
-
-func (nr *NegotiateResponse) Encode(buf []byte) error {
-	if len(buf) < 64+64+len(nr.SecurityBuffer) {
-		return smb.ErrWrongDataLength
-	}
-
-	if err := nr.Header.Encode(buf); err != nil {
+func (nr *NegotiateRequest) Validate() error {
+	if err := nr.header.Validate(); err != nil {
 		return err
 	}
 
-	binary.LittleEndian.PutUint16(buf[64:66], 65)
-	binary.LittleEndian.PutUint16(buf[66:68], nr.SecurityMode)
-	binary.LittleEndian.PutUint16(buf[68:70], nr.DialectRevision)
-	copy(buf[72:88], nr.ServerGUID[:])
-	binary.LittleEndian.PutUint32(buf[88:92], nr.Capabilities)
-	binary.LittleEndian.PutUint32(buf[92:96], nr.MaxTransactSize)
-	binary.LittleEndian.PutUint32(buf[96:100], nr.MaxReadSize)
-	binary.LittleEndian.PutUint32(buf[100:104], nr.MaxWriteSize)
-	binary.LittleEndian.PutUint64(buf[104:112], utils.UnixToFiletime(time.Now()))
-
-	if len(nr.SecurityBuffer) > 0 {
-		binary.LittleEndian.PutUint16(buf[120:122], 128)
-		binary.LittleEndian.PutUint16(buf[122:124], uint16(len(nr.SecurityBuffer)))
-	}
-
-	if len(nr.SecurityBuffer) > 0 {
-		copy(buf[128:128+len(nr.SecurityBuffer)], nr.SecurityBuffer)
-	}
-
-	if nr.DialectRevision == SMB_DIALECT_311 {
-		binary.LittleEndian.PutUint16(buf[70:72], uint16(len(nr.NegotiateContexts)))
-		nco := uint32(utils.Roundup(128+len(nr.SecurityBuffer), 8))
-		binary.LittleEndian.PutUint32(buf[124:128], nco)
-		for _, nc := range nr.NegotiateContexts {
-			binary.LittleEndian.PutUint16(buf[nco:nco+2], nc.ContextType)
-			binary.LittleEndian.PutUint16(buf[nco+2:nco+4], uint16(len(nc.Data)))
-			copy(buf[nco+8:nco+8+uint32(len(nc.Data))], nc.Data)
-			nco += uint32(utils.Roundup(8+len(nc.Data), 8))
+	if nr.header.IsSmb() {
+		if len(nr.data) < SMBHeaderSize+SMBNegotiateRequestMinSize {
+			return ErrWrongLength
 		}
+
+		if nr.data[SMBHeaderSize] != 0 {
+			return ErrWrongFormat
+		}
+
+		if binary.LittleEndian.Uint16(nr.data[SMBHeaderSize+1:SMBHeaderSize+3]) < 2 {
+			return ErrWrongFormat
+		}
+
+		dialects := utils.NullTerminatedToStrings(nr.data[SMBHeaderSize+4:])
+		if len(dialects) == 0 {
+			return ErrWrongFormat
+		}
+
+		var supported bool
+		for _, d := range dialects {
+			if d == SMB_DIALECT_2 {
+				supported = true
+				break
+			}
+		}
+
+		if !supported {
+			return ErrDialectNotSupported
+		}
+
+		return nil
+	}
+
+	if len(nr.data) < SMB2HeaderSize+SMB2NegotiateRequestMinSize {
+		return ErrWrongLength
+	}
+
+	if nr.structureSize() != SMB2NegotiateRequestStructureSize {
+		return ErrWrongFormat
+	}
+
+	dialectCount := binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+2 : SMB2HeaderSize+4])
+	if dialectCount == 0 {
+		return ErrWrongFormat
+	}
+
+	if len(nr.data) < SMB2HeaderSize+SMB2NegotiateRequestMinSize+2*int(dialectCount) {
+		return ErrWrongLength
+	}
+
+	var supported bool
+	for i := 0; i < int(dialectCount); i++ {
+		dialect := binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+SMB2NegotiateRequestMinSize+i*2 : SMB2HeaderSize+SMB2NegotiateRequestMinSize+i*2+2])
+		if dialect == SMB_DIALECT_202 {
+			supported = true
+			break
+		}
+	}
+
+	if !supported {
+		return ErrDialectNotSupported
 	}
 
 	return nil
 }
 
-func (nr *NegotiateResponse) EncodedLength() int {
-	res := 128
-	if len(nr.NegotiateContexts) > 0 {
-		res += utils.Roundup(len(nr.SecurityBuffer), 8)
-	} else {
-		res += len(nr.SecurityBuffer)
-	}
-	for i, nc := range nr.NegotiateContexts {
-		if i < len(nr.NegotiateContexts)-1 {
-			res += utils.Roundup(8+len(nc.Data), 8)
-		} else {
-			res += 8 + len(nc.Data)
-		}
-	}
-	return res
+func (nr *NegotiateRequest) SecurityMode() uint16 {
+	return binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+4 : SMB2HeaderSize+6])
 }
 
-func (nr *NegotiateResponse) GetHeader() Header {
-	return nr.Header
+func (nr *NegotiateRequest) Capabilities() uint32 {
+	return binary.LittleEndian.Uint32(nr.data[SMB2HeaderSize+8 : SMB2HeaderSize+12])
 }
 
-func (req *Request) NewNegotiateResponse(serverGuid [16]byte, ns *ntlm.Server) *NegotiateResponse {
-	nr := &NegotiateResponse{}
-	if req.Header == nil {
-		nr.Header.Command = SMB2_NEGOTIATE
-	} else {
-		nr.Header = *req.Header
-	}
+func (nr *NegotiateRequest) ClientGuid() []byte {
+	guid := make([]byte, 16)
+	copy(guid, nr.data[SMB2HeaderSize+12:SMB2HeaderSize+28])
+	return guid
+}
 
-	nr.Header.Status = SMB2_STATUS_OK
-	nr.Header.NextCommand = 0
-	nr.Header.Flags |= SMB2_FLAGS_SERVER_TO_REDIR
-	nr.Header.Credits = 1
-	nr.DialectRevision = SMB_DIALECT_202
-	nr.SecurityMode = SMB2_NEGOTIATE_SIGNING_ENABLED
-	nr.Capabilities = SMB2_GLOBAL_CAP_DFS
-	nr.ServerGUID = serverGuid
-	nr.MaxTransactSize = MaxTransactSize
-	nr.MaxReadSize = MaxReadSize
-	nr.MaxWriteSize = MaxWriteSize
+type NegotiateResponse struct {
+	Response
+}
 
-	if req.AsyncID > 0 {
-		nr.Header.AsyncID = req.AsyncID
-		nr.Header.Flags |= SMB2_FLAGS_ASYNC_COMMAND
-		nr.Header.Credits = 0
-	}
+func (nr *NegotiateResponse) setStructureSize() {
+	binary.LittleEndian.PutUint16(nr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2NegotiateResponseStructureSize)
+}
 
+func (nr *NegotiateResponse) SetSecurityMode(sm uint16) {
+	binary.LittleEndian.PutUint16(nr.data[SMB2HeaderSize+2:SMB2HeaderSize+4], sm)
+}
+
+func (nr *NegotiateResponse) SetDialectRevision(dialect uint16) {
+	binary.LittleEndian.PutUint16(nr.data[SMB2HeaderSize+4:SMB2HeaderSize+6], dialect)
+}
+
+func (nr *NegotiateResponse) SetServerGuid(guid []byte) {
+	copy(nr.data[SMB2HeaderSize+8:SMB2HeaderSize+24], guid)
+}
+
+func (nr *NegotiateResponse) SetCapabilities(cap uint32) {
+	binary.LittleEndian.PutUint32(nr.data[SMB2HeaderSize+24:SMB2HeaderSize+28], cap)
+}
+
+func (nr *NegotiateResponse) SetMaxTransactSize(size uint32) {
+	binary.LittleEndian.PutUint32(nr.data[SMB2HeaderSize+28:SMB2HeaderSize+32], size)
+}
+
+func (nr *NegotiateResponse) SetMaxReadSize(size uint32) {
+	binary.LittleEndian.PutUint32(nr.data[SMB2HeaderSize+32:SMB2HeaderSize+36], size)
+}
+
+func (nr *NegotiateResponse) SetMaxWriteSize(size uint32) {
+	binary.LittleEndian.PutUint32(nr.data[SMB2HeaderSize+36:SMB2HeaderSize+40], size)
+}
+
+func (nr *NegotiateResponse) SetSystemTime(t time.Time) {
+	binary.LittleEndian.PutUint64(nr.data[SMB2HeaderSize+40:SMB2HeaderSize+48], utils.UnixToFiletime(t))
+}
+
+func (nr *NegotiateResponse) SetSecurityBuffer(buf []byte) {
+	binary.LittleEndian.PutUint16(nr.data[SMB2HeaderSize+56:SMB2HeaderSize+58], SMB2HeaderSize+SMB2NegotiateResponseMinSize)
+	binary.LittleEndian.PutUint16(nr.data[SMB2HeaderSize+58:SMB2HeaderSize+60], uint16(len(buf)))
+	nr.data = nr.data[:SMB2HeaderSize+SMB2NegotiateResponseMinSize]
+	nr.data = append(nr.data, buf...)
+}
+
+func (nr *NegotiateResponse) New(serverGuid []byte, ns *ntlm.Server) {
+	nr.data = make([]byte, SMB2HeaderSize)
+	nr.header = GetHeader(nr.data)
+
+	nr.header.SetCommand(SMB2_NEGOTIATE)
+	nr.header.SetStatus(STATUS_OK)
+	nr.header.SetFlags(FLAGS_SERVER_TO_REDIR)
+}
+
+func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server) {
 	token, err := ns.Negotiate()
 	if err != nil {
 		panic(err)
 	}
 
-	nr.SecurityBuffer = token
+	body := make([]byte, SMB2NegotiateResponseMinSize)
+	nr.data = append(nr.data, body...)
 
-	return nr
+	if nr.header.IsFlagSet(FLAGS_ASYNC_COMMAND) {
+		nr.header.SetCreditResponse(0)
+	} else {
+		nr.header.SetCreditResponse(1)
+	}
+
+	nr.setStructureSize()
+	nr.SetDialectRevision(SMB_DIALECT_202)
+	nr.SetSecurityMode(NEGOTIATE_SIGNING_ENABLED)
+	nr.SetCapabilities(GLOBAL_CAP_DFS)
+	nr.SetServerGuid(serverGuid)
+	nr.SetMaxTransactSize(MaxTransactSize)
+	nr.SetMaxReadSize(MaxReadSize)
+	nr.SetMaxWriteSize(MaxWriteSize)
+
+	nr.SetSecurityBuffer(token)
 }
