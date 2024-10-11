@@ -2,58 +2,64 @@ package smb2
 
 import (
 	"encoding/binary"
+)
 
-	"github.com/mike76-dev/siasmb/smb"
+const (
+	SMB2ErrorResponseMinSize       = 8
+	SMB2ErrorResponseStructureSize = 9
+)
+
+const (
+	STATUS_OK                       = 0x00000000
+	STATUS_INVALID_PARAMETER        = 0xc000000d
+	STATUS_MORE_PROCESSING_REQUIRED = 0xc0000016
+	STATUS_NO_SUCH_USER             = 0xc0000064
+	STATUS_NOT_SUPPORTED            = 0xc00000bb
+	STATUS_USER_SESSION_DELETED     = 0xc0000203
 )
 
 type ErrorResponse struct {
-	Header            Header
-	ErrorContextCount uint8
-	ErrorData         []byte
+	Response
 }
 
-func (er *ErrorResponse) Encode(buf []byte) error {
-	if len(buf) < 64+8+len(er.ErrorData) {
-		return smb.ErrWrongDataLength
-	}
-
-	if err := er.Header.Encode(buf); err != nil {
-		return err
-	}
-
-	binary.LittleEndian.PutUint16(buf[64:66], 9)
-	buf[66] = er.ErrorContextCount
-	binary.LittleEndian.PutUint32(buf[68:72], uint32(len(er.ErrorData)))
-	if len(er.ErrorData) > 0 {
-		copy(buf[72:], er.ErrorData)
-	}
-
-	return nil
+func (er *ErrorResponse) setStructureSize() {
+	binary.LittleEndian.PutUint16(er.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2ErrorResponseStructureSize)
 }
 
-func (er *ErrorResponse) EncodedLength() int {
-	return 64 + 8 + len(er.ErrorData)
+func (er *ErrorResponse) SetErrorData(data []byte) {
+	binary.LittleEndian.PutUint32(er.data[SMB2HeaderSize+4:SMB2HeaderSize+8], uint32(len(data)))
+	er.data = er.data[:SMB2HeaderSize+SMB2ErrorResponseMinSize]
+	er.data = append(er.data, data...)
 }
 
-func (er *ErrorResponse) GetHeader() Header {
-	return er.Header
+func NegotiateErrorResponse(status uint32) *ErrorResponse {
+	er := &ErrorResponse{}
+	er.data = make([]byte, SMB2HeaderSize+SMB2ErrorResponseMinSize)
+	Header(er.data).SetStatus(status)
+	Header(er.data).SetFlags(FLAGS_SERVER_TO_REDIR)
+	return er
 }
 
-func (req *Request) NewErrorResponse(status uint32, ecc uint8, data []byte) *ErrorResponse {
-	er := &ErrorResponse{
-		Header:            *req.Header,
-		ErrorContextCount: ecc,
-		ErrorData:         data,
-	}
-	er.Header.Status = status
-	er.Header.NextCommand = 0
-	er.Header.Flags |= SMB2_FLAGS_SERVER_TO_REDIR
-	if req.AsyncID > 0 {
-		er.Header.AsyncID = req.AsyncID
-		er.Header.Flags |= SMB2_FLAGS_ASYNC_COMMAND
-		er.Header.Credits = 0
+func (er *ErrorResponse) FromRequest(req GenericRequest) {
+	er.Response.FromRequest(req)
+
+	body := make([]byte, SMB2ErrorResponseMinSize)
+	er.data = append(er.data, body...)
+	Header(er.data).SetNextCommand(0)
+
+	if Header(er.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
+		Header(er.data).SetCreditResponse(0)
 	} else {
-		er.Header.Credits = 1
+		Header(er.data).SetCreditResponse(1)
 	}
+
+	er.setStructureSize()
+}
+
+func NewErrorResponse(req GenericRequest, status uint32, data []byte) *ErrorResponse {
+	er := &ErrorResponse{}
+	er.FromRequest(req)
+	Header(er.data).SetStatus(status)
+	er.SetErrorData(data)
 	return er
 }

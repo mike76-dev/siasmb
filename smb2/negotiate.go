@@ -57,18 +57,19 @@ const (
 
 var (
 	ErrDialectNotSupported = errors.New("dialect not supported")
+	ErrInvalidParameter    = errors.New("wrong parameter supplied")
 )
 
 type NegotiateRequest struct {
 	Request
 }
 
-func (nr *NegotiateRequest) Validate() error {
-	if err := nr.header.Validate(); err != nil {
+func (nr NegotiateRequest) Validate() error {
+	if err := Header(nr.data).Validate(); err != nil {
 		return err
 	}
 
-	if nr.header.IsSmb() {
+	if Header(nr.data).IsSmb() {
 		if len(nr.data) < SMBHeaderSize+SMBNegotiateRequestMinSize {
 			return ErrWrongLength
 		}
@@ -83,7 +84,7 @@ func (nr *NegotiateRequest) Validate() error {
 
 		dialects := utils.NullTerminatedToStrings(nr.data[SMBHeaderSize+4:])
 		if len(dialects) == 0 {
-			return ErrWrongFormat
+			return ErrInvalidParameter
 		}
 
 		var supported bool
@@ -111,7 +112,7 @@ func (nr *NegotiateRequest) Validate() error {
 
 	dialectCount := binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+2 : SMB2HeaderSize+4])
 	if dialectCount == 0 {
-		return ErrWrongFormat
+		return ErrInvalidParameter
 	}
 
 	if len(nr.data) < SMB2HeaderSize+SMB2NegotiateRequestMinSize+2*int(dialectCount) {
@@ -134,15 +135,15 @@ func (nr *NegotiateRequest) Validate() error {
 	return nil
 }
 
-func (nr *NegotiateRequest) SecurityMode() uint16 {
+func (nr NegotiateRequest) SecurityMode() uint16 {
 	return binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+4 : SMB2HeaderSize+6])
 }
 
-func (nr *NegotiateRequest) Capabilities() uint32 {
+func (nr NegotiateRequest) Capabilities() uint32 {
 	return binary.LittleEndian.Uint32(nr.data[SMB2HeaderSize+8 : SMB2HeaderSize+12])
 }
 
-func (nr *NegotiateRequest) ClientGuid() []byte {
+func (nr NegotiateRequest) ClientGuid() []byte {
 	guid := make([]byte, 16)
 	copy(guid, nr.data[SMB2HeaderSize+12:SMB2HeaderSize+28])
 	return guid
@@ -195,13 +196,32 @@ func (nr *NegotiateResponse) SetSecurityBuffer(buf []byte) {
 	nr.data = append(nr.data, buf...)
 }
 
-func (nr *NegotiateResponse) New(serverGuid []byte, ns *ntlm.Server) {
-	nr.data = make([]byte, SMB2HeaderSize)
-	nr.header = GetHeader(nr.data)
+func NewNegotiateResponse(serverGuid []byte, ns *ntlm.Server) *NegotiateResponse {
+	nr := &NegotiateResponse{}
+	nr.data = make([]byte, SMB2HeaderSize+SMB2NegotiateResponseMinSize)
+	h := NewHeader(nr.data)
+	h.SetCommand(SMB2_NEGOTIATE)
+	h.SetStatus(STATUS_OK)
+	h.SetFlags(FLAGS_SERVER_TO_REDIR)
+	nr.Generate(serverGuid, ns)
+	return nr
+}
 
-	nr.header.SetCommand(SMB2_NEGOTIATE)
-	nr.header.SetStatus(STATUS_OK)
-	nr.header.SetFlags(FLAGS_SERVER_TO_REDIR)
+func (nr *NegotiateResponse) FromRequest(req GenericRequest) {
+	nr.Response.FromRequest(req)
+
+	body := make([]byte, SMB2NegotiateResponseMinSize)
+	nr.data = append(nr.data, body...)
+	Header(nr.data).SetNextCommand(0)
+
+	r, ok := req.(NegotiateRequest)
+	if !ok {
+		panic("not a negotiate request")
+	}
+
+	if NegotiateRequest(r).SecurityMode()&NEGOTIATE_SIGNING_REQUIRED > 0 {
+		nr.SetSecurityMode(r.SecurityMode() | NEGOTIATE_SIGNING_REQUIRED)
+	}
 }
 
 func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server) {
@@ -210,13 +230,10 @@ func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server) {
 		panic(err)
 	}
 
-	body := make([]byte, SMB2NegotiateResponseMinSize)
-	nr.data = append(nr.data, body...)
-
-	if nr.header.IsFlagSet(FLAGS_ASYNC_COMMAND) {
-		nr.header.SetCreditResponse(0)
+	if Header(nr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
+		Header(nr.data).SetCreditResponse(0)
 	} else {
-		nr.header.SetCreditResponse(1)
+		Header(nr.data).SetCreditResponse(1)
 	}
 
 	nr.setStructureSize()
@@ -227,6 +244,7 @@ func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server) {
 	nr.SetMaxTransactSize(MaxTransactSize)
 	nr.SetMaxReadSize(MaxReadSize)
 	nr.SetMaxWriteSize(MaxWriteSize)
+	nr.SetSystemTime(time.Now())
 
 	nr.SetSecurityBuffer(token)
 }

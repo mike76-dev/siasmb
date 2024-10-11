@@ -62,40 +62,34 @@ const (
 	SMB2HeaderStructureSize = 64
 )
 
-type Header struct {
-	data []byte
-}
+type Header []byte
 
-func NewHeader(data []byte) *Header {
+func NewHeader(data []byte) Header {
 	binary.LittleEndian.PutUint32(data[:4], PROTOCOL_SMB2)
-	binary.LittleEndian.PutUint64(data[4:6], SMB2HeaderStructureSize)
-	return &Header{data}
+	binary.LittleEndian.PutUint16(data[4:6], SMB2HeaderStructureSize)
+	return Header(data)
 }
 
-func GetHeader(data []byte) *Header {
-	return &Header{data}
+func (h Header) CopyFrom(src Header) {
+	copy(h[:SMB2HeaderSize], src[:SMB2HeaderSize])
 }
 
-func (h *Header) CopyFrom(src *Header) {
-	copy(h.data[:SMB2HeaderSize], src.data[:SMB2HeaderSize])
+func (h Header) IsSmb() bool {
+	return binary.LittleEndian.Uint32(h[:4]) == PROTOCOL_SMB
 }
 
-func (h *Header) IsSmb() bool {
-	return binary.LittleEndian.Uint32(h.data[:4]) == PROTOCOL_SMB
-}
-
-func (h *Header) IsSmb2() bool {
-	id := binary.LittleEndian.Uint32(h.data[:4])
+func (h Header) IsSmb2() bool {
+	id := binary.LittleEndian.Uint32(h[:4])
 	return id == PROTOCOL_SMB2 || id == PROTOCOL_SMB2_ENCRYPTED || id == PROTOCOL_SMB2_COMPRESSED
 }
 
-func (h *Header) Validate() error {
-	if len(h.data) < 4 {
+func (h Header) Validate() error {
+	if len(h) < 4 {
 		return ErrWrongLength
 	}
 
 	if h.IsSmb() {
-		if len(h.data) < SMBHeaderSize {
+		if len(h) < SMBHeaderSize {
 			return ErrWrongLength
 		}
 
@@ -107,11 +101,11 @@ func (h *Header) Validate() error {
 	}
 
 	if h.IsSmb2() {
-		if len(h.data) < SMB2HeaderSize {
+		if len(h) < SMB2HeaderSize {
 			return ErrWrongLength
 		}
 
-		id := binary.LittleEndian.Uint32(h.data[:4])
+		id := binary.LittleEndian.Uint32(h[:4])
 		if id == PROTOCOL_SMB2_ENCRYPTED {
 			return ErrEncryptedMessage
 		}
@@ -119,7 +113,7 @@ func (h *Header) Validate() error {
 			return ErrCompressedMessage
 		}
 
-		if binary.LittleEndian.Uint16(h.data[4:6]) != SMB2HeaderStructureSize {
+		if binary.LittleEndian.Uint16(h[4:6]) != SMB2HeaderStructureSize {
 			return ErrWrongFormat
 		}
 
@@ -129,111 +123,111 @@ func (h *Header) Validate() error {
 	return ErrWrongProtocol
 }
 
-func (h *Header) LegacyCommand() uint8 {
-	return h.data[4]
+func (h Header) LegacyCommand() uint8 {
+	return h[4]
 }
 
-func (h *Header) CreditCharge() uint16 {
-	return binary.LittleEndian.Uint16(h.data[6:7])
+func (h Header) CreditCharge() uint16 {
+	return binary.LittleEndian.Uint16(h[6:8])
 }
 
-func (h *Header) SetCreditCharge(cc uint16) {
-	binary.LittleEndian.PutUint16(h.data[6:7], cc)
+func (h Header) SetCreditCharge(cc uint16) {
+	binary.LittleEndian.PutUint16(h[6:8], cc)
 }
 
-func (h *Header) Status() uint32 {
-	return binary.LittleEndian.Uint32(h.data[8:11])
+func (h Header) Status() uint32 {
+	return binary.LittleEndian.Uint32(h[8:12])
 }
 
-func (h *Header) SetStatus(status uint32) {
-	binary.LittleEndian.PutUint32(h.data[8:11], status)
+func (h Header) SetStatus(status uint32) {
+	binary.LittleEndian.PutUint32(h[8:12], status)
 }
 
-func (h *Header) Command() uint16 {
-	return binary.LittleEndian.Uint16(h.data[12:13])
+func (h Header) Command() uint16 {
+	return binary.LittleEndian.Uint16(h[12:14])
 }
 
-func (h *Header) SetCommand(command uint16) {
-	binary.LittleEndian.PutUint16(h.data[12:13], command)
+func (h Header) SetCommand(command uint16) {
+	binary.LittleEndian.PutUint16(h[12:14], command)
 }
 
-func (h *Header) CreditRequest() uint16 {
-	return binary.LittleEndian.Uint16(h.data[14:15])
+func (h Header) CreditRequest() uint16 {
+	return binary.LittleEndian.Uint16(h[14:16])
 }
 
-func (h *Header) SetCreditResponse(cr uint16) {
-	binary.LittleEndian.PutUint16(h.data[14:15], cr)
+func (h Header) SetCreditResponse(cr uint16) {
+	binary.LittleEndian.PutUint16(h[14:16], cr)
 }
 
-func (h *Header) Flags() uint32 {
-	return binary.LittleEndian.Uint32(h.data[16:19])
+func (h Header) Flags() uint32 {
+	return binary.LittleEndian.Uint32(h[16:20])
 }
 
-func (h *Header) SetFlags(flags uint32) {
-	binary.LittleEndian.PutUint32(h.data[16:19], flags)
+func (h Header) SetFlags(flags uint32) {
+	binary.LittleEndian.PutUint32(h[16:20], flags)
 }
 
-func (h *Header) IsFlagSet(flag uint32) bool {
+func (h Header) IsFlagSet(flag uint32) bool {
 	return h.Flags()&flag > 0
 }
 
-func (h *Header) SetFlag(flag uint32) {
+func (h Header) SetFlag(flag uint32) {
 	h.SetFlags(h.Flags() | flag)
 }
 
-func (h *Header) ClearFlag(flag uint32) {
+func (h Header) ClearFlag(flag uint32) {
 	h.SetFlags(h.Flags() &^ flag)
 }
 
-func (h *Header) NextCommand() uint32 {
-	return binary.LittleEndian.Uint32(h.data[20:23])
+func (h Header) NextCommand() uint32 {
+	return binary.LittleEndian.Uint32(h[20:24])
 }
 
-func (h *Header) SetNextCommand(nc uint32) {
-	binary.LittleEndian.PutUint32(h.data[20:23], nc)
+func (h Header) SetNextCommand(nc uint32) {
+	binary.LittleEndian.PutUint32(h[20:24], nc)
 }
 
-func (h *Header) MessageID() uint64 {
-	return binary.LittleEndian.Uint64(h.data[24:31])
+func (h Header) MessageID() uint64 {
+	return binary.LittleEndian.Uint64(h[24:32])
 }
 
-func (h *Header) SetMessageID(mid uint64) {
-	binary.LittleEndian.PutUint64(h.data[24:31], mid)
+func (h Header) SetMessageID(mid uint64) {
+	binary.LittleEndian.PutUint64(h[24:32], mid)
 }
 
-func (h *Header) AsyncID() uint64 {
-	return binary.LittleEndian.Uint64(h.data[32:39])
+func (h Header) AsyncID() uint64 {
+	return binary.LittleEndian.Uint64(h[32:40])
 }
 
-func (h *Header) SetAsyncID(aid uint64) {
-	binary.LittleEndian.PutUint64(h.data[32:39], aid)
+func (h Header) SetAsyncID(aid uint64) {
+	binary.LittleEndian.PutUint64(h[32:40], aid)
 }
 
-func (h *Header) TreeID() uint32 {
-	return binary.BigEndian.Uint32(h.data[36:39])
+func (h Header) TreeID() uint32 {
+	return binary.LittleEndian.Uint32(h[36:40])
 }
 
-func (h *Header) SetTreeID(tid uint32) {
-	binary.LittleEndian.PutUint32(h.data[36:39], tid)
+func (h Header) SetTreeID(tid uint32) {
+	binary.LittleEndian.PutUint32(h[36:40], tid)
 }
 
-func (h *Header) SessionID() uint64 {
-	return binary.BigEndian.Uint64(h.data[40:47])
+func (h Header) SessionID() uint64 {
+	return binary.LittleEndian.Uint64(h[40:48])
 }
 
-func (h *Header) SetSessionID(sid uint64) {
-	binary.LittleEndian.PutUint64(h.data[40:47], sid)
+func (h Header) SetSessionID(sid uint64) {
+	binary.LittleEndian.PutUint64(h[40:48], sid)
 }
 
-func (h *Header) Signature() []byte {
-	return h.data[48:63]
+func (h Header) Signature() []byte {
+	return h[48:64]
 }
 
-func (h *Header) SetSignature(signature []byte) {
-	copy(h.data[48:63], signature)
+func (h Header) SetSignature(signature []byte) {
+	copy(h[48:64], signature)
 }
 
-func (h *Header) WipeSignature() {
+func (h Header) WipeSignature() {
 	var zero [16]byte
 	h.SetSignature(zero[:])
 }
