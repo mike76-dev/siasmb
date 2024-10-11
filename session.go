@@ -51,7 +51,7 @@ type session struct {
 func (s *server) registerSession(connection *connection, req smb2.SessionSetupRequest) (*session, bool, error) {
 	var ss *session
 	var found bool
-	if req.Header.SessionID == 0 {
+	if req.Header().SessionID() == 0 {
 		sid := make([]byte, 8)
 		rand.Read(sid)
 		ss = &session{
@@ -70,7 +70,7 @@ func (s *server) registerSession(connection *connection, req smb2.SessionSetupRe
 		s.mu.Unlock()
 	} else {
 		connection.mu.Lock()
-		ss, found = connection.sessionTable[req.Header.SessionID]
+		ss, found = connection.sessionTable[req.Header().SessionID()]
 		connection.mu.Unlock()
 		if !found {
 			return nil, false, errSessionNotFound
@@ -110,18 +110,18 @@ func (ss *session) validate(req smb2.SessionSetupRequest) {
 	if ss.userName == "guest" {
 		ss.isGuest = true
 	}
-	ss.signingRequired = (req.SecurityMode&smb2.SMB2_NEGOTIATE_SIGNING_REQUIRED > 0) && !ss.isAnonymous && !ss.isGuest && ss.connection.shouldSign
+	ss.signingRequired = (req.SecurityMode()&smb2.NEGOTIATE_SIGNING_REQUIRED > 0) && !ss.isAnonymous && !ss.isGuest && ss.connection.shouldSign
 	ss.sessionKey = ss.connection.ntlmServer.Session().SessionKey()
 
 	ss.connection.mu.Lock()
 	defer ss.connection.mu.Unlock()
 
-	if req.PreviousSessionID != 0 {
-		pss, found := ss.connection.sessionTable[req.PreviousSessionID]
-		if found && ss.securityContext.UserSID == pss.securityContext.UserSID && ss.sessionID != req.PreviousSessionID {
-			delete(ss.connection.sessionTable, req.PreviousSessionID)
+	if req.PreviousSessionID() != 0 {
+		pss, found := ss.connection.sessionTable[req.PreviousSessionID()]
+		if found && ss.securityContext.UserSID == pss.securityContext.UserSID && ss.sessionID != req.PreviousSessionID() {
+			delete(ss.connection.sessionTable, req.PreviousSessionID())
 			ss.connection.server.mu.Lock()
-			delete(ss.connection.server.globalSessionTable, req.PreviousSessionID)
+			delete(ss.connection.server.globalSessionTable, req.PreviousSessionID())
 			ss.connection.server.mu.Unlock()
 		}
 	}
@@ -132,7 +132,7 @@ func (ss *session) validate(req smb2.SessionSetupRequest) {
 
 func (ss *session) sign(buf []byte) {
 	flags := binary.LittleEndian.Uint32(buf[16:20])
-	binary.LittleEndian.PutUint32(buf[16:20], flags|smb2.SMB2_FLAGS_SIGNED)
+	binary.LittleEndian.PutUint32(buf[16:20], flags|smb2.FLAGS_SIGNED)
 	var zero [16]byte
 	copy(buf[48:64], zero[:])
 	h := hmac.New(sha256.New, ss.sessionKey)

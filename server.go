@@ -58,12 +58,6 @@ type server struct {
 	mu       sync.Mutex
 }
 
-type response interface {
-	Encode([]byte) error
-	EncodedLength() int
-	GetHeader() smb2.Header
-}
-
 func newServer(l net.Listener) *server {
 	s := &server{
 		enabled:                         true,
@@ -83,8 +77,8 @@ func newServer(l net.Listener) *server {
 func (s *server) newConnection(conn net.Conn) *connection {
 	c := &connection{
 		commandSequenceWindow: make(map[uint64]struct{}),
-		requestList:           make(map[uint64]smb2.Request),
-		asyncCommandList:      make(map[uint64]smb2.Request),
+		requestList:           make(map[uint64]*smb2.Request),
+		asyncCommandList:      make(map[uint64]*smb2.Request),
 		sessionTable:          make(map[uint64]*session),
 		conn:                  conn,
 		negotiateDialect:      smb2.SMB_DIALECT_UNKNOWN,
@@ -95,6 +89,7 @@ func (s *server) newConnection(conn net.Conn) *connection {
 		maxReadSize:           smb2.MaxReadSize,
 		maxWriteSize:          smb2.MaxWriteSize,
 		server:                s,
+		closeChan:             make(chan struct{}),
 	}
 
 	c.mu.Lock()
@@ -105,6 +100,8 @@ func (s *server) newConnection(conn net.Conn) *connection {
 	s.connectionList[c.clientName] = c
 	s.mu.Unlock()
 
+	go c.processRequests()
+
 	return c
 }
 
@@ -113,16 +110,14 @@ func (s *server) closeConnection(c *connection) {
 	delete(s.connectionList, c.clientName)
 	s.mu.Unlock()
 	c.conn.Close()
+	c.closeChan <- struct{}{}
 }
 
-func (s *server) writeResponse(c *connection, ss *session, resp response) error {
-	buf := make([]byte, resp.EncodedLength())
-	if err := resp.Encode(buf); err != nil {
-		return err
-	}
+func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResponse) error {
+	buf := resp.Encode()
 
 	if ss != nil && ss.state == sessionValid {
-		if resp.GetHeader().Command == smb2.SMB2_SESSION_SETUP || ss.signingRequired {
+		if resp.Header().Command() == smb2.SMB2_SESSION_SETUP || ss.signingRequired {
 			ss.sign(buf)
 		}
 	}
@@ -132,7 +127,7 @@ func (s *server) writeResponse(c *connection, ss *session, resp response) error 
 	}
 
 	c.mu.Lock()
-	delete(c.requestList, resp.GetHeader().MessageID)
+	delete(c.requestList, resp.Header().MessageID())
 	s.stats.bytesSent += uint64(len(buf))
 	c.mu.Unlock()
 

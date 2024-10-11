@@ -50,3 +50,26 @@ func DecodeToString(bs []byte) string {
 	}
 	return string(utf16.Decode(ws))
 }
+
+func NullTerminatedToStrings(b []byte) []string {
+	var result []string
+	for len(b) > 0 {
+		if b[0] < 32 {
+			if len(b) > 1 {
+				b = b[1:]
+			}
+			continue
+		}
+		for i := 0; i < len(b); i++ {
+			if b[i] == 0 {
+				result = append(result, string(b[:i]))
+				b = b[i+1:]
+				break
+			}
+		}
+	}
+	if len(result) > 0 {
+		return result
+	}
+	return []string{string(b)}
+}

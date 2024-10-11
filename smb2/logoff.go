@@ -2,64 +2,56 @@ package smb2
 
 import (
 	"encoding/binary"
+)
 
-	"github.com/mike76-dev/siasmb/smb"
+const (
+	SMB2LogoffRequestMinSize       = 4
+	SMB2LogoffRequestStructureSize = 4
+
+	SMB2LogoffResponseMinSize       = 4
+	SMB2LogoffResponseStructureSize = 4
 )
 
 type LogoffRequest struct {
-	Header Header
+	Request
 }
 
-func (lr *LogoffRequest) Decode(buf []byte) error {
-	if len(buf) < 4 {
-		return smb.ErrWrongDataLength
+func (lr LogoffRequest) Validate() error {
+	if err := Header(lr.data).Validate(); err != nil {
+		return err
 	}
 
-	if binary.LittleEndian.Uint16(buf[:2]) != 4 {
-		return smb.ErrWrongStructureLength
+	if len(lr.data) < SMB2HeaderSize+SMB2LogoffRequestMinSize {
+		return ErrWrongLength
+	}
+
+	if lr.structureSize() != SMB2LogoffRequestStructureSize {
+		return ErrWrongFormat
 	}
 
 	return nil
 }
 
 type LogoffResponse struct {
-	Header Header
+	Response
 }
 
-func (lr *LogoffResponse) Encode(buf []byte) error {
-	if len(buf) < 64+4 {
-		return smb.ErrWrongDataLength
+func (lr *LogoffResponse) setStructureSize() {
+	binary.LittleEndian.PutUint16(lr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2LogoffResponseStructureSize)
+}
+
+func (lr *LogoffResponse) FromRequest(req GenericRequest) {
+	lr.Response.FromRequest(req)
+
+	body := make([]byte, SMB2LogoffResponseMinSize)
+	lr.data = append(lr.data, body...)
+
+	lr.setStructureSize()
+	Header(lr.data).SetNextCommand(0)
+	Header(lr.data).SetStatus(STATUS_OK)
+	if Header(lr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
+		Header(lr.data).SetCreditResponse(0)
+	} else {
+		Header(lr.data).SetCreditResponse(1)
 	}
-
-	if err := lr.Header.Encode(buf); err != nil {
-		return err
-	}
-
-	binary.LittleEndian.PutUint16(buf[64:66], 4)
-	return nil
-}
-
-func (lr *LogoffResponse) EncodedLength() int {
-	return 64 + 4
-}
-
-func (lr *LogoffResponse) GetHeader() Header {
-	return lr.Header
-}
-
-func (req *Request) NewLogoffResponse() *LogoffResponse {
-	lr := &LogoffResponse{Header: *req.Header}
-
-	lr.Header.Status = SMB2_STATUS_OK
-	lr.Header.NextCommand = 0
-	lr.Header.Flags |= SMB2_FLAGS_SERVER_TO_REDIR
-	lr.Header.Credits = 1
-
-	if req.AsyncID > 0 {
-		lr.Header.AsyncID = req.AsyncID
-		lr.Header.Flags |= SMB2_FLAGS_ASYNC_COMMAND
-		lr.Header.Credits = 0
-	}
-
-	return lr
 }

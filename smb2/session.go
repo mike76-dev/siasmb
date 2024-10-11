@@ -2,102 +2,103 @@ package smb2
 
 import (
 	"encoding/binary"
-
-	"github.com/mike76-dev/siasmb/smb"
 )
 
-const SMB2_SESSION_FLAG_BINDING = 0x01
+const (
+	SMB2SessionSetupRequestMinSize       = 24
+	SMB2SessionSetupRequestStructureSize = 25
+
+	SMB2SessionSetupResponseMinSize       = 8
+	SMB2SessionSetupResponseStructureSize = 9
+)
+
+const (
+	SESSION_FLAG_IS_GUEST = 0x0001
+	SESSION_FLAG_IS_NULL  = 0x0002
+)
 
 type SessionSetupRequest struct {
-	Header            Header
-	Flags             uint8
-	SecurityMode      uint8
-	Capabilities      uint32
-	Channel           uint32
-	PreviousSessionID uint64
-	SecurityBuffer    []byte
+	Request
 }
 
-func (ssr *SessionSetupRequest) Decode(buf []byte) error {
-	if len(buf) < 24 {
-		return smb.ErrWrongDataLength
-	}
-
-	if binary.LittleEndian.Uint16(buf[:2]) != 25 {
-		return smb.ErrWrongStructureLength
-	}
-
-	ssr.Flags = buf[2]
-	ssr.SecurityMode = buf[3]
-	ssr.Capabilities = binary.LittleEndian.Uint32(buf[4:8])
-	ssr.Channel = binary.LittleEndian.Uint32(buf[8:12])
-	ssr.PreviousSessionID = binary.LittleEndian.Uint64(buf[16:24])
-
-	offset := binary.LittleEndian.Uint16((buf[12:14])) - 64
-	length := binary.LittleEndian.Uint16(buf[14:16])
-	if length > 0 {
-		ssr.SecurityBuffer = make([]byte, length)
-		copy(ssr.SecurityBuffer, buf[offset:])
-	}
-
-	return nil
-}
-
-type SessionSetupResponse struct {
-	Header         Header
-	SessionFlags   uint16
-	SecurityBuffer []byte
-}
-
-func (ssr *SessionSetupResponse) Encode(buf []byte) error {
-	if len(buf) < 64+8+len(ssr.SecurityBuffer) {
-		return smb.ErrWrongDataLength
-	}
-
-	if err := ssr.Header.Encode(buf); err != nil {
+func (ssr SessionSetupRequest) Validate() error {
+	if err := Header(ssr.data).Validate(); err != nil {
 		return err
 	}
 
-	binary.LittleEndian.PutUint16(buf[64:66], 9)
-	binary.LittleEndian.PutUint16(buf[66:68], ssr.SessionFlags)
-	if ssr.SecurityBuffer != nil {
-		binary.LittleEndian.PutUint16(buf[68:70], 64+8)
-		binary.LittleEndian.PutUint16(buf[70:72], uint16(len(ssr.SecurityBuffer)))
-		copy(buf[72:], ssr.SecurityBuffer)
+	if len(ssr.data) < SMB2HeaderSize+SMB2SessionSetupRequestMinSize {
+		return ErrWrongLength
+	}
+
+	if ssr.structureSize() != SMB2SessionSetupRequestStructureSize {
+		return ErrWrongFormat
 	}
 
 	return nil
 }
 
-func (ssr *SessionSetupResponse) EncodedLength() int {
-	return 64 + 8 + len(ssr.SecurityBuffer)
+func (ssr SessionSetupRequest) SecurityMode() uint16 {
+	return uint16(ssr.data[SMB2HeaderSize+3])
 }
 
-func (ssr *SessionSetupResponse) GetHeader() Header {
-	return ssr.Header
+func (ssr SessionSetupRequest) Capabilities() uint32 {
+	return binary.LittleEndian.Uint32(ssr.data[SMB2HeaderSize+4 : SMB2HeaderSize+8])
 }
 
-func (req *Request) NewSessionSetupResponse(sid uint64, flags uint16, token []byte, done bool) *SessionSetupResponse {
-	ssr := &SessionSetupResponse{Header: *req.Header}
+func (ssr SessionSetupRequest) PreviousSessionID() uint64 {
+	return binary.LittleEndian.Uint64(ssr.data[SMB2HeaderSize+16 : SMB2HeaderSize+24])
+}
 
-	ssr.Header.Status = SMB2_STATUS_OK
-	ssr.Header.NextCommand = 0
-	ssr.Header.Flags |= SMB2_FLAGS_SERVER_TO_REDIR
-	ssr.Header.Credits = 1
-	ssr.Header.SessionID = sid
-
-	if req.AsyncID > 0 {
-		ssr.Header.AsyncID = req.AsyncID
-		ssr.Header.Flags |= SMB2_FLAGS_ASYNC_COMMAND
-		ssr.Header.Credits = 0
+func (ssr SessionSetupRequest) SecurityBuffer() []byte {
+	off := binary.LittleEndian.Uint16(ssr.data[SMB2HeaderSize+12 : SMB2HeaderSize+14])
+	length := binary.LittleEndian.Uint16(ssr.data[SMB2HeaderSize+14 : SMB2HeaderSize+16])
+	if off+length > uint16(len(ssr.data)) {
+		return nil
 	}
+	return ssr.data[off : off+length]
+}
 
+type SessionSetupResponse struct {
+	Response
+}
+
+func (ssr *SessionSetupResponse) setStructureSize() {
+	binary.LittleEndian.PutUint16(ssr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2SessionSetupResponseStructureSize)
+}
+
+func (ssr *SessionSetupResponse) SetSessionFlags(flags uint16) {
+	binary.LittleEndian.PutUint16(ssr.data[SMB2HeaderSize+2:SMB2HeaderSize+4], flags)
+}
+
+func (ssr *SessionSetupResponse) SetSecurityBuffer(buf []byte) {
+	binary.LittleEndian.PutUint16(ssr.data[SMB2HeaderSize+4:SMB2HeaderSize+6], SMB2HeaderSize+SMB2SessionSetupResponseMinSize)
+	binary.LittleEndian.PutUint16(ssr.data[SMB2HeaderSize+6:SMB2HeaderSize+8], uint16(len(buf)))
+	ssr.data = ssr.data[:SMB2HeaderSize+SMB2SessionSetupResponseMinSize]
+	ssr.data = append(ssr.data, buf...)
+}
+
+func (ssr *SessionSetupResponse) FromRequest(req GenericRequest) {
+	ssr.Response.FromRequest(req)
+
+	body := make([]byte, SMB2SessionSetupResponseMinSize)
+	ssr.data = append(ssr.data, body...)
+
+	ssr.setStructureSize()
+	Header(ssr.data).SetNextCommand(0)
+	if Header(ssr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
+		Header(ssr.data).SetCreditResponse(0)
+	} else {
+		Header(ssr.data).SetCreditResponse(1)
+	}
+}
+
+func (ssr *SessionSetupResponse) Generate(sid uint64, flags uint16, token []byte, done bool) {
+	Header(ssr.data).SetSessionID(sid)
+	Header(ssr.data).SetStatus(STATUS_OK)
 	if !done {
-		ssr.Header.Status = SMB2_STATUS_MORE_PROCESSING_REQUIRED
+		Header(ssr.data).SetStatus(STATUS_MORE_PROCESSING_REQUIRED)
 	}
 
-	ssr.SessionFlags = flags
-	ssr.SecurityBuffer = token
-
-	return ssr
+	ssr.SetSessionFlags(flags)
+	ssr.SetSecurityBuffer(token)
 }
