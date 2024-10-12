@@ -1,19 +1,35 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/mike76-dev/siasmb/ntlm"
+	"github.com/mike76-dev/siasmb/stores"
 )
 
+var storesDir = flag.String("dir", ".", "directory for storing persistent data")
+
 func main() {
+	flag.Parse()
+	dir, err := filepath.Abs(*storesDir)
+	if err != nil {
+		panic(err)
+	}
+
+	as, err := stores.NewJSONAccountStore(dir)
+	if err != nil {
+		panic(err)
+	}
+
 	l, err := net.Listen("tcp", ":445")
 	if err != nil {
 		log.Fatal(err)
@@ -49,8 +65,7 @@ func main() {
 
 				log.Println("Incoming connection from", conn.RemoteAddr())
 				c := server.newConnection(conn)
-				c.ntlmServer = ntlm.NewServer("SERVER", "")
-				c.ntlmServer.AddAccount("test", "123")
+				c.ntlmServer = ntlm.NewServer("SERVER", "", as)
 
 				for {
 					msg, err := readMessage(conn)

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mike76-dev/siasmb/spnego"
+	"github.com/mike76-dev/siasmb/stores"
 	"github.com/mike76-dev/siasmb/utils"
 )
 
@@ -30,15 +31,21 @@ type Server struct {
 	mechTypes []asn1.ObjectIdentifier
 }
 
-func NewServer(targetName, targetDomain string) *Server {
+func NewServer(targetName, targetDomain string, store *stores.AccountStore) *Server {
 	mechTypes := make([]asn1.ObjectIdentifier, 1)
 	mechTypes[0] = spnego.NlmpOid
-	return &Server{
+	s := &Server{
 		targetName:   targetName,
 		targetDomain: targetDomain,
 		accounts:     make(map[string]string),
 		mechTypes:    mechTypes,
 	}
+
+	for user, password := range store.Accounts {
+		s.AddAccount(user, password)
+	}
+
+	return s
 }
 
 func (s *Server) AddAccount(user, password string) {
