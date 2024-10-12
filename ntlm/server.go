@@ -251,7 +251,7 @@ func (s *Server) Authenticate(amsg []byte) (err error) {
 	var domain string
 
 	if len(userName) != 0 || len(ntChallengeResponse) != 0 {
-		user := utils.DecodeToString(userName)
+		user := strings.ToLower(utils.DecodeToString(userName))
 		expectedNtChallengeResponse := make([]byte, len(ntChallengeResponse))
 		ntlmv2ClientChallenge := ntChallengeResponse[16:]
 		USER := utils.EncodeStringToBytes(strings.ToUpper(user))
