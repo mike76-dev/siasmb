@@ -117,7 +117,7 @@ func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResp
 	buf := resp.Encode()
 
 	if ss != nil && ss.state == sessionValid {
-		if resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
+		if resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) || resp.Header().Command() == smb2.SMB2_SESSION_SETUP {
 			ss.sign(buf)
 		} else {
 			resp.Header().WipeSignature()
