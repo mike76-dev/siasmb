@@ -8,7 +8,10 @@ import (
 	"time"
 )
 
-var errNoShare = errors.New("no share name provided")
+var (
+	errNoShare       = errors.New("no share name provided")
+	errNoTreeConnect = errors.New("tree already disconnected")
+)
 
 type treeConnect struct {
 	treeID        uint32
@@ -60,4 +63,17 @@ func (c *connection) newTreeConnect(ss *session, path string, access uint32) (*t
 	ss.mu.Unlock()
 
 	return tc, nil
+}
+
+func (ss *session) closeTreeConnect(tid uint32) error {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+
+	if _, ok := ss.treeConnectTable[tid]; !ok {
+		return errNoTreeConnect
+	}
+
+	delete(ss.treeConnectTable, tid)
+
+	return nil
 }

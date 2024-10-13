@@ -12,6 +12,12 @@ const (
 
 	SMB2TreeConnectResponseMinSize       = 16
 	SMB2TreeConnectResponseStructureSize = 16
+
+	SMB2TreeDisconnectRequestMinSize       = 4
+	SMB2TreeDisconnectRequestStructureSize = 4
+
+	SMB2TreeDisconnectResponseMinSize       = 4
+	SMB2TreeDisconnectResponseStructureSize = 4
 )
 
 const (
@@ -148,4 +154,48 @@ func (tcr *TreeConnectResponse) Generate(tid uint32, access uint32) {
 	tcr.SetShareFlags(SHAREFLAG_NO_CACHING | SHAREFLAG_DFS)
 	tcr.SetCapabilities(SHARE_CAP_DFS)
 	tcr.SetMaximalAccess(access)
+}
+
+type TreeDisconnectRequest struct {
+	Request
+}
+
+func (tdr TreeDisconnectRequest) Validate() error {
+	if err := Header(tdr.data).Validate(); err != nil {
+		return err
+	}
+
+	if len(tdr.data) < SMB2HeaderSize+SMB2TreeDisconnectRequestMinSize {
+		return ErrWrongLength
+	}
+
+	if tdr.structureSize() != SMB2TreeDisconnectRequestStructureSize {
+		return ErrWrongFormat
+	}
+
+	return nil
+}
+
+type TreeDisconnectResponse struct {
+	Response
+}
+
+func (tdr *TreeDisconnectResponse) setStructureSize() {
+	binary.LittleEndian.PutUint16(tdr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2TreeDisconnectResponseStructureSize)
+}
+
+func (tdr *TreeDisconnectResponse) FromRequest(req GenericRequest) {
+	tdr.Response.FromRequest(req)
+
+	body := make([]byte, SMB2TreeDisconnectResponseMinSize)
+	tdr.data = append(tdr.data, body...)
+
+	tdr.setStructureSize()
+	Header(tdr.data).SetNextCommand(0)
+	Header(tdr.data).SetStatus(STATUS_OK)
+	if Header(tdr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
+		Header(tdr.data).SetCreditResponse(0)
+	} else {
+		Header(tdr.data).SetCreditResponse(1)
+	}
 }

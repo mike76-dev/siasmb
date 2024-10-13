@@ -283,6 +283,31 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		return resp, ss, nil
 
+	case smb2.SMB2_TREE_DISCONNECT:
+		tdr := smb2.TreeDisconnectRequest{Request: *req}
+		if err := tdr.Validate(); err != nil {
+			return nil, nil, err
+		}
+
+		c.mu.Lock()
+		ss, found := c.sessionTable[tdr.Header().SessionID()]
+		c.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(tdr, smb2.STATUS_USER_SESSION_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		if err := ss.closeTreeConnect(tdr.Header().TreeID()); err != nil {
+			resp := smb2.NewErrorResponse(tdr, smb2.STATUS_NETWORK_NAME_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		resp := &smb2.TreeDisconnectResponse{}
+		resp.FromRequest(tdr)
+
+		return resp, ss, nil
+
 	default:
 		log.Println("Unrecognized command:", req.Header().Command())
 		return nil, nil, errors.New("unrecognized command")
