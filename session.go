@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -144,11 +145,13 @@ func (ss *session) sign(buf []byte) {
 	copy(buf[48:64], h.Sum(nil))
 }
 
-func (c *connection) findSession(sid uint64) (*session, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (ss *session) validateRequest(req *smb2.Request) bool {
+	if !req.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
+		return true
+	}
 
-	ss, found := c.sessionTable[sid]
-
-	return ss, found
+	signature := req.Header().Signature()
+	req.Header().WipeSignature()
+	ss.sign(req.Header())
+	return bytes.Equal(signature, req.Header().Signature())
 }

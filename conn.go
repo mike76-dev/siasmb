@@ -21,6 +21,7 @@ var (
 	errCommandSecuenceWindowExceeded = errors.New("command sequence window exceeded")
 	errLongRequest                   = errors.New("request too long")
 	errAlreadyNegotiated             = errors.New("dialect already negotiated")
+	errInvalidSignature              = errors.New("invalid signature")
 )
 
 type connection struct {
@@ -98,6 +99,11 @@ func (c *connection) acceptRequest(msg []byte) error {
 
 	if mid == math.MaxUint64 {
 		return errCommandSecuenceWindowExceeded
+	}
+
+	ss, found := c.sessionTable[req.Header().SessionID()]
+	if found && !ss.validateRequest(req) {
+		return errInvalidSignature
 	}
 
 	delete(c.commandSequenceWindow, mid)
@@ -257,7 +263,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return nil, nil, err
 		}
 
-		ss, found := c.findSession(tcr.Header().SessionID())
+		c.mu.Lock()
+		ss, found := c.sessionTable[tcr.Header().SessionID()]
+		c.mu.Unlock()
 		if !found {
 			resp := smb2.NewErrorResponse(tcr, smb2.STATUS_USER_SESSION_DELETED, nil)
 			return resp, nil, nil

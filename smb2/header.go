@@ -220,7 +220,9 @@ func (h Header) SetSessionID(sid uint64) {
 }
 
 func (h Header) Signature() []byte {
-	return h[48:64]
+	signature := make([]byte, 16)
+	copy(signature, h[48:64])
+	return signature
 }
 
 func (h Header) SetSignature(signature []byte) {
