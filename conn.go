@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"log"
 	"math"
 	"net"
 	"strings"
@@ -250,7 +251,32 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		return resp, ss, nil
 
+	case smb2.SMB2_TREE_CONNECT:
+		tcr := smb2.TreeConnectRequest{Request: *req}
+		if err := tcr.Validate(); err != nil {
+			return nil, nil, err
+		}
+
+		ss, found := c.findSession(tcr.Header().SessionID())
+		if !found {
+			resp := smb2.NewErrorResponse(tcr, smb2.STATUS_USER_SESSION_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		tc, err := c.newTreeConnect(ss, tcr.PathName(), smb2.FILE_READ_DATA|smb2.FILE_READ_EA|smb2.FILE_READ_ATTRIBUTES|smb2.READ_CONTROL|smb2.SYNCHRONIZE)
+		if err != nil {
+			resp := smb2.NewErrorResponse(tcr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, nil, nil
+		}
+
+		resp := &smb2.TreeConnectResponse{}
+		resp.FromRequest(tcr)
+		resp.Generate(tc.treeID, tc.maximalAccess)
+
+		return resp, ss, nil
+
 	default:
+		log.Println("Unrecognized command:", req.Header().Command())
 		return nil, nil, errors.New("unrecognized command")
 	}
 }

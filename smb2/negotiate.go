@@ -110,6 +110,10 @@ func (nr NegotiateRequest) Validate() error {
 		return ErrWrongFormat
 	}
 
+	if Header(nr.data).IsFlagSet(FLAGS_SIGNED) {
+		return ErrInvalidParameter
+	}
+
 	dialectCount := binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+2 : SMB2HeaderSize+4])
 	if dialectCount == 0 {
 		return ErrInvalidParameter

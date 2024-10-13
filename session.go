@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/mike76-dev/siasmb/ntlm"
@@ -31,12 +32,12 @@ type session struct {
 	sessionKey      []byte
 	signingRequired bool
 	// openTable
-	// treeConnectTable
-	expirationTime time.Time
-	connection     *connection
-	creationTime   time.Time
-	idleTime       time.Time
-	userName       string
+	treeConnectTable map[uint32]*treeConnect
+	expirationTime   time.Time
+	connection       *connection
+	creationTime     time.Time
+	idleTime         time.Time
+	userName         string
 	// channelList: 3.x
 	// encryptData: 3.x
 	// encryptionKey: 3.x
@@ -46,6 +47,7 @@ type session struct {
 	// supportsNotification: 3.x
 	// preauthIntegrityHashValue: 3.1.1
 	// fullSessionKey: 3.1.1
+	mu sync.Mutex
 }
 
 func (s *server) registerSession(connection *connection, req smb2.SessionSetupRequest) (*session, bool, error) {
@@ -55,11 +57,12 @@ func (s *server) registerSession(connection *connection, req smb2.SessionSetupRe
 		sid := make([]byte, 8)
 		rand.Read(sid)
 		ss = &session{
-			sessionID:    binary.LittleEndian.Uint64(sid),
-			connection:   connection,
-			state:        sessionInProgress,
-			creationTime: time.Now(),
-			idleTime:     time.Now(),
+			sessionID:        binary.LittleEndian.Uint64(sid),
+			connection:       connection,
+			state:            sessionInProgress,
+			creationTime:     time.Now(),
+			idleTime:         time.Now(),
+			treeConnectTable: make(map[uint32]*treeConnect),
 		}
 		connection.mu.Lock()
 		connection.sessionTable[ss.sessionID] = ss
@@ -139,4 +142,13 @@ func (ss *session) sign(buf []byte) {
 	h.Reset()
 	h.Write(buf)
 	copy(buf[48:64], h.Sum(nil))
+}
+
+func (c *connection) findSession(sid uint64) (*session, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	ss, found := c.sessionTable[sid]
+
+	return ss, found
 }
