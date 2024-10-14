@@ -308,6 +308,47 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		return resp, ss, nil
 
+	case smb2.SMB2_IOCTL:
+		ir := smb2.IoctlRequest{Request: *req}
+		if err := ir.Validate(); err != nil {
+			if errors.Is(err, smb2.ErrInvalidParameter) {
+				resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, nil, nil
+			}
+			return nil, nil, err
+		}
+
+		c.mu.Lock()
+		ss, found := c.sessionTable[ir.Header().SessionID()]
+		c.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(ir, smb2.STATUS_USER_SESSION_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		if ir.MaxInputResponse() > uint32(c.maxTransactSize) || ir.MaxOutputResponse() > uint32(c.maxTransactSize) || len(ir.InputBuffer()) > int(c.maxTransactSize) {
+			resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, nil, nil
+		}
+
+		if ir.Flags()&smb2.IOCTL_IS_FSCTL == 0 {
+			resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
+			return resp, ss, nil
+		}
+
+		switch ir.CtlCode() {
+		case smb2.FSCTL_VALIDATE_NEGOTIATE_INFO:
+			resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
+		case smb2.FSCTL_DFS_GET_REFERRALS:
+			resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_FOUND, nil)
+			return resp, ss, nil
+		default:
+			resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
+			return resp, ss, nil
+		}
+
 	default:
 		log.Println("Unrecognized command:", req.Header().Command())
 		return nil, nil, errors.New("unrecognized command")
