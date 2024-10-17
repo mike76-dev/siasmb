@@ -154,10 +154,10 @@ func (tcr *TreeConnectResponse) FromRequest(req GenericRequest) {
 	}
 }
 
-func (tcr *TreeConnectResponse) Generate(tid uint32, access uint32) {
+func (tcr *TreeConnectResponse) Generate(tid uint32, st uint8, access uint32) {
 	Header(tcr.data).SetStatus(STATUS_OK)
 	Header(tcr.data).SetTreeID(tid)
-	tcr.SetShareType(SHARE_TYPE_PIPE)
+	tcr.SetShareType(st)
 	tcr.SetShareFlags(SHAREFLAG_NO_CACHING | SHAREFLAG_DFS)
 	tcr.SetCapabilities(SHARE_CAP_DFS)
 	tcr.SetMaximalAccess(access)

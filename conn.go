@@ -277,9 +277,14 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		shareType := smb2.SHARE_TYPE_DISK
+		if tc.share == "IPC$" {
+			shareType = smb2.SHARE_TYPE_PIPE
+		}
+
 		resp := &smb2.TreeConnectResponse{}
 		resp.FromRequest(tcr)
-		resp.Generate(tc.treeID, tc.maximalAccess)
+		resp.Generate(tc.treeID, uint8(shareType), tc.maximalAccess)
 
 		return resp, ss, nil
 
