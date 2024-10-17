@@ -78,6 +78,13 @@ const (
 	GENERIC_READ           = 0x80000000
 )
 
+const (
+	FILE_LIST_DIRECTORY   = 0x00000001
+	FILE_ADD_FILE         = 0x00000002
+	FILE_ADD_SUBDIRECTORY = 0x00000004
+	FILE_TRAVERSE         = 0x00000020
+)
+
 type TreeConnectRequest struct {
 	Request
 }
