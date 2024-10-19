@@ -39,15 +39,7 @@ type session struct {
 	creationTime     time.Time
 	idleTime         time.Time
 	userName         string
-	// channelList: 3.x
-	// encryptData: 3.x
-	// encryptionKey: 3.x
-	// decryptionKey: 3.x
-	// signingKey: 3.x
-	// applicationKey: 3.x
-	// supportsNotification: 3.x
-	// preauthIntegrityHashValue: 3.1.1
-	// fullSessionKey: 3.1.1
+
 	mu sync.Mutex
 }
 

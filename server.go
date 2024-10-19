@@ -28,9 +28,9 @@ type serverStats struct {
 }
 
 type server struct {
-	enabled bool
-	stats   serverStats
-	// shareList
+	enabled   bool
+	stats     serverStats
+	shareList map[string]*share
 	// globalOpenTable
 	globalSessionTable              map[uint64]*session
 	connectionList                  map[string]*connection
@@ -39,21 +39,7 @@ type server struct {
 	serverSideCopyMaxNumberOfChunks uint64
 	serverSideCopyMaxChunkSize      uint64
 	serverSideCopyMaxDataSize       uint64
-	// serverHashLevel: 2.1+
-	// globalLeaseTableList: 2.1+ & leasing
-	// maxResiliencyTimeout: 2.1+ & resiliency
-	// resilientOpenScavengerExpiryTime: 2.1+ & resiliency
-	// globalClientTable: 3.x
-	// encryptData: 3.x
-	// rejectUnencryptedAccess: 3.x
-	// isMultiChannelCapable: 3.x
-	// allowAnonymousAccess: 3.x
-	// isSharedVHDSupported: 3.0.2+
-	// maxClusterDialect: 3.1.1
-	// supportsTreeConnectExtn: 3.1.1
-	// allowNamedPipeAccessOverQUIC: 3.1.1
-	// isMutualAuthOverQUICSupported: 3.1.1
-	// serverCertificateMappingTable: 3.1.1
+
 	listener net.Listener
 	mu       sync.Mutex
 }
@@ -66,6 +52,7 @@ func newServer(l net.Listener) *server {
 		serverSideCopyMaxChunkSize:      2 >> 10, // 1MiB
 		serverSideCopyMaxDataSize:       2 >> 14, // 16MiB
 		isDfsCapable:                    true,
+		shareList:                       make(map[string]*share),
 		connectionList:                  make(map[string]*connection),
 		globalSessionTable:              make(map[uint64]*session),
 		listener:                        l,

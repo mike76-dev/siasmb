@@ -30,6 +30,11 @@ func main() {
 		panic(err)
 	}
 
+	ss, err := stores.NewSharesStore(dir)
+	if err != nil {
+		panic(err)
+	}
+
 	l, err := net.Listen("tcp", ":445")
 	if err != nil {
 		log.Fatal(err)
@@ -38,6 +43,16 @@ func main() {
 	defer l.Close()
 
 	server := newServer(l)
+	for _, sh := range ss.Shares {
+		cs := make(map[string]struct{})
+		fs := make(map[string]uint32)
+		for _, p := range sh.Policies {
+			cs[p.Username] = struct{}{}
+			fs[p.Username] = p.Flags
+		}
+		server.registerShare(sh.Name, sh.ServerName, cs, fs, sh.Remark)
+	}
+
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {

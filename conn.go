@@ -37,26 +37,9 @@ type connection struct {
 	maxWriteSize          uint64
 	maxReadSize           uint64
 	supportsMultiCredit   bool
-	// transportName
-	sessionTable map[uint64]*session
-	creationTime time.Time
-	// preauthSessionTable
-	// clientGuid: 2.1+
-	// serverCapabilities: 3.x
-	// clientSecurityMode: 3.x
-	// serverSecurityMode: 3.x
-	// constrainedConnection: 3.x
-	// supportsNotifications: 3.x
-	// preauthIntegrityHashId: 3.1.1
-	// preauthIntegrityHashValue: 3.1.1
-	// cipherId: 3.1.1
-	// clientDialects: 3.1.1
-	// compressionIds: 3.1.1
-	// supportsChainedCompression: 3.1.1
-	// rdmaTransformIds: 3.1.1
-	// signingAlgorithmId: 3.1.1
-	// acceptTransportSecurity: 3.1.1
-	// serverCertificateMappingEntry: 3.1.1
+	sessionTable          map[uint64]*session
+	creationTime          time.Time
+
 	conn       net.Conn
 	mu         sync.Mutex
 	server     *server
@@ -271,20 +254,21 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
-		tc, err := c.newTreeConnect(ss, tcr.PathName(), smb2.FILE_READ_DATA|smb2.FILE_READ_EA|smb2.FILE_READ_ATTRIBUTES|smb2.READ_CONTROL|smb2.SYNCHRONIZE)
+		tc, err := c.newTreeConnect(ss, tcr.PathName())
 		if err != nil {
-			resp := smb2.NewErrorResponse(tcr, smb2.STATUS_INVALID_PARAMETER, nil)
-			return resp, nil, nil
-		}
-
-		shareType := smb2.SHARE_TYPE_DISK
-		if tc.share == "IPC$" {
-			shareType = smb2.SHARE_TYPE_PIPE
+			if errors.Is(err, errNoShare) {
+				resp := smb2.NewErrorResponse(tcr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, nil, nil
+			}
+			if errors.Is(err, errAccessDenied) {
+				resp := smb2.NewErrorResponse(tcr, smb2.STATUS_ACCESS_DENIED, nil)
+				return resp, nil, nil
+			}
 		}
 
 		resp := &smb2.TreeConnectResponse{}
 		resp.FromRequest(tcr)
-		resp.Generate(tc.treeID, uint8(shareType), tc.maximalAccess)
+		resp.Generate(tc.treeID, uint8(tc.share.shareType), tc.maximalAccess)
 
 		return resp, ss, nil
 
