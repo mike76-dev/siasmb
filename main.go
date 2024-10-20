@@ -48,7 +48,7 @@ func main() {
 		fs := make(map[string]uint32)
 		for _, p := range sh.Policies {
 			cs[p.Username] = struct{}{}
-			fs[p.Username] = p.Flags
+			fs[p.Username] = stores.FlagsFromAccessRights(p)
 		}
 		server.registerShare(sh.Name, sh.ServerName, cs, fs, sh.Remark)
 	}

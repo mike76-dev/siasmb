@@ -8,13 +8,16 @@ import (
 )
 
 type AccessRights struct {
-	Username string `yaml:"username"`
-	Flags    uint32 `yaml:"flags"`
+	Username     string `yaml:"username"`
+	ReadAccess   bool   `yaml:"read"`
+	WriteAccess  bool   `yaml:"write"`
+	DeleteAccess bool   `yaml:"delete"`
 }
 
 type Share struct {
 	Name       string         `yaml:"name"`
 	ServerName string         `yaml:"serverName"`
+	Bucket     string         `yaml:"bucket,omitempty"`
 	Policies   []AccessRights `yaml:"policies,omitempty"`
 	Remark     string         `yaml:"remark,omitempty"`
 }
@@ -40,4 +43,21 @@ func NewSharesStore(dir string) (*SharesStore, error) {
 	}
 
 	return ss, nil
+}
+
+func FlagsFromAccessRights(ar AccessRights) uint32 {
+	var flags uint32
+	if ar.ReadAccess {
+		flags |= 0x00000089
+	}
+
+	if ar.WriteAccess {
+		flags |= 0x00000116
+	}
+
+	if ar.DeleteAccess {
+		flags |= 0x00010040
+	}
+
+	return flags
 }
