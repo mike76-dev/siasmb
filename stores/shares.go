@@ -17,6 +17,7 @@ type AccessRights struct {
 type Share struct {
 	Name       string         `yaml:"name"`
 	ServerName string         `yaml:"serverName"`
+	Password   string         `yaml:"apiPassword,omitempty"`
 	Bucket     string         `yaml:"bucket,omitempty"`
 	Policies   []AccessRights `yaml:"policies,omitempty"`
 	Remark     string         `yaml:"remark,omitempty"`
