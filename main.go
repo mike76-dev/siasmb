@@ -50,7 +50,9 @@ func main() {
 			cs[p.Username] = struct{}{}
 			fs[p.Username] = stores.FlagsFromAccessRights(p)
 		}
-		server.registerShare(sh.Name, sh.ServerName, cs, fs, sh.Remark)
+		if err := server.registerShare(sh.Name, sh.ServerName, sh.Password, sh.Bucket, cs, fs, sh.Remark); err != nil {
+			log.Println("Error registering share:", sh.Name)
+		}
 	}
 
 	c := make(chan os.Signal, 1)

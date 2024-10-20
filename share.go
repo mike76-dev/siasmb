@@ -1,9 +1,19 @@
 package main
 
-import "github.com/mike76-dev/siasmb/smb2"
+import (
+	"errors"
+	"time"
+
+	"github.com/mike76-dev/siasmb/client"
+	"github.com/mike76-dev/siasmb/smb2"
+)
 
 const (
 	maxShareUses = 256
+)
+
+var (
+	errShareUnavailable = errors.New("share currently unavailable")
 )
 
 type share struct {
@@ -24,9 +34,13 @@ type share struct {
 	forceLevel2Oplock                 bool
 	hashEnabled                       bool
 	// snapshotList
+
+	client    *client.Client
+	bucket    string
+	createdAt time.Time
 }
 
-func (s *server) registerShare(name, serverName string, connectSecurity map[string]struct{}, fileSecurity map[string]uint32, remark string) {
+func (s *server) registerShare(name, serverName, apiPassword, bucketName string, connectSecurity map[string]struct{}, fileSecurity map[string]uint32, remark string) error {
 	sh := &share{
 		name:            name,
 		serverName:      serverName,
@@ -39,7 +53,17 @@ func (s *server) registerShare(name, serverName string, connectSecurity map[stri
 		remark:          remark,
 	}
 
+	sh.client = client.New(serverName, apiPassword)
+	bucket, err := sh.client.GetBucket(bucketName)
+	if err != nil {
+		return errShareUnavailable
+	}
+
+	sh.bucket = bucket.Name
+	sh.createdAt, _ = time.Parse(time.RFC3339, bucket.CreatedAt)
 	s.mu.Lock()
 	s.shareList[name] = sh
 	s.mu.Unlock()
+
+	return nil
 }
