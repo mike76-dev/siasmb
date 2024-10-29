@@ -8,10 +8,11 @@ import (
 )
 
 type AccessRights struct {
-	Username     string `yaml:"username"`
-	ReadAccess   bool   `yaml:"read"`
-	WriteAccess  bool   `yaml:"write"`
-	DeleteAccess bool   `yaml:"delete"`
+	Username      string `yaml:"username"`
+	ReadAccess    bool   `yaml:"read"`
+	WriteAccess   bool   `yaml:"write"`
+	DeleteAccess  bool   `yaml:"delete"`
+	ExecuteAccess bool   `yaml:"execute"`
 }
 
 type Share struct {
@@ -49,15 +50,19 @@ func NewSharesStore(dir string) (*SharesStore, error) {
 func FlagsFromAccessRights(ar AccessRights) uint32 {
 	var flags uint32
 	if ar.ReadAccess {
-		flags |= 0x00000089
+		flags |= 0x00120089
 	}
 
 	if ar.WriteAccess {
-		flags |= 0x00000116
+		flags |= 0x000c0116
 	}
 
 	if ar.DeleteAccess {
 		flags |= 0x00010040
+	}
+
+	if ar.ExecuteAccess {
+		flags |= 0x00000020
 	}
 
 	return flags
