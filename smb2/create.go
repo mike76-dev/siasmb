@@ -21,6 +21,7 @@ const (
 )
 
 const (
+	// Oplock level
 	OPLOCK_LEVEL_NONE      = 0x00
 	OPLOCK_LEVEL_II        = 0x01
 	OPLOCK_LEVEL_EXCLUSIVE = 0x08
@@ -29,6 +30,7 @@ const (
 )
 
 const (
+	// Impersonation level
 	IMPERSONATION_ANONYMOUS      = 0x00000000
 	IMPERSONATION_IDENTIFICATION = 0x00000001
 	IMPERSONATION_IMPERSONATION  = 0x00000002
@@ -36,12 +38,14 @@ const (
 )
 
 const (
+	// Share access
 	FILE_SHARE_READ   = 0x00000001
 	FILE_SHARE_WRITE  = 0x00000002
 	FILE_SHARE_DELETE = 0x00000004
 )
 
 const (
+	// Create disposition
 	FILE_SUPERSEDE    = 0x00000000
 	FILE_OPEN         = 0x00000001
 	FILE_CREATE       = 0x00000002
@@ -51,6 +55,7 @@ const (
 )
 
 const (
+	// Create options
 	FILE_DIRECTORY_FILE            = 0x00000001
 	FILE_WRITE_THROUGH             = 0x00000002
 	FILE_SEQUENTIAL_ONLY           = 0x00000004
@@ -75,6 +80,7 @@ const (
 )
 
 const (
+	// File attributes
 	FILE_ATTRIBUTE_READONLY              = 0x00000001
 	FILE_ATTRIBUTE_HIDDEN                = 0x00000002
 	FILE_ATTRIBUTE_SYSTEM                = 0x00000004
@@ -97,6 +103,7 @@ const (
 )
 
 const (
+	// Create context
 	CREATE_EA_BUFFER                    = 0x45787441
 	CREATE_SD_BUFFER                    = 0x53656344
 	CREATE_DURABLE_HANDLE_REQUEST       = 0x44486e51
@@ -106,6 +113,20 @@ const (
 	CREATE_TIMEWAROP_TOKEN              = 0x54577270
 	CREATE_QUERY_ON_DISK_ID             = 0x51466964
 	CREATE_REQUEST_LEASE                = 0x52714c73
+)
+
+const (
+	OplockNone int = iota
+	OplockHeld
+	OplockBreaking
+)
+
+const (
+	// Create action
+	FILE_SUPERSEDED  = 0x00000000
+	FILE_OPENED      = 0x00000001
+	FILE_CREATED     = 0x00000002
+	FILE_OVERWRITTEN = 0x00000003
 )
 
 type CreateRequest struct {
@@ -172,6 +193,10 @@ func (cr CreateRequest) DesiredAccess() uint32 {
 	return binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+24 : SMB2HeaderSize+28])
 }
 
+func (cr *CreateRequest) SetDesiredAccess(da uint32) {
+	binary.LittleEndian.PutUint32(cr.data[SMB2HeaderSize+24:SMB2HeaderSize+28], da)
+}
+
 func (cr CreateRequest) FileAttributes() uint32 {
 	return binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+28 : SMB2HeaderSize+32])
 }
@@ -186,6 +211,10 @@ func (cr CreateRequest) CreateDisposition() uint32 {
 
 func (cr CreateRequest) CreateOptions() uint32 {
 	return binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+40 : SMB2HeaderSize+44])
+}
+
+func (cr *CreateRequest) SetCreateOptions(options uint32) {
+	binary.LittleEndian.PutUint32(cr.data[SMB2HeaderSize+40:SMB2HeaderSize+44], options)
 }
 
 func (cr CreateRequest) CreateOptionSelected(option uint32) bool {
@@ -208,20 +237,20 @@ func (cr CreateRequest) CreateContexts() (map[uint32][]byte, error) {
 	contexts := make(map[uint32][]byte)
 	for off < uint32(len(cr.data)) {
 		next := binary.LittleEndian.Uint32(cr.data[off : off+4])
-		if next == 0 {
-			break
-		}
 
 		nameOff := uint32(binary.LittleEndian.Uint16(cr.data[off+4 : off+6]))
 		nameLen := binary.LittleEndian.Uint16(cr.data[off+6 : off+8])
 		if nameLen > 4 {
 			off += next
+			if next == 0 {
+				break
+			}
 			continue
 		} else if nameLen < 4 {
 			return nil, ErrInvalidParameter
 		}
 
-		name := binary.LittleEndian.Uint32(cr.data[off+nameOff : off+nameOff+4])
+		name := binary.BigEndian.Uint32(cr.data[off+nameOff : off+nameOff+4])
 		dataOff := uint32(binary.LittleEndian.Uint16(cr.data[off+10 : off+12]))
 		dataLen := binary.LittleEndian.Uint32(cr.data[off+12 : off+16])
 		data := make([]byte, dataLen)
@@ -229,6 +258,9 @@ func (cr CreateRequest) CreateContexts() (map[uint32][]byte, error) {
 		contexts[name] = data
 
 		off += next
+		if next == 0 {
+			break
+		}
 	}
 
 	return contexts, nil
@@ -297,11 +329,106 @@ func (cr *CreateResponse) SetCreateContexts(contexts map[uint32][]byte) {
 		binary.LittleEndian.PutUint32(context[12:16], uint32(len(ctx)))
 		copy(context[24:24+len(ctx)], ctx)
 
-		buf = append(buf, ctx...)
+		buf = append(buf, context...)
 		count++
 	}
 
-	binary.LittleEndian.PutUint32(cr.data[SMB2HeaderSize+80:SMB2HeaderSize+84], 88)
+	binary.LittleEndian.PutUint32(cr.data[SMB2HeaderSize+80:SMB2HeaderSize+84], SMB2HeaderSize+88)
 	binary.LittleEndian.PutUint32(cr.data[SMB2HeaderSize+84:SMB2HeaderSize+88], uint32(len(buf)))
 	cr.data = append(cr.data, buf...)
+}
+
+func (cr *CreateResponse) FromRequest(req GenericRequest) {
+	cr.Response.FromRequest(req)
+
+	body := make([]byte, SMB2CreateResponseMinSize)
+	cr.data = append(cr.data, body...)
+
+	cr.setStructureSize()
+	Header(cr.data).SetNextCommand(0)
+	Header(cr.data).SetStatus(STATUS_OK)
+	if Header(cr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
+		Header(cr.data).SetCreditResponse(0)
+	} else {
+		Header(cr.data).SetCreditResponse(1)
+	}
+}
+
+func (cr *CreateResponse) Generate(
+	oplockLevel uint8,
+	createAction uint32,
+	size uint64,
+	modTime time.Time,
+	isDir bool,
+	fileID uint64,
+	durableFileID uint64,
+	createContexts map[uint32][]byte,
+) {
+	cr.SetOplockLevel(oplockLevel)
+	cr.SetCreateAction(createAction)
+
+	var creationTime, lastAccessTime, lastWriteTime, changeTime time.Time
+	now := time.Now()
+	switch createAction {
+	case FILE_SUPERSEDED, FILE_CREATED:
+		creationTime = now
+		lastAccessTime = now
+		lastWriteTime = now
+		changeTime = now
+	case FILE_OPENED:
+		creationTime = modTime
+		lastAccessTime = now
+		lastWriteTime = modTime
+		changeTime = modTime
+	case FILE_OVERWRITTEN:
+		creationTime = modTime
+		lastAccessTime = now
+		lastWriteTime = now
+		changeTime = now
+	}
+
+	cr.SetFileTime(creationTime, lastAccessTime, lastWriteTime, changeTime)
+
+	if isDir {
+		cr.SetFileAttributes(FILE_ATTRIBUTE_DIRECTORY)
+	} else {
+		cr.SetFileAttributes(FILE_ATTRIBUTE_NORMAL)
+		cr.SetFilesize(size)
+	}
+
+	fid := make([]byte, 16)
+	binary.LittleEndian.PutUint64(fid[:8], fileID)
+	binary.LittleEndian.PutUint64(fid[8:], durableFileID)
+	cr.SetFileID(fid)
+
+	cr.SetCreateContexts(createContexts)
+}
+
+func HandleCreateQueryMaximalAccessRequest(ctx []byte, modTime time.Time, maxAccess uint32) []byte {
+	resp := make([]byte, 8)
+	if len(ctx) != 8 {
+		binary.LittleEndian.PutUint32(resp[:4], STATUS_OK)
+		binary.LittleEndian.PutUint32(resp[4:], maxAccess)
+	} else {
+		timestamp := utils.FiletimeToUnix(binary.LittleEndian.Uint64(ctx[:8]))
+		if timestamp == modTime {
+			binary.LittleEndian.PutUint32(resp[:4], STATUS_NONE_MAPPED)
+		} else {
+			binary.LittleEndian.PutUint32(resp[:4], STATUS_OK)
+			binary.LittleEndian.PutUint32(resp[4:], maxAccess)
+		}
+	}
+	return resp
+}
+
+func HandleCreateQueryOnDiskID(fid, vid uint64) []byte {
+	resp := make([]byte, 32)
+	binary.LittleEndian.PutUint64(resp[:8], fid)
+	binary.LittleEndian.PutUint64(resp[8:16], vid)
+	return resp
+}
+
+func HandleCreateDurableHandleRequest() []byte {
+	resp := make([]byte, 8)
+	return resp
 }

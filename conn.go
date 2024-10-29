@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -47,6 +48,41 @@ type connection struct {
 	closeChan  chan struct{}
 }
 
+func findMaxId(m map[uint64]struct{}) uint64 {
+	var max uint64
+	for id := range m {
+		if id > max {
+			max = id
+		}
+	}
+	return max
+}
+
+func findMinKey[T any](m map[uint64]T) (key uint64, value T) {
+	key = math.MaxUint64
+	for k, v := range m {
+		if k < key {
+			key = k
+			value = v
+		}
+	}
+	return
+}
+
+func (c *connection) grantCredits(numCredits uint64) error {
+	max := findMaxId(c.commandSequenceWindow)
+	if numCredits > math.MaxUint64-max {
+		return errCommandSecuenceWindowExceeded
+	}
+
+	var i uint64
+	for i = 0; i < numCredits; i++ {
+		c.commandSequenceWindow[max+i+1] = struct{}{}
+	}
+
+	return nil
+}
+
 func (c *connection) acceptRequest(msg []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -89,8 +125,11 @@ func (c *connection) acceptRequest(msg []byte) error {
 		return errInvalidSignature
 	}
 
+	if err := c.grantCredits(1); err != nil {
+		return err
+	}
+
 	delete(c.commandSequenceWindow, mid)
-	c.commandSequenceWindow[mid+1] = struct{}{}
 	c.requestList[mid] = req
 
 	return nil
@@ -217,6 +256,15 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		resp.FromRequest(ssr)
 		resp.Generate(ss.sessionID, flags, token, found)
 
+		if found {
+			c.mu.Lock()
+			if err := c.grantCredits(uint64(ssr.Header().CreditRequest()) - 1); err != nil {
+				c.mu.Unlock()
+				return nil, nil, err
+			}
+			c.mu.Unlock()
+		}
+
 		return resp, ss, nil
 
 	case smb2.SMB2_LOGOFF:
@@ -297,6 +345,133 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		return resp, ss, nil
 
+	case smb2.SMB2_CREATE:
+		cr := smb2.CreateRequest{Request: *req}
+		if err := cr.Validate(); err != nil {
+			return nil, nil, err
+		}
+
+		c.mu.Lock()
+		ss, found := c.sessionTable[cr.Header().SessionID()]
+		c.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_USER_SESSION_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		ss.mu.Lock()
+		tc, found := ss.treeConnectTable[cr.Header().TreeID()]
+		ss.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, nil, nil
+		}
+
+		if tc.share.name == "ipc$" {
+			c.server.mu.Lock()
+			c.server.stats.permErrors++
+			c.server.mu.Unlock()
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_ACCESS_DENIED, nil)
+			return resp, ss, nil
+		}
+
+		contexts, err := cr.CreateContexts()
+		if err != nil {
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		path := cr.Filename()
+		op, found := c.server.findOpen(path, tc.treeID)
+		if found {
+			if op.durableOwner != ss.userName {
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_ACCESS_DENIED, nil)
+				return resp, ss, nil
+			}
+
+			if op.session.sessionID != ss.sessionID {
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_DUPLICATE_OBJECTID, nil)
+				return resp, ss, nil
+			}
+		} else {
+			co := cr.CreateOptions()
+			if co&smb2.FILE_DELETE_ON_CLOSE > 0 && (tc.maximalAccess&(smb2.DELETE|smb2.GENERIC_ALL|smb2.GENERIC_EXECUTE|smb2.GENERIC_READ|smb2.GENERIC_WRITE) == 0) {
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_ACCESS_DENIED, nil)
+				return resp, ss, nil
+			}
+
+			if co&smb2.FILE_NO_INTERMEDIATE_BUFFERING > 0 {
+				da := cr.DesiredAccess()
+				cr.SetDesiredAccess(da &^ smb2.FILE_APPEND_DATA)
+			}
+
+			co = co &^ smb2.FILE_COMPLETE_IF_OPLOCKED
+			co = co &^ smb2.FILE_SYNCHRONOUS_IO_ALERT
+			co = co &^ smb2.FILE_SYNCHRONOUS_IO_NONALERT
+			co = co &^ smb2.FILE_OPEN_FOR_FREE_SPACE_QUERY
+			cr.SetCreateOptions(co)
+
+			access := grantAccess(cr, tc, ss)
+			if !access {
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_ACCESS_DENIED, nil)
+				c.server.mu.Lock()
+				c.server.stats.permErrors++
+				c.server.mu.Unlock()
+				return resp, ss, nil
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+
+			info, err := tc.share.client.GetObjectInfo(ctx, tc.share.bucket, path)
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) {
+					resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, nil)
+					return resp, ss, nil
+				}
+
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
+				return resp, ss, nil
+			}
+
+			op = ss.registerOpen(cr, tc, info)
+			if op == nil {
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, ss, nil
+			}
+		}
+
+		respContexts := make(map[uint32][]byte)
+
+		for id, ctx := range contexts {
+			switch id {
+			case smb2.CREATE_EA_BUFFER:
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_EAS_NOT_SUPPORTED, nil)
+				return resp, ss, nil
+			case smb2.CREATE_QUERY_MAXIMAL_ACCESS_REQUEST:
+				respContexts[id] = smb2.HandleCreateQueryMaximalAccessRequest(ctx, op.lastModified, op.grantedAccess)
+			case smb2.CREATE_QUERY_ON_DISK_ID:
+				respContexts[id] = smb2.HandleCreateQueryOnDiskID(op.durableFileID, tc.share.volumeID)
+			}
+		}
+
+		resp := &smb2.CreateResponse{}
+		resp.FromRequest(cr)
+		resp.Generate(
+			op.oplockLevel,
+			cr.CreateDisposition(),
+			op.size,
+			op.lastModified,
+			op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
+			op.fileID,
+			op.durableFileID,
+			respContexts,
+		)
+
+		return resp, ss, nil
+
 	case smb2.SMB2_IOCTL:
 		ir := smb2.IoctlRequest{Request: *req}
 		if err := ir.Validate(); err != nil {
@@ -346,10 +521,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 func (c *connection) processRequests() {
 	for {
-		c.mu.Lock()
 		var req *smb2.Request
-		for _, req = range c.requestList {
-			break
+		c.mu.Lock()
+		if len(c.commandSequenceWindow) > 0 {
+			_, req = findMinKey(c.requestList)
 		}
 		c.mu.Unlock()
 
@@ -365,7 +540,7 @@ func (c *connection) processRequests() {
 				return
 			}
 		} else {
-			time.Sleep(time.Second)
+			time.Sleep(100 * time.Millisecond)
 		}
 
 		select {

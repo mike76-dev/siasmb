@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mike76-dev/siasmb/smb2"
@@ -23,6 +24,7 @@ type treeConnect struct {
 	openCount     uint64
 	creationTime  time.Time
 	maximalAccess uint32
+	mu            sync.Mutex
 }
 
 func extractShareName(path string) string {
@@ -41,7 +43,7 @@ func extractShareName(path string) string {
 		return ""
 	}
 
-	return path[pos+1:]
+	return strings.ToLower(path[pos+1:])
 }
 
 func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, error) {
@@ -52,7 +54,7 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 
 	var sh *share
 	var access uint32
-	if name == "IPC$" {
+	if name == "ipc$" {
 		sh = &share{
 			name:            name,
 			shareType:       smb2.SHARE_TYPE_PIPE,
@@ -60,7 +62,15 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 			fileSecurity:    make(map[string]uint32),
 		}
 		sh.connectSecurity[ss.userName] = struct{}{}
-		access = smb2.FILE_READ_DATA | smb2.FILE_READ_EA | smb2.FILE_READ_ATTRIBUTES | smb2.SYNCHRONIZE
+		access = smb2.FILE_READ_DATA |
+			smb2.FILE_READ_EA |
+			smb2.FILE_EXECUTE |
+			smb2.FILE_READ_ATTRIBUTES |
+			smb2.DELETE |
+			smb2.READ_CONTROL |
+			smb2.WRITE_DAC |
+			smb2.WRITE_OWNER |
+			smb2.SYNCHRONIZE
 		sh.fileSecurity[ss.userName] = access
 	} else {
 		var exists bool

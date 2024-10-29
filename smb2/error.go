@@ -14,7 +14,11 @@ const (
 	STATUS_INVALID_PARAMETER        = 0xc000000d
 	STATUS_MORE_PROCESSING_REQUIRED = 0xc0000016
 	STATUS_ACCESS_DENIED            = 0xc0000022
+	STATUS_OBJECT_NAME_NOT_FOUND    = 0xc0000034
+	STATUS_EAS_NOT_SUPPORTED        = 0xc000004f
 	STATUS_NO_SUCH_USER             = 0xc0000064
+	STATUS_NONE_MAPPED              = 0xc0000073
+	STATUS_IO_TIMEOUT               = 0xc00000b5
 	STATUS_NOT_SUPPORTED            = 0xc00000bb
 	STATUS_NETWORK_NAME_DELETED     = 0xc00000c9
 	STATUS_NETWORK_ACCESS_DENIED    = 0xc00000ca
@@ -22,6 +26,7 @@ const (
 	STATUS_FILE_CLOSED              = 0xc0000128
 	STATUS_USER_SESSION_DELETED     = 0xc0000203
 	STATUS_NOT_FOUND                = 0xc0000225
+	STATUS_DUPLICATE_OBJECTID       = 0xc000022a
 )
 
 type ErrorResponse struct {
@@ -35,7 +40,11 @@ func (er *ErrorResponse) setStructureSize() {
 func (er *ErrorResponse) SetErrorData(data []byte) {
 	binary.LittleEndian.PutUint32(er.data[SMB2HeaderSize+4:SMB2HeaderSize+8], uint32(len(data)))
 	er.data = er.data[:SMB2HeaderSize+SMB2ErrorResponseMinSize]
-	er.data = append(er.data, data...)
+	if data == nil {
+		er.data = append(er.data, byte(0))
+	} else {
+		er.data = append(er.data, data...)
+	}
 }
 
 func NegotiateErrorResponse(status uint32) *ErrorResponse {

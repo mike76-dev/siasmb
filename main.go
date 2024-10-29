@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"net"
 	"os"
@@ -73,7 +72,7 @@ func main() {
 
 	for {
 		if conn, err := l.Accept(); err != nil {
-			fmt.Println(err)
+			log.Println(err)
 		} else {
 			go func() {
 				if !server.enabled {
@@ -87,7 +86,7 @@ func main() {
 				for {
 					msg, err := readMessage(conn)
 					if err != nil && strings.Contains(err.Error(), "EOF") {
-						time.Sleep(time.Second)
+						time.Sleep(100 * time.Millisecond)
 						continue
 					}
 					if err != nil {

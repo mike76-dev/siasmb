@@ -25,14 +25,14 @@ var (
 )
 
 type session struct {
-	sessionID       uint64
-	state           int
-	securityContext ntlm.SecurityContext
-	isAnonymous     bool
-	isGuest         bool
-	sessionKey      []byte
-	signingRequired bool
-	// openTable
+	sessionID        uint64
+	state            int
+	securityContext  ntlm.SecurityContext
+	isAnonymous      bool
+	isGuest          bool
+	sessionKey       []byte
+	signingRequired  bool
+	openTable        map[uint64]*open
 	treeConnectTable map[uint32]*treeConnect
 	expirationTime   time.Time
 	connection       *connection
@@ -55,6 +55,7 @@ func (s *server) registerSession(connection *connection, req smb2.SessionSetupRe
 			state:            sessionInProgress,
 			creationTime:     time.Now(),
 			idleTime:         time.Now(),
+			openTable:        make(map[uint64]*open),
 			treeConnectTable: make(map[uint32]*treeConnect),
 		}
 		connection.mu.Lock()

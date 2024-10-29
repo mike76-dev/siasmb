@@ -28,10 +28,10 @@ type serverStats struct {
 }
 
 type server struct {
-	enabled   bool
-	stats     serverStats
-	shareList map[string]*share
-	// globalOpenTable
+	enabled                         bool
+	stats                           serverStats
+	shareList                       map[string]*share
+	globalOpenTable                 map[uint64]*open
 	globalSessionTable              map[uint64]*session
 	connectionList                  map[string]*connection
 	serverGuid                      [16]byte
@@ -51,9 +51,9 @@ func newServer(l net.Listener) *server {
 		serverSideCopyMaxNumberOfChunks: 256,
 		serverSideCopyMaxChunkSize:      2 >> 10, // 1MiB
 		serverSideCopyMaxDataSize:       2 >> 14, // 16MiB
-		isDfsCapable:                    true,
 		shareList:                       make(map[string]*share),
 		connectionList:                  make(map[string]*connection),
+		globalOpenTable:                 make(map[uint64]*open),
 		globalSessionTable:              make(map[uint64]*session),
 		listener:                        l,
 	}
@@ -117,8 +117,11 @@ func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResp
 
 	c.mu.Lock()
 	delete(c.requestList, resp.Header().MessageID())
-	s.stats.bytesSent += uint64(len(buf))
 	c.mu.Unlock()
+
+	s.mu.Lock()
+	s.stats.bytesSent += uint64(len(buf))
+	s.mu.Unlock()
 
 	return nil
 }

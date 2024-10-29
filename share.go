@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"time"
 
@@ -38,6 +41,7 @@ type share struct {
 	client    *client.Client
 	bucket    string
 	createdAt time.Time
+	volumeID  uint64
 }
 
 func (s *server) registerShare(name, serverName, apiPassword, bucketName string, connectSecurity map[string]struct{}, fileSecurity map[string]uint32, remark string) error {
@@ -46,21 +50,26 @@ func (s *server) registerShare(name, serverName, apiPassword, bucketName string,
 		serverName:      serverName,
 		connectSecurity: connectSecurity,
 		fileSecurity:    fileSecurity,
-		cscFlags:        smb2.SHAREFLAG_DFS,
-		isDfs:           true,
 		shareType:       smb2.SHARE_TYPE_DISK,
 		maxUses:         maxShareUses,
 		remark:          remark,
 	}
 
 	sh.client = client.New(serverName, apiPassword)
-	bucket, err := sh.client.GetBucket(bucketName)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	bucket, err := sh.client.GetBucket(ctx, bucketName)
 	if err != nil {
 		return errShareUnavailable
 	}
 
+	vid := make([]byte, 8)
+	rand.Read(vid[:])
+
 	sh.bucket = bucket.Name
-	sh.createdAt, _ = time.Parse(time.RFC3339, bucket.CreatedAt)
+	sh.createdAt = time.Time(bucket.CreatedAt)
+	sh.volumeID = binary.LittleEndian.Uint64(vid)
 	s.mu.Lock()
 	s.shareList[name] = sh
 	s.mu.Unlock()

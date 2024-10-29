@@ -88,7 +88,7 @@ func (ssr *SessionSetupResponse) FromRequest(req GenericRequest) {
 	if Header(ssr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(ssr.data).SetCreditResponse(0)
 	} else {
-		Header(ssr.data).SetCreditResponse(1)
+		Header(ssr.data).SetCreditResponse(req.Header().CreditRequest())
 	}
 }
 

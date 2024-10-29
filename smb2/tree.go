@@ -56,6 +56,7 @@ const (
 )
 
 const (
+	// File access
 	FILE_READ_DATA         = 0x00000001
 	FILE_WRITE_DATA        = 0x00000002
 	FILE_APPEND_DATA       = 0x00000004
@@ -79,6 +80,7 @@ const (
 )
 
 const (
+	// Directory access
 	FILE_LIST_DIRECTORY   = 0x00000001
 	FILE_ADD_FILE         = 0x00000002
 	FILE_ADD_SUBDIRECTORY = 0x00000004
@@ -158,8 +160,6 @@ func (tcr *TreeConnectResponse) Generate(tid uint32, st uint8, access uint32) {
 	Header(tcr.data).SetStatus(STATUS_OK)
 	Header(tcr.data).SetTreeID(tid)
 	tcr.SetShareType(st)
-	tcr.SetShareFlags(SHAREFLAG_NO_CACHING | SHAREFLAG_DFS)
-	tcr.SetCapabilities(SHARE_CAP_DFS)
 	tcr.SetMaximalAccess(access)
 }
 
