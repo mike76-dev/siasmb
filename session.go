@@ -86,6 +86,25 @@ func (s *server) deregisterSession(connection *connection, sid uint64) (*session
 		return nil, errSessionNotFound
 	}
 
+	ss.mu.Lock()
+	for _, op := range ss.openTable {
+		if op.isDurable {
+			op.session = nil
+			op.connection = nil
+			op.treeConnect = nil
+			op.durableOpenScavengerTimeout = time.Now().Add(op.durableOpenTimeout)
+		} else {
+			s.mu.Lock()
+			delete(ss.connection.server.globalOpenTable, op.durableFileID)
+			s.mu.Unlock()
+		}
+	}
+	ss.mu.Unlock()
+
+	for tid := range ss.treeConnectTable {
+		ss.closeTreeConnect(tid)
+	}
+
 	connection.mu.Lock()
 	delete(connection.sessionTable, sid)
 	connection.mu.Unlock()

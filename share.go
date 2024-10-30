@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/mike76-dev/siasmb/client"
@@ -42,6 +43,7 @@ type share struct {
 	bucket    string
 	createdAt time.Time
 	volumeID  uint64
+	mu        sync.Mutex
 }
 
 func (s *server) registerShare(name, serverName, apiPassword, bucketName string, connectSecurity map[string]struct{}, fileSecurity map[string]uint32, remark string) error {

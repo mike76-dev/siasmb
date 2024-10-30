@@ -84,6 +84,9 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 		if !exists {
 			return nil, errAccessDenied
 		}
+		sh.mu.Lock()
+		sh.currentUses++
+		sh.mu.Unlock()
 	}
 
 	var id [4]byte
@@ -108,9 +111,23 @@ func (ss *session) closeTreeConnect(tid uint32) error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
-	if _, ok := ss.treeConnectTable[tid]; !ok {
+	tc, ok := ss.treeConnectTable[tid]
+	if !ok {
 		return errNoTreeConnect
 	}
+
+	for fid, op := range ss.openTable {
+		if op.treeConnect == tc {
+			delete(ss.openTable, fid)
+			ss.connection.server.mu.Lock()
+			delete(ss.connection.server.globalOpenTable, fid)
+			ss.connection.server.mu.Unlock()
+		}
+	}
+
+	tc.share.mu.Lock()
+	tc.share.currentUses--
+	tc.share.mu.Unlock()
 
 	delete(ss.treeConnectTable, tid)
 

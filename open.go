@@ -20,9 +20,9 @@ type open struct {
 	grantedAccess               uint32
 	oplockLevel                 uint8
 	oplockState                 int
-	oplockTimeout               time.Time
+	oplockTimeout               time.Duration
 	isDurable                   bool
-	durableOpenTimeout          time.Time
+	durableOpenTimeout          time.Duration
 	durableOpenScavengerTimeout time.Time
 	durableOwner                string
 	currentEaIndex              uint32

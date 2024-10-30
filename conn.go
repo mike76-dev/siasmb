@@ -220,6 +220,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 			ss.validate(ssr)
+			ss.idleTime = time.Now()
 			token = spnego.FinalNegTokenResp
 		} else {
 			negToken, err := spnego.DecodeNegTokenInit(ssr.SecurityBuffer())
@@ -302,6 +303,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.idleTime = time.Now()
 		tc, err := c.newTreeConnect(ss, tcr.PathName())
 		if err != nil {
 			if errors.Is(err, errNoShare) {
@@ -335,6 +337,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.idleTime = time.Now()
 		if err := ss.closeTreeConnect(tdr.Header().TreeID()); err != nil {
 			resp := smb2.NewErrorResponse(tdr, smb2.STATUS_NETWORK_NAME_DELETED, nil)
 			return resp, nil, nil
@@ -361,6 +364,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		ss.mu.Lock()
+		ss.idleTime = time.Now()
 		tc, found := ss.treeConnectTable[cr.Header().TreeID()]
 		ss.mu.Unlock()
 
@@ -491,6 +495,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.idleTime = time.Now()
 		if ir.MaxInputResponse() > uint32(c.maxTransactSize) || ir.MaxOutputResponse() > uint32(c.maxTransactSize) || len(ir.InputBuffer()) > int(c.maxTransactSize) {
 			resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
 			return resp, nil, nil
