@@ -28,6 +28,7 @@ var (
 type connection struct {
 	commandSequenceWindow map[uint64]struct{}
 	requestList           map[uint64]*smb2.Request
+	pendingResponses      map[uint64]smb2.GenericResponse
 	clientCapabilities    uint32
 	negotiateDialect      uint16
 	asyncCommandList      map[uint64]*smb2.Request
@@ -97,40 +98,47 @@ func (c *connection) acceptRequest(msg []byte) error {
 	cid := make([]byte, 8)
 	rand.Read(cid)
 
-	req := smb2.NewRequest(msg, binary.LittleEndian.Uint64(cid))
-	if err := req.Header().Validate(); err != nil {
+	reqs, err := smb2.GetRequests(msg, binary.LittleEndian.Uint64(cid))
+	if err != nil {
 		return err
 	}
 
-	var mid uint64
-	if req.Header().IsSmb() {
-		if c.negotiateDialect != smb2.SMB_DIALECT_UNKNOWN {
-			return smb2.ErrWrongProtocol
+	var ss *session
+	var found bool
+	for i, req := range reqs {
+		var mid uint64
+		if req.Header().IsSmb() {
+			if c.negotiateDialect != smb2.SMB_DIALECT_UNKNOWN || len(reqs) > 1 {
+				return smb2.ErrWrongProtocol
+			}
+		} else {
+			mid = req.Header().MessageID()
 		}
-	} else {
-		mid = req.Header().MessageID()
-	}
 
-	_, ok := c.commandSequenceWindow[mid]
-	if !ok {
-		return errRequestNotWithinWindow
-	}
+		_, ok := c.commandSequenceWindow[mid]
+		if !ok {
+			return errRequestNotWithinWindow
+		}
 
-	if mid == math.MaxUint64 {
-		return errCommandSecuenceWindowExceeded
-	}
+		if mid == math.MaxUint64 {
+			return errCommandSecuenceWindowExceeded
+		}
 
-	ss, found := c.sessionTable[req.Header().SessionID()]
-	if found && !ss.validateRequest(req) {
-		return errInvalidSignature
-	}
+		if i == 0 || req.GroupID() == 0 {
+			ss, found = c.sessionTable[req.Header().SessionID()]
+		}
 
-	if err := c.grantCredits(1); err != nil {
-		return err
-	}
+		if found && !ss.validateRequest(req) {
+			return errInvalidSignature
+		}
 
-	delete(c.commandSequenceWindow, mid)
-	c.requestList[mid] = req
+		if err := c.grantCredits(1); err != nil {
+			return err
+		}
+
+		delete(c.commandSequenceWindow, mid)
+		c.requestList[mid] = req
+	}
 
 	return nil
 }
@@ -540,9 +548,34 @@ func (c *connection) processRequests() {
 				return
 			}
 
-			if err := c.server.writeResponse(c, ss, resp); err != nil {
-				c.server.closeConnection(c)
-				return
+			c.mu.Lock()
+			delete(c.requestList, resp.Header().MessageID())
+			var pendingResp smb2.GenericResponse
+			if resp.GroupID() > 0 {
+				pendingResp = c.pendingResponses[resp.GroupID()]
+			}
+			c.mu.Unlock()
+
+			if pendingResp != nil {
+				pendingResp.Append(resp)
+				if req.Header().NextCommand() == 0 {
+					if err := c.server.writeResponse(c, ss, pendingResp); err != nil {
+						c.server.closeConnection(c)
+						return
+					}
+					c.mu.Lock()
+					delete(c.pendingResponses, resp.GroupID())
+					c.mu.Unlock()
+				}
+			} else if resp.GroupID() == 0 || req.Header().NextCommand() == 0 {
+				if err := c.server.writeResponse(c, ss, resp); err != nil {
+					c.server.closeConnection(c)
+					return
+				}
+			} else {
+				c.mu.Lock()
+				c.pendingResponses[resp.GroupID()] = resp
+				c.mu.Unlock()
 			}
 		} else {
 			time.Sleep(100 * time.Millisecond)

@@ -147,14 +147,26 @@ func (ss *session) validate(req smb2.SessionSetupRequest) {
 }
 
 func (ss *session) sign(buf []byte) {
-	flags := binary.LittleEndian.Uint32(buf[16:20])
-	binary.LittleEndian.PutUint32(buf[16:20], flags|smb2.FLAGS_SIGNED)
+	var off uint32
 	var zero [16]byte
-	copy(buf[48:64], zero[:])
 	h := hmac.New(sha256.New, ss.sessionKey)
-	h.Reset()
-	h.Write(buf)
-	copy(buf[48:64], h.Sum(nil))
+	for {
+		next := binary.LittleEndian.Uint32(buf[off+20 : off+24])
+		flags := binary.LittleEndian.Uint32(buf[off+16 : off+20])
+		binary.LittleEndian.PutUint32(buf[off+16:off+20], flags|smb2.FLAGS_SIGNED)
+		copy(buf[off+48:off+64], zero[:])
+		h.Reset()
+		if next == 0 {
+			h.Write(buf[off:])
+		} else {
+			h.Write(buf[off : off+next])
+		}
+		copy(buf[off+48:off+64], h.Sum(nil))
+		off += next
+		if next == 0 {
+			break
+		}
+	}
 }
 
 func (ss *session) validateRequest(req *smb2.Request) bool {
@@ -164,6 +176,9 @@ func (ss *session) validateRequest(req *smb2.Request) bool {
 
 	signature := req.Header().Signature()
 	req.Header().WipeSignature()
-	ss.sign(req.Header())
-	return bytes.Equal(signature, req.Header().Signature())
+	h := hmac.New(sha256.New, ss.sessionKey)
+	h.Reset()
+	h.Write(req.Header())
+	sum := h.Sum(nil)
+	return bytes.Equal(signature, sum[:16])
 }

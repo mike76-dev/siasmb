@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"net"
 	"sync"
 	"time"
@@ -66,6 +67,7 @@ func (s *server) newConnection(conn net.Conn) *connection {
 		commandSequenceWindow: make(map[uint64]struct{}),
 		requestList:           make(map[uint64]*smb2.Request),
 		asyncCommandList:      make(map[uint64]*smb2.Request),
+		pendingResponses:      make(map[uint64]smb2.GenericResponse),
 		sessionTable:          make(map[uint64]*session),
 		conn:                  conn,
 		negotiateDialect:      smb2.SMB_DIALECT_UNKNOWN,
@@ -107,17 +109,22 @@ func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResp
 		if resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) || resp.Header().Command() == smb2.SMB2_SESSION_SETUP {
 			ss.sign(buf)
 		} else {
-			resp.Header().WipeSignature()
+			var off uint32
+			var zero [16]byte
+			for {
+				next := binary.LittleEndian.Uint32(buf[off+20 : off+24])
+				copy(buf[off+48:off+64], zero[:])
+				off += next
+				if next == 0 {
+					break
+				}
+			}
 		}
 	}
 
 	if err := writeMessage(c.conn, buf); err != nil {
 		return err
 	}
-
-	c.mu.Lock()
-	delete(c.requestList, resp.Header().MessageID())
-	c.mu.Unlock()
 
 	s.mu.Lock()
 	s.stats.bytesSent += uint64(len(buf))
