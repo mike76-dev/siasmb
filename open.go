@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
@@ -9,6 +10,10 @@ import (
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/utils"
 	"go.sia.tech/renterd/api"
+)
+
+const (
+	openTimeout = time.Hour
 )
 
 type open struct {
@@ -36,6 +41,8 @@ type open struct {
 
 	lastModified time.Time
 	size         uint64
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
 
 func (s *server) findOpen(path string, treeID uint32) (*open, bool) {
@@ -84,7 +91,7 @@ func grantAccess(cr smb2.CreateRequest, tc *treeConnect, ss *session) bool {
 	return true
 }
 
-func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api.ObjectMetadata) *open {
+func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api.ObjectMetadata, ctx context.Context, cancel context.CancelFunc) *open {
 	fid := make([]byte, 8)
 	rand.Read(fid)
 
@@ -120,6 +127,8 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		fileAttributes:    cr.FileAttributes(),
 		lastModified:      time.Time(info.ModTime),
 		size:              uint64(info.Size),
+		ctx:               ctx,
+		cancel:            cancel,
 	}
 
 	if isDir {
@@ -139,4 +148,20 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 	tc.mu.Unlock()
 
 	return op
+}
+
+func (s *server) closeOpen(op *open) {
+	op.cancel()
+
+	op.treeConnect.mu.Lock()
+	op.treeConnect.openCount--
+	op.treeConnect.mu.Unlock()
+
+	op.session.mu.Lock()
+	delete(op.session.openTable, op.fileID)
+	op.session.mu.Unlock()
+
+	s.mu.Lock()
+	delete(s.globalOpenTable, op.durableFileID)
+	s.mu.Unlock()
 }

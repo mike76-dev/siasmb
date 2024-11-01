@@ -122,6 +122,7 @@ func (ss *session) closeTreeConnect(tid uint32) error {
 			ss.connection.server.mu.Lock()
 			delete(ss.connection.server.globalOpenTable, fid)
 			ss.connection.server.mu.Unlock()
+			op.cancel()
 		}
 	}
 

@@ -434,22 +434,24 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, ss, nil
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-			defer cancel()
+			ctx, cancel := context.WithTimeout(context.Background(), openTimeout)
 
 			info, err := tc.share.client.GetObjectInfo(ctx, tc.share.bucket, path)
 			if err != nil {
 				if errors.Is(err, context.DeadlineExceeded) {
+					cancel()
 					resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, nil)
 					return resp, ss, nil
 				}
 
+				cancel()
 				resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
 				return resp, ss, nil
 			}
 
-			op = ss.registerOpen(cr, tc, info)
+			op = ss.registerOpen(cr, tc, info, ctx, cancel)
 			if op == nil {
+				cancel()
 				resp := smb2.NewErrorResponse(cr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, ss, nil
 			}
@@ -483,6 +485,45 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		)
 
 		return resp, ss, nil
+
+	case smb2.SMB2_CLOSE:
+		cr := smb2.CloseRequest{Request: *req}
+		if err := cr.Validate(); err != nil {
+			return nil, nil, err
+		}
+
+		c.mu.Lock()
+		ss, found := c.sessionTable[cr.Header().SessionID()]
+		c.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_USER_SESSION_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		id := cr.FileID()
+		fid := binary.LittleEndian.Uint64(id[:8])
+		dfid := binary.LittleEndian.Uint64(id[8:16])
+		ss.mu.Lock()
+		ss.idleTime = time.Now()
+		op, found := ss.openTable[fid]
+		ss.mu.Unlock()
+
+		if !found || op.durableFileID != dfid {
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, nil, nil
+		}
+
+		req.SetOpenID(id)
+		c.server.closeOpen(op)
+
+		resp := &smb2.CloseResponse{}
+		resp.FromRequest(cr)
+		resp.Generate(op.lastModified, op.size, op.fileAttributes)
+
+		return resp, ss, nil
+
+		// TODO send notify responses
 
 	case smb2.SMB2_IOCTL:
 		ir := smb2.IoctlRequest{Request: *req}

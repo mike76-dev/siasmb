@@ -98,6 +98,7 @@ func (s *server) deregisterSession(connection *connection, sid uint64) (*session
 			delete(ss.connection.server.globalOpenTable, op.durableFileID)
 			s.mu.Unlock()
 		}
+		op.cancel()
 	}
 	ss.mu.Unlock()
 

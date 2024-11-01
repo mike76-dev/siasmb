@@ -19,12 +19,14 @@ type GenericRequest interface {
 	Header() Header
 	CancelRequestID() uint64
 	GroupID() uint64
+	OpenID() []byte
 }
 
 type Request struct {
 	cancelRequestID uint64
 	groupID         uint64
 	data            []byte
+	openID          []byte
 }
 
 func (req Request) structureSize() uint16 {
@@ -113,6 +115,15 @@ func (req Request) CancelRequestID() uint64 {
 
 func (req Request) GroupID() uint64 {
 	return req.groupID
+}
+
+func (req Request) OpenID() []byte {
+	return req.openID
+}
+
+func (req *Request) SetOpenID(id []byte) {
+	req.openID = make([]byte, 16)
+	copy(req.openID, id)
 }
 
 type GenericResponse interface {
