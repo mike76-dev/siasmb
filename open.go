@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"time"
 
 	"github.com/mike76-dev/siasmb/smb2"
@@ -14,6 +15,10 @@ import (
 
 const (
 	openTimeout = time.Hour
+)
+
+var (
+	errNoDirectory = errors.New("not a directory")
 )
 
 type open struct {
@@ -39,10 +44,12 @@ type open struct {
 	createOptions               uint32
 	fileAttributes              uint32
 
-	lastModified time.Time
-	size         uint64
-	ctx          context.Context
-	cancel       context.CancelFunc
+	lastModified  time.Time
+	size          uint64
+	ctx           context.Context
+	cancel        context.CancelFunc
+	lastSearch    string
+	searchResults []api.ObjectMetadata
 }
 
 func (s *server) findOpen(path string, treeID uint32) (*open, bool) {
@@ -164,4 +171,27 @@ func (s *server) closeOpen(op *open) {
 	s.mu.Lock()
 	delete(s.globalOpenTable, op.durableFileID)
 	s.mu.Unlock()
+}
+
+func (op *open) queryDirectory(path string) error {
+	if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		return errNoDirectory
+	}
+
+	var p string
+	if path == "*" {
+		p = ""
+	} else {
+		p = path + "/"
+	}
+
+	share := op.treeConnect.share
+	resp, err := share.client.GetObject(op.ctx, share.bucket, p)
+	if err != nil {
+		return err
+	}
+
+	op.lastSearch = path
+	op.searchResults = resp.Entries
+	return nil
 }

@@ -69,8 +69,9 @@ func (cr *CloseResponse) SetFileTime(creation, lastAccess, lastWrite, change tim
 }
 
 func (cr *CloseResponse) SetFilesize(size uint64) {
+	allocated := (size + (clusterSize - 1)) &^ (clusterSize - 1)
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+40:SMB2HeaderSize+48], size)
-	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+48:SMB2HeaderSize+56], size)
+	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+48:SMB2HeaderSize+56], allocated)
 }
 
 func (cr *CloseResponse) SetFileAttributes(fa uint32) {

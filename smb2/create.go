@@ -129,6 +129,10 @@ const (
 	FILE_OVERWRITTEN = 0x00000003
 )
 
+const (
+	clusterSize = uint64(4 * 1024 * 1024)
+)
+
 type CreateRequest struct {
 	Request
 }
@@ -290,8 +294,9 @@ func (cr *CreateResponse) SetFileTime(creation, lastAccess, lastWrite, change ti
 }
 
 func (cr *CreateResponse) SetFilesize(size uint64) {
+	allocated := (size + (clusterSize - 1)) &^ (clusterSize - 1)
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+40:SMB2HeaderSize+48], size)
-	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+48:SMB2HeaderSize+56], size)
+	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+48:SMB2HeaderSize+56], allocated)
 }
 
 func (cr *CreateResponse) SetFileAttributes(fa uint32) {

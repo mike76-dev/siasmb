@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -316,11 +317,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		if err != nil {
 			if errors.Is(err, errNoShare) {
 				resp := smb2.NewErrorResponse(tcr, smb2.STATUS_INVALID_PARAMETER, nil)
-				return resp, nil, nil
+				return resp, ss, nil
 			}
 			if errors.Is(err, errAccessDenied) {
 				resp := smb2.NewErrorResponse(tcr, smb2.STATUS_ACCESS_DENIED, nil)
-				return resp, nil, nil
+				return resp, ss, nil
 			}
 		}
 
@@ -348,7 +349,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		ss.idleTime = time.Now()
 		if err := ss.closeTreeConnect(tdr.Header().TreeID()); err != nil {
 			resp := smb2.NewErrorResponse(tdr, smb2.STATUS_NETWORK_NAME_DELETED, nil)
-			return resp, nil, nil
+			return resp, ss, nil
 		}
 
 		resp := &smb2.TreeDisconnectResponse{}
@@ -378,7 +379,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		if !found {
 			resp := smb2.NewErrorResponse(cr, smb2.STATUS_INVALID_PARAMETER, nil)
-			return resp, nil, nil
+			return resp, ss, nil
 		}
 
 		if tc.share.name == "ipc$" {
@@ -511,7 +512,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		if !found || op.durableFileID != dfid {
 			resp := smb2.NewErrorResponse(cr, smb2.STATUS_FILE_CLOSED, nil)
-			return resp, nil, nil
+			return resp, ss, nil
 		}
 
 		req.SetOpenID(id)
@@ -547,7 +548,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		ss.idleTime = time.Now()
 		if ir.MaxInputResponse() > uint32(c.maxTransactSize) || ir.MaxOutputResponse() > uint32(c.maxTransactSize) || len(ir.InputBuffer()) > int(c.maxTransactSize) {
 			resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
-			return resp, nil, nil
+			return resp, ss, nil
 		}
 
 		if ir.Flags()&smb2.IOCTL_IS_FSCTL == 0 {
@@ -566,6 +567,104 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
 			return resp, ss, nil
 		}
+
+	case smb2.SMB2_QUERY_DIRECTORY:
+		qdr := smb2.QueryDirectoryRequest{Request: *req}
+		if err := qdr.Validate(); err != nil {
+			if errors.Is(err, smb2.ErrInvalidParameter) {
+				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, nil, nil
+			}
+			return nil, nil, err
+		}
+
+		c.mu.Lock()
+		ss, found := c.sessionTable[qdr.Header().SessionID()]
+		c.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_USER_SESSION_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		if qdr.FileInformationClass() != smb2.FILE_ID_BOTH_DIRECTORY_INFORMATION {
+			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_NOT_SUPPORTED, nil)
+			return resp, ss, nil
+		}
+
+		ss.mu.Lock()
+		tc, found := ss.treeConnectTable[qdr.Header().TreeID()]
+		ss.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		var op *open
+		found = false
+		id := qdr.FileID()
+		fid := binary.LittleEndian.Uint64(id[:8])
+		ss.mu.Lock()
+		if bytes.Equal(id, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}) {
+			for _, op = range ss.openTable {
+				if op.pathName == "" && op.fileName == "" {
+					found = true
+					break
+				}
+			}
+		} else {
+			op, found = ss.openTable[fid]
+		}
+
+		ss.mu.Unlock()
+		if !found {
+			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
+		}
+
+		if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
+			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		binary.LittleEndian.PutUint64(id[:8], op.fileID)
+		binary.LittleEndian.PutUint64(id[8:16], op.durableFileID)
+		req.SetOpenID(id)
+		searchPath := qdr.FileName()
+		var buf []byte
+		if op.lastSearch != "" && op.lastSearch == searchPath {
+			if len(op.searchResults) == 0 {
+				op.lastSearch = ""
+				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_NO_MORE_FILES, nil)
+				return resp, ss, nil
+			}
+
+			var num int
+			buf, num = smb2.QueryDirectoryBuffer(op.searchResults, qdr.OutputBufferLength(), false, 0, 0, time.Time{}, time.Time{})
+			op.searchResults = op.searchResults[num:]
+		} else {
+			if err := op.queryDirectory(searchPath); err != nil {
+				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, ss, nil
+			}
+
+			id, pid, ct, pct, err := tc.share.client.GetParentInfo(op.ctx, tc.share.bucket, searchPath)
+			if err != nil {
+				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_BAD_NETWORK_NAME, nil)
+				return resp, ss, nil
+			}
+
+			var num int
+			buf, num = smb2.QueryDirectoryBuffer(op.searchResults, qdr.OutputBufferLength(), true, id, pid, time.Time(ct), time.Time(pct))
+			op.searchResults = op.searchResults[num:]
+		}
+
+		resp := &smb2.QueryDirectoryResponse{}
+		resp.FromRequest(qdr)
+		resp.Generate(buf)
+
+		return resp, ss, nil
 
 	default:
 		log.Println("Unrecognized command:", req.Header().Command())

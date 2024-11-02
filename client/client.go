@@ -2,6 +2,8 @@ package client
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"strings"
 
@@ -82,4 +84,83 @@ func (c *Client) GetObjectInfo(ctx context.Context, bucket, path string) (info a
 	}
 
 	return api.ObjectMetadata{}, api.ErrObjectNotFound
+}
+
+func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (id, parentID uint64, createdAt, parentCreatedAt api.TimeRFC3339, err error) {
+	var parent, grandParent, name, parentName string
+	if path != "" {
+		name = path + "/"
+	}
+
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		parent = path[:i]
+		if parent != "" {
+			parentName = parent + "/"
+		}
+
+		if j := strings.LastIndex(parent, "/"); j >= 0 {
+			grandParent = parent[:j]
+		}
+	}
+
+	if parent != "" {
+		parent += "/"
+	}
+
+	if grandParent != "" {
+		grandParent += "/"
+	}
+
+	var b api.Bucket
+	if parent == "" || grandParent == "" {
+		b, err = c.GetBucket(ctx, bucket)
+		if err != nil {
+			return
+		}
+	}
+
+	var resp api.ObjectsResponse
+	if parent != "" {
+		resp, err = c.GetObject(ctx, bucket, parent)
+		if err != nil {
+			return
+		}
+
+		for _, entry := range resp.Entries {
+			if entry.Name == name {
+				etag, _ := hex.DecodeString(entry.ETag)
+				if len(etag) >= 8 {
+					id = binary.LittleEndian.Uint64(etag[:8])
+				}
+
+				createdAt = entry.ModTime
+				break
+			}
+		}
+	} else {
+		createdAt = b.CreatedAt
+	}
+
+	if grandParent != "" {
+		resp, err = c.GetObject(ctx, bucket, grandParent)
+		if err != nil {
+			return
+		}
+
+		for _, entry := range resp.Entries {
+			if entry.Name == parentName {
+				etag, _ := hex.DecodeString(entry.ETag)
+				if len(etag) >= 8 {
+					parentID = binary.LittleEndian.Uint64(etag[:8])
+				}
+
+				parentCreatedAt = entry.ModTime
+				break
+			}
+		}
+	} else {
+		parentCreatedAt = b.CreatedAt
+	}
+
+	return
 }
