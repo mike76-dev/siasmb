@@ -147,7 +147,7 @@ func (info fileIDBothDirInfo) encode() []byte {
 	return buf
 }
 
-func QueryDirectoryBuffer(entries []api.ObjectMetadata, bufSize uint32, root bool, id, parentID uint64, createdAt, parentCreatedAt time.Time) (buf []byte, num int) {
+func QueryDirectoryBuffer(entries []api.ObjectMetadata, bufSize uint32, single, root bool, id, parentID uint64, createdAt, parentCreatedAt time.Time) (buf []byte, num int) {
 	var info fileIDBothDirInfo
 	size := uint32(224)
 	if bufSize < size {
@@ -207,7 +207,7 @@ func QueryDirectoryBuffer(entries []api.ObjectMetadata, bufSize uint32, root boo
 
 		info = append(info, di)
 		num++
-		if i < len(entries)-1 && size+uint32(utils.Roundup(104+len(name)*2, 8)) <= bufSize {
+		if !single && i < len(entries)-1 && size+uint32(utils.Roundup(104+len(name)*2, 8)) <= bufSize {
 			size += uint32(utils.Roundup(104+len(name)*2, 8))
 		} else {
 			break

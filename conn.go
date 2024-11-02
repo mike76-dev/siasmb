@@ -601,6 +601,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		if qdr.OutputBufferLength() > uint32(c.maxTransactSize) {
+			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
 		var op *open
 		found = false
 		id := qdr.FileID()
@@ -628,12 +633,18 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		if op.grantedAccess&smb2.FILE_LIST_DIRECTORY == 0 {
+			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_ACCESS_DENIED, nil)
+			return resp, ss, nil
+		}
+
 		binary.LittleEndian.PutUint64(id[:8], op.fileID)
 		binary.LittleEndian.PutUint64(id[8:16], op.durableFileID)
 		req.SetOpenID(id)
 		searchPath := qdr.FileName()
+		single := qdr.Flags()&smb2.RETURN_SINGLE_ENTRY > 0
 		var buf []byte
-		if op.lastSearch != "" && op.lastSearch == searchPath {
+		if op.lastSearch != "" && op.lastSearch == searchPath && qdr.Flags()&smb2.RESTART_SCANS == 0 {
 			if len(op.searchResults) == 0 {
 				op.lastSearch = ""
 				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_NO_MORE_FILES, nil)
@@ -641,7 +652,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 			var num int
-			buf, num = smb2.QueryDirectoryBuffer(op.searchResults, qdr.OutputBufferLength(), false, 0, 0, time.Time{}, time.Time{})
+			buf, num = smb2.QueryDirectoryBuffer(op.searchResults, qdr.OutputBufferLength(), single, false, 0, 0, time.Time{}, time.Time{})
 			op.searchResults = op.searchResults[num:]
 		} else {
 			if err := op.queryDirectory(searchPath); err != nil {
@@ -656,7 +667,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 			var num int
-			buf, num = smb2.QueryDirectoryBuffer(op.searchResults, qdr.OutputBufferLength(), true, id, pid, time.Time(ct), time.Time(pct))
+			buf, num = smb2.QueryDirectoryBuffer(op.searchResults, qdr.OutputBufferLength(), single, true, id, pid, time.Time(ct), time.Time(pct))
 			op.searchResults = op.searchResults[num:]
 		}
 
