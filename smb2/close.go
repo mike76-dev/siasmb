@@ -69,7 +69,7 @@ func (cr *CloseResponse) SetFileTime(creation, lastAccess, lastWrite, change tim
 }
 
 func (cr *CloseResponse) SetFilesize(size uint64) {
-	allocated := (size + (clusterSize - 1)) &^ (clusterSize - 1)
+	allocated := (size + (ClusterSize - 1)) &^ (ClusterSize - 1)
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+40:SMB2HeaderSize+48], size)
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+48:SMB2HeaderSize+56], allocated)
 }
@@ -101,7 +101,9 @@ func (cr *CloseResponse) FromRequest(req GenericRequest) {
 func (cr *CloseResponse) Generate(modTime time.Time, size uint64, fa uint32) {
 	if binary.LittleEndian.Uint16(cr.data[SMB2HeaderSize+2:SMB2HeaderSize+4]) == CLOSE_FLAG_POSTQUERY_ATTRIB {
 		cr.SetFileTime(modTime, modTime, modTime, modTime)
-		cr.SetFilesize(size)
 		cr.SetFileAttributes(fa)
+		if fa&FILE_ATTRIBUTE_DIRECTORY == 0 {
+			cr.SetFilesize(size)
+		}
 	}
 }

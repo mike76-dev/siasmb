@@ -15,6 +15,12 @@ const (
 
 	SMB2QueryDirectoryResponseMinSize       = 8
 	SMB2QueryDirectoryResponseStructureSize = 9
+
+	SMB2QueryInfoRequestMinSize       = 40
+	SMB2QueryInfoRequestStructureSize = 41
+
+	SMB2QueryInfoResponseMinSize       = 8
+	SMB2QueryInfoResponseStructureSize = 9
 )
 
 const (
@@ -37,6 +43,67 @@ const (
 	RETURN_SINGLE_ENTRY = 0x02
 	INDEX_SPECIFIED     = 0x04
 	REOPEN              = 0x10
+)
+
+const (
+	INFO_FILE       = 0x01
+	INFO_FILESYSTEM = 0x02
+	INFO_SECURITY   = 0x03
+	INFO_QUOTA      = 0x04
+)
+
+const (
+	FileAccessInformation         = 0x08
+	FileAlignmentInformation      = 0x11
+	FileAllInformation            = 0x12
+	FileAlternateNameInformation  = 0x15
+	FileAttributeTagInformation   = 0x23
+	FileBasicInformation          = 0x04
+	FileCompressionInformation    = 0x1c
+	FileEaInformation             = 0x07
+	FileFullEaInformation         = 0x0f
+	FileIdInformation             = 0x3b
+	FileInternalInformation       = 0x06
+	FileModeInformation           = 0x10
+	FileNetworkOpenInformation    = 0x22
+	FileNormalizedNameInformation = 0x30
+	FilePipeInformation           = 0x17
+	FilePipeLocalInformation      = 0x18
+	FilePipeRemoteInformation     = 0x19
+	FilePositionInformation       = 0x0e
+	FileStandardInformation       = 0x05
+	FileStreamInformation         = 0x16
+	FileInfoClass_Reserved        = 0x64
+
+	FileFsAttributeInformation  = 0x05
+	FileFsControlInformation    = 0x06
+	FileFsDeviceInformation     = 0x04
+	FileFsFullSizeInformation   = 0x07
+	FileFsObjectIdInformation   = 0x08
+	FileFsSectorSizeInformation = 0x0b
+	FileFsSizeInformation       = 0x03
+	FileFsVolumeInformation     = 0x01
+)
+
+const (
+	OWNER_SECURITY_INFORMATION     = 0x00000001
+	GROUP_SECURITY_INFORMATION     = 0x00000002
+	DACL_SECURITY_INFORMATION      = 0x00000004
+	SACL_SECURITY_INFORMATION      = 0x00000008
+	LABEL_SECURITY_INFORMATION     = 0x00000010
+	ATTRIBUTE_SECURITY_INFORMATION = 0x00000020
+	SCOPE_SECURITY_INFORMATION     = 0x00000040
+	BACKUP_SECURITY_INFORMATION    = 0x00010000
+)
+
+const (
+	SL_RESTART_SCAN        = 0x00000001
+	SL_RETURN_SINGLE_ENTRY = 0x00000002
+	SL_INDEX_SPECIFIED     = 0x00000004
+)
+
+const (
+	totalSize = 1024 * 1024 * 1024 * 1024
 )
 
 type QueryDirectoryRequest struct {
@@ -197,7 +264,7 @@ func QueryDirectoryBuffer(entries []api.ObjectMetadata, bufSize uint32, single, 
 		} else {
 			di.FileAttributes = FILE_ATTRIBUTE_NORMAL
 			di.EndOfFile = uint64(entry.Size)
-			di.AllocationSize = (uint64(entry.Size) + (clusterSize - 1)) &^ (clusterSize - 1)
+			di.AllocationSize = (uint64(entry.Size) + (ClusterSize - 1)) &^ (ClusterSize - 1)
 		}
 
 		fid, _ := hex.DecodeString(entry.ETag)
@@ -249,4 +316,132 @@ func (qdr *QueryDirectoryResponse) FromRequest(req GenericRequest) {
 
 func (qdr *QueryDirectoryResponse) Generate(buf []byte) {
 	qdr.SetOutputBuffer(buf)
+}
+
+type QueryInfoRequest struct {
+	Request
+}
+
+func (qir QueryInfoRequest) Validate() error {
+	if err := Header(qir.data).Validate(); err != nil {
+		return err
+	}
+
+	if len(qir.data) < SMB2HeaderSize+SMB2QueryInfoRequestMinSize {
+		return ErrWrongLength
+	}
+
+	if qir.structureSize() != SMB2QueryInfoRequestStructureSize {
+		return ErrWrongFormat
+	}
+
+	off := binary.LittleEndian.Uint16(qir.data[SMB2HeaderSize+8 : SMB2HeaderSize+10])
+	length := binary.LittleEndian.Uint32(qir.data[SMB2HeaderSize+12 : SMB2HeaderSize+16])
+	if uint32(off)+length > uint32(len(qir.data)) {
+		return ErrInvalidParameter
+	}
+
+	return nil
+}
+
+func (qir QueryInfoRequest) InfoType() uint8 {
+	return qir.data[SMB2HeaderSize+2]
+}
+
+func (qir QueryInfoRequest) FileInfoClass() uint8 {
+	return qir.data[SMB2HeaderSize+3]
+}
+
+func (qir QueryInfoRequest) OutputBufferLength() uint32 {
+	return binary.LittleEndian.Uint32(qir.data[SMB2HeaderSize+4 : SMB2HeaderSize+8])
+}
+
+func (qir QueryInfoRequest) InputBuffer() []byte {
+	off := binary.LittleEndian.Uint16(qir.data[SMB2HeaderSize+8 : SMB2HeaderSize+10])
+	length := binary.LittleEndian.Uint32(qir.data[SMB2HeaderSize+12 : SMB2HeaderSize+16])
+	return qir.data[off : uint32(off)+length]
+}
+
+func (qir QueryInfoRequest) AdditionalInformation() uint32 {
+	return binary.LittleEndian.Uint32(qir.data[SMB2HeaderSize+16 : SMB2HeaderSize+20])
+}
+
+func (qir QueryInfoRequest) Flags() uint32 {
+	return binary.LittleEndian.Uint32(qir.data[SMB2HeaderSize+20 : SMB2HeaderSize+24])
+}
+
+func (qir QueryInfoRequest) FileID() []byte {
+	fid := make([]byte, 16)
+	copy(fid, qir.data[SMB2HeaderSize+24:SMB2HeaderSize+40])
+	return fid
+}
+
+type QueryInfoResponse struct {
+	Response
+}
+
+func (qir *QueryInfoResponse) setStructureSize() {
+	binary.LittleEndian.PutUint16(qir.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2QueryInfoResponseStructureSize)
+}
+
+func (qir *QueryInfoResponse) SetOutputBuffer(buf []byte) {
+	binary.LittleEndian.PutUint16(qir.data[SMB2HeaderSize+2:SMB2HeaderSize+4], uint16(len(qir.data)))
+	binary.LittleEndian.PutUint32(qir.data[SMB2HeaderSize+4:SMB2HeaderSize+8], uint32(len(buf)))
+	qir.data = append(qir.data, buf...)
+}
+
+func (qir *QueryInfoResponse) FromRequest(req GenericRequest) {
+	qir.Response.FromRequest(req)
+
+	body := make([]byte, SMB2QueryInfoResponseMinSize)
+	qir.data = append(qir.data, body...)
+
+	qir.setStructureSize()
+	Header(qir.data).SetNextCommand(0)
+	Header(qir.data).SetStatus(STATUS_OK)
+	if Header(qir.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
+		Header(qir.data).SetCreditResponse(0)
+	} else {
+		Header(qir.data).SetCreditResponse(1)
+	}
+}
+
+func (qir *QueryInfoResponse) Generate(buf []byte) {
+	qir.SetOutputBuffer(buf)
+}
+
+func FileFsVolumeInfo(createdAt time.Time, serialNo uint32, label string) []byte {
+	vl := utils.EncodeStringToBytes(label)
+	if len(vl) > 32 {
+		vl = vl[:32]
+	}
+
+	info := make([]byte, 18+len(vl))
+	binary.LittleEndian.PutUint64(info[:8], utils.UnixToFiletime(createdAt))
+	binary.LittleEndian.PutUint32(info[8:12], serialNo)
+	binary.LittleEndian.PutUint32(info[12:16], uint32(len(vl)))
+	copy(info[18:18+len(vl)], vl)
+
+	return info
+}
+
+func FileFsAttributeInfo() []byte {
+	name := utils.EncodeStringToBytes("renterd")
+	info := make([]byte, 12+len(name))
+	binary.LittleEndian.PutUint32(info[:4], 0x01100103)
+	binary.LittleEndian.PutUint32(info[4:8], 255)
+	binary.LittleEndian.PutUint32(info[8:12], uint32(len(name)))
+	copy(info[12:12+len(name)], name)
+	return info
+}
+
+func FileFsFullSizeInfo(spu int) []byte {
+	info := make([]byte, 32)
+	units := totalSize / ClusterSize / uint64(spu)
+	binary.LittleEndian.PutUint64(info[:8], units)
+	binary.LittleEndian.PutUint64(info[8:16], units)
+	binary.LittleEndian.PutUint64(info[16:24], units)
+	binary.LittleEndian.PutUint32(info[24:28], uint32(spu))
+	binary.LittleEndian.PutUint32(info[28:32], uint32(ClusterSize))
+	return info
 }

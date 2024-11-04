@@ -164,3 +164,13 @@ func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (id, pa
 
 	return
 }
+
+func (c *Client) SectorPerSlab(ctx context.Context) (sps int, err error) {
+	var resp api.RedundancySettings
+	err = c.c.WithContext(ctx).GET("/api/bus/setting/redundancy", &resp)
+	if err != nil {
+		return
+	}
+
+	return resp.MinShards, nil
+}

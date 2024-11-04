@@ -601,6 +601,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		ss.idleTime = time.Now()
 		if qdr.OutputBufferLength() > uint32(c.maxTransactSize) {
 			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, nil)
 			return resp, ss, nil
@@ -676,6 +677,168 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		resp.Generate(buf)
 
 		return resp, ss, nil
+
+	case smb2.SMB2_CHANGE_NOTIFY:
+		cnr := smb2.ChangeNotifyRequest{Request: *req}
+		if err := cnr.Validate(); err != nil {
+			if errors.Is(err, smb2.ErrInvalidParameter) {
+				resp := smb2.NewErrorResponse(cnr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, nil, nil
+			}
+			return nil, nil, err
+		}
+
+		c.mu.Lock()
+		ss, found := c.sessionTable[cnr.Header().SessionID()]
+		c.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_USER_SESSION_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		ss.idleTime = time.Now()
+		if cnr.OutputBufferLength() > uint32(c.maxTransactSize) {
+			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		var op *open
+		found = false
+		id := cnr.FileID()
+		fid := binary.LittleEndian.Uint64(id[:8])
+		dfid := binary.LittleEndian.Uint64(id[8:16])
+		ss.mu.Lock()
+		if bytes.Equal(id, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}) {
+			for _, op = range ss.openTable {
+				if op.pathName == "" && op.fileName == "" {
+					found = true
+					break
+				}
+			}
+		} else {
+			op, found = ss.openTable[fid]
+		}
+		ss.mu.Unlock()
+		if !found || (dfid != 0xffffffffffffffff && op.durableFileID != dfid) {
+			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
+		}
+
+		if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
+			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		if op.grantedAccess&smb2.FILE_LIST_DIRECTORY == 0 {
+			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_ACCESS_DENIED, nil)
+			return resp, ss, nil
+		}
+
+		req.SetOpenID(id)
+		aid := make([]byte, 8)
+		rand.Read(aid)
+		asyncID := binary.LittleEndian.Uint64(aid)
+		c.mu.Lock()
+		c.asyncCommandList[asyncID] = req
+		c.mu.Unlock()
+
+		resp := smb2.NewErrorResponse(cnr, smb2.STATUS_PENDING, nil)
+		resp.Header().SetAsyncID(asyncID)
+		resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
+		resp.Header()[len(resp.Header())-1] = 21 //TODO
+
+		return resp, ss, nil
+
+	case smb2.SMB2_QUERY_INFO:
+		qir := smb2.QueryInfoRequest{Request: *req}
+		if err := qir.Validate(); err != nil {
+			if errors.Is(err, smb2.ErrInvalidParameter) {
+				resp := smb2.NewErrorResponse(qir, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, nil, nil
+			}
+			return nil, nil, err
+		}
+
+		c.mu.Lock()
+		ss, found := c.sessionTable[qir.Header().SessionID()]
+		c.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(qir, smb2.STATUS_USER_SESSION_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		ss.mu.Lock()
+		tc, found := ss.treeConnectTable[qir.Header().TreeID()]
+		ss.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(qir, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		ss.idleTime = time.Now()
+		if qir.OutputBufferLength() > uint32(c.maxTransactSize) {
+			resp := smb2.NewErrorResponse(qir, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		var op *open
+		found = false
+		id := qir.FileID()
+		fid := binary.LittleEndian.Uint64(id[:8])
+		ss.mu.Lock()
+		if bytes.Equal(id, []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}) {
+			for _, op = range ss.openTable {
+				if op.pathName == "" && op.fileName == "" {
+					found = true
+					break
+				}
+			}
+		} else {
+			op, found = ss.openTable[fid]
+		}
+
+		ss.mu.Unlock()
+		if !found {
+			resp := smb2.NewErrorResponse(qir, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
+		}
+
+		binary.LittleEndian.PutUint64(id[:8], op.fileID)
+		binary.LittleEndian.PutUint64(id[8:16], op.durableFileID)
+		req.SetOpenID(id)
+
+		switch qir.InfoType() {
+		case smb2.INFO_FILESYSTEM:
+			switch qir.FileInfoClass() {
+			case smb2.FileFsVolumeInformation:
+				info := smb2.FileFsVolumeInfo(tc.share.createdAt, tc.share.serialNo(), tc.share.name)
+				resp := &smb2.QueryInfoResponse{}
+				resp.FromRequest(qir)
+				resp.Generate(info)
+				return resp, ss, nil
+			case smb2.FileFsAttributeInformation:
+				info := smb2.FileFsAttributeInfo()
+				resp := &smb2.QueryInfoResponse{}
+				resp.FromRequest(qir)
+				resp.Generate(info)
+				return resp, ss, nil
+			case smb2.FileFsFullSizeInformation:
+				info := smb2.FileFsFullSizeInfo(tc.share.sectorsPerUnit)
+				resp := &smb2.QueryInfoResponse{}
+				resp.FromRequest(qir)
+				resp.Generate(info)
+				return resp, ss, nil
+			default:
+				resp := smb2.NewErrorResponse(qir, smb2.STATUS_NOT_SUPPORTED, nil)
+				return resp, ss, nil
+			}
+		default:
+			resp := smb2.NewErrorResponse(qir, smb2.STATUS_NOT_SUPPORTED, nil)
+			return resp, ss, nil
+		}
 
 	default:
 		log.Println("Unrecognized command:", req.Header().Command())

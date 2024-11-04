@@ -11,6 +11,7 @@ const (
 
 const (
 	STATUS_OK                       = 0x00000000
+	STATUS_PENDING                  = 0x00000103
 	STATUS_NO_MORE_FILES            = 0x80000006
 	STATUS_INVALID_PARAMETER        = 0xc000000d
 	STATUS_MORE_PROCESSING_REQUIRED = 0xc0000016

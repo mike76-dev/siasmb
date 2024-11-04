@@ -39,11 +39,12 @@ type share struct {
 	hashEnabled                       bool
 	// snapshotList
 
-	client    *client.Client
-	bucket    string
-	createdAt time.Time
-	volumeID  uint64
-	mu        sync.Mutex
+	client         *client.Client
+	bucket         string
+	createdAt      time.Time
+	volumeID       uint64
+	sectorsPerUnit int
+	mu             sync.Mutex
 }
 
 func (s *server) registerShare(name, serverName, apiPassword, bucketName string, connectSecurity map[string]struct{}, fileSecurity map[string]uint32, remark string) error {
@@ -69,12 +70,22 @@ func (s *server) registerShare(name, serverName, apiPassword, bucketName string,
 	vid := make([]byte, 8)
 	rand.Read(vid[:])
 
+	spu, err := sh.client.SectorPerSlab(ctx)
+	if err != nil || spu == 0 {
+		return errShareUnavailable
+	}
+
 	sh.bucket = bucket.Name
 	sh.createdAt = time.Time(bucket.CreatedAt)
 	sh.volumeID = binary.LittleEndian.Uint64(vid)
+	sh.sectorsPerUnit = spu
 	s.mu.Lock()
 	s.shareList[name] = sh
 	s.mu.Unlock()
 
 	return nil
+}
+
+func (sh *share) serialNo() uint32 {
+	return uint32(sh.volumeID)
 }
