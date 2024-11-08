@@ -130,5 +130,14 @@ func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResp
 	s.stats.bytesSent += uint64(len(buf))
 	s.mu.Unlock()
 
+	mid, num := resp.CreditResponse()
+	if num > 0 {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if err := c.grantCredits(mid, num); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }

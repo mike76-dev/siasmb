@@ -157,14 +157,6 @@ func (cr CreateRequest) Validate() error {
 			return ErrInvalidParameter
 		}
 
-		if co & ^uint32(FILE_DIRECTORY_FILE) &
-			^uint32(FILE_WRITE_THROUGH) &
-			^uint32(FILE_OPEN_FOR_BACKUP_INTENT) &
-			^uint32(FILE_DELETE_ON_CLOSE) &
-			^uint32(FILE_OPEN_REPARSE_POINT) > 0 {
-			return ErrInvalidParameter
-		}
-
 		if co&uint32(FILE_OPEN_BY_FILE_ID) > 0 || co&uint32(FILE_RESERVE_OPFILTER) > 0 {
 			return ErrNotSupported
 		}
@@ -354,8 +346,6 @@ func (cr *CreateResponse) FromRequest(req GenericRequest) {
 	Header(cr.data).SetStatus(STATUS_OK)
 	if Header(cr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(cr.data).SetCreditResponse(0)
-	} else {
-		Header(cr.data).SetCreditResponse(1)
 	}
 }
 

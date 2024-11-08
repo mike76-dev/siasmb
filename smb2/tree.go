@@ -151,8 +151,6 @@ func (tcr *TreeConnectResponse) FromRequest(req GenericRequest) {
 	Header(tcr.data).SetNextCommand(0)
 	if Header(tcr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(tcr.data).SetCreditResponse(0)
-	} else {
-		Header(tcr.data).SetCreditResponse(1)
 	}
 }
 
@@ -202,7 +200,5 @@ func (tdr *TreeDisconnectResponse) FromRequest(req GenericRequest) {
 	Header(tdr.data).SetStatus(STATUS_OK)
 	if Header(tdr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(tdr.data).SetCreditResponse(0)
-	} else {
-		Header(tdr.data).SetCreditResponse(1)
 	}
 }

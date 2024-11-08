@@ -90,6 +90,7 @@ func main() {
 						continue
 					}
 					if err != nil {
+						log.Println("Error reading message:", err)
 						server.closeConnection(c)
 						return
 					}
@@ -99,6 +100,7 @@ func main() {
 					server.mu.Unlock()
 
 					if err := c.acceptRequest(msg); err != nil {
+						log.Println("couldn't accept request:", err)
 						server.closeConnection(c)
 						return
 					}

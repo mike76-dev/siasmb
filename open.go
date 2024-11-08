@@ -178,11 +178,11 @@ func (op *open) queryDirectory(path string) error {
 		return errNoDirectory
 	}
 
-	var p string
-	if path == "*" {
-		p = ""
+	p := op.pathName
+	if path != "*" {
+		p += path + "/"
 	} else {
-		p = path + "/"
+		p += "/"
 	}
 
 	share := op.treeConnect.share
@@ -194,4 +194,11 @@ func (op *open) queryDirectory(path string) error {
 	op.lastSearch = path
 	op.searchResults = resp.Entries
 	return nil
+}
+
+func (op *open) id() []byte {
+	i := make([]byte, 16)
+	binary.LittleEndian.PutUint64(i[:8], op.fileID)
+	binary.LittleEndian.PutUint64(i[8:], op.durableFileID)
+	return i
 }

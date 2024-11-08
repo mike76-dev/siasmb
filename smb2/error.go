@@ -12,7 +12,9 @@ const (
 const (
 	STATUS_OK                       = 0x00000000
 	STATUS_PENDING                  = 0x00000103
+	STATUS_NOTIFY_CLEANUP           = 0x0000010b
 	STATUS_NO_MORE_FILES            = 0x80000006
+	STATUS_INVALID_HANDLE           = 0xc0000008
 	STATUS_INVALID_PARAMETER        = 0xc000000d
 	STATUS_MORE_PROCESSING_REQUIRED = 0xc0000016
 	STATUS_ACCESS_DENIED            = 0xc0000022
@@ -25,6 +27,7 @@ const (
 	STATUS_NETWORK_NAME_DELETED     = 0xc00000c9
 	STATUS_NETWORK_ACCESS_DENIED    = 0xc00000ca
 	STATUS_BAD_NETWORK_NAME         = 0xc00000cc
+	STATUS_CANCELLED                = 0xc0000120
 	STATUS_FILE_CLOSED              = 0xc0000128
 	STATUS_USER_SESSION_DELETED     = 0xc0000203
 	STATUS_NOT_FOUND                = 0xc0000225
@@ -66,8 +69,6 @@ func (er *ErrorResponse) FromRequest(req GenericRequest) {
 
 	if Header(er.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(er.data).SetCreditResponse(0)
-	} else {
-		Header(er.data).SetCreditResponse(1)
 	}
 
 	er.setStructureSize()

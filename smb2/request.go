@@ -14,6 +14,11 @@ var (
 	ErrUnalignedRequests = errors.New("chained requests must be aligned to a 8-byte boundary")
 )
 
+const (
+	SMB2CancelRequestMinSize       = 4
+	SMB2CancelRequestStructureSize = 4
+)
+
 type GenericRequest interface {
 	Validate() error
 	Header() Header
@@ -105,6 +110,10 @@ func GetRequests(data []byte, cid uint64) (reqs []*Request, err error) {
 	return
 }
 
+func (req Request) Validate() error {
+	return req.Header().Validate()
+}
+
 func (req Request) Header() Header {
 	return Header(req.data)
 }
@@ -132,12 +141,22 @@ type GenericResponse interface {
 	Encode() []byte
 	Header() Header
 	GroupID() uint64
+	SessionID() uint64
+	SetSessionID(id uint64)
+	TreeID() uint32
+	SetTreeID(id uint32)
+	OpenID() []byte
+	SetOpenID(id []byte)
 	Append(newResp GenericResponse)
+	CreditResponse() (lastMessageID uint64, lastCreditResponse uint16)
 }
 
 type Response struct {
-	data    []byte
-	groupID uint64
+	data      []byte
+	groupID   uint64
+	sessionID uint64
+	treeID    uint32
+	openID    []byte
 }
 
 func (resp Response) EncodedLength() int {
@@ -154,6 +173,31 @@ func (resp Response) Header() Header {
 
 func (resp Response) GroupID() uint64 {
 	return resp.groupID
+}
+
+func (resp Response) SessionID() uint64 {
+	return resp.sessionID
+}
+
+func (resp *Response) SetSessionID(id uint64) {
+	resp.sessionID = id
+}
+
+func (resp Response) TreeID() uint32 {
+	return resp.treeID
+}
+
+func (resp *Response) SetTreeID(id uint32) {
+	resp.treeID = id
+}
+
+func (resp Response) OpenID() []byte {
+	return resp.openID
+}
+
+func (resp *Response) SetOpenID(id []byte) {
+	resp.openID = make([]byte, 16)
+	copy(resp.openID, id)
 }
 
 func (resp *Response) FromRequest(req GenericRequest) {
@@ -186,4 +230,42 @@ func (resp *Response) Append(newResp GenericResponse) {
 	binary.LittleEndian.PutUint32(resp.data[off+20:off+24], uint32(newLen)-off)
 	newResp.Header().SetFlag(FLAGS_RELATED_OPERATIONS)
 	resp.data = append(resp.data, newResp.Encode()...)
+}
+
+func (resp *Response) CreditResponse() (lastMessageID uint64, lastCreditResponse uint16) {
+	h := resp.Header()
+	var off uint32
+	for {
+		lastMessageID = h.MessageID()
+		lastCreditResponse = h.CreditRequest()
+		next := h.NextCommand()
+		if next == 0 {
+			break
+		}
+
+		off += next
+		h = Header(resp.data[off:])
+	}
+
+	return
+}
+
+type CancelRequest struct {
+	Request
+}
+
+func (cr CancelRequest) Validate() error {
+	if err := Header(cr.data).Validate(); err != nil {
+		return err
+	}
+
+	if len(cr.data) < SMB2HeaderSize+SMB2CancelRequestMinSize {
+		return ErrWrongLength
+	}
+
+	if cr.structureSize() != SMB2CancelRequestStructureSize {
+		return ErrWrongFormat
+	}
+
+	return nil
 }

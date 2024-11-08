@@ -309,8 +309,6 @@ func (qdr *QueryDirectoryResponse) FromRequest(req GenericRequest) {
 	Header(qdr.data).SetStatus(STATUS_OK)
 	if Header(qdr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(qdr.data).SetCreditResponse(0)
-	} else {
-		Header(qdr.data).SetCreditResponse(1)
 	}
 }
 
@@ -401,8 +399,6 @@ func (qir *QueryInfoResponse) FromRequest(req GenericRequest) {
 	Header(qir.data).SetStatus(STATUS_OK)
 	if Header(qir.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(qir.data).SetCreditResponse(0)
-	} else {
-		Header(qir.data).SetCreditResponse(1)
 	}
 }
 

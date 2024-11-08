@@ -89,8 +89,6 @@ func (cr *CloseResponse) FromRequest(req GenericRequest) {
 	Header(cr.data).SetStatus(STATUS_OK)
 	if Header(cr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(cr.data).SetCreditResponse(0)
-	} else {
-		Header(cr.data).SetCreditResponse(1)
 	}
 
 	if req.(CloseRequest).Flags() == CLOSE_FLAG_POSTQUERY_ATTRIB {
