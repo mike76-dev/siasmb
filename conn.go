@@ -822,27 +822,24 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		req.SetOpenID(id)
 
+		var info []byte
 		switch qir.InfoType() {
+		case smb2.INFO_FILE:
+			switch qir.FileInfoClass() {
+			case smb2.FileAllInformation:
+				info = op.fileAllInformation()
+			default:
+				resp := smb2.NewErrorResponse(qir, smb2.STATUS_NOT_SUPPORTED, nil)
+				return resp, ss, nil
+			}
 		case smb2.INFO_FILESYSTEM:
 			switch qir.FileInfoClass() {
 			case smb2.FileFsVolumeInformation:
-				info := smb2.FileFsVolumeInfo(tc.share.createdAt, tc.share.serialNo(), tc.share.name)
-				resp := &smb2.QueryInfoResponse{}
-				resp.FromRequest(qir)
-				resp.Generate(info)
-				return resp, ss, nil
+				info = smb2.FileFsVolumeInfo(tc.share.createdAt, tc.share.serialNo(), tc.share.name)
 			case smb2.FileFsAttributeInformation:
-				info := smb2.FileFsAttributeInfo()
-				resp := &smb2.QueryInfoResponse{}
-				resp.FromRequest(qir)
-				resp.Generate(info)
-				return resp, ss, nil
+				info = smb2.FileFsAttributeInfo()
 			case smb2.FileFsFullSizeInformation:
-				info := smb2.FileFsFullSizeInfo(tc.share.sectorsPerUnit)
-				resp := &smb2.QueryInfoResponse{}
-				resp.FromRequest(qir)
-				resp.Generate(info)
-				return resp, ss, nil
+				info = smb2.FileFsFullSizeInfo(tc.share.sectorsPerUnit)
 			default:
 				resp := smb2.NewErrorResponse(qir, smb2.STATUS_NOT_SUPPORTED, nil)
 				return resp, ss, nil
@@ -851,6 +848,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			resp := smb2.NewErrorResponse(qir, smb2.STATUS_NOT_SUPPORTED, nil)
 			return resp, ss, nil
 		}
+
+		resp := &smb2.QueryInfoResponse{}
+		resp.FromRequest(qir)
+		resp.Generate(info)
+		return resp, ss, nil
 
 	default:
 		log.Println("Unrecognized command:", req.Header().Command())

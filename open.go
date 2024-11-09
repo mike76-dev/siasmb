@@ -203,3 +203,38 @@ func (op *open) id() []byte {
 	binary.LittleEndian.PutUint64(i[8:], op.durableFileID)
 	return i
 }
+
+func (op *open) fileAllInformation() []byte {
+	var size, alloc uint64
+	if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		size = op.size
+		alloc = (op.size + (smb2.ClusterSize - 1)) &^ (smb2.ClusterSize - 1)
+	}
+	fai := smb2.FileAllInfo{
+		BasicInfo: smb2.FileBasicInfo{
+			CreationTime:   op.lastModified,
+			LastAccessTime: op.lastModified,
+			LastWriteTime:  op.lastModified,
+			ChangeTime:     op.lastModified,
+			FileAttributes: op.fileAttributes,
+		},
+		StandardInfo: smb2.FileStandardInfo{
+			AllocationSize: alloc,
+			EndOfFile:      size,
+			Directory:      op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
+		},
+		InternalInfo: smb2.FileInternalInfo{
+			IndexNumber: op.handle,
+		},
+		AccessInfo: smb2.FileAccessInfo{
+			AccessFlags: op.grantedAccess,
+		},
+		ModeInfo: smb2.FileModeInfo{
+			Mode: op.createOptions,
+		},
+		NameInfo: smb2.FileNameInfo{
+			FileName: op.fileName,
+		},
+	}
+	return fai.Encode()
+}

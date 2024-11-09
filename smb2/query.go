@@ -445,3 +445,155 @@ func FileFsFullSizeInfo(spu int) []byte {
 	binary.LittleEndian.PutUint32(info[28:32], uint32(ClusterSize))
 	return info
 }
+
+type FileBasicInfo struct {
+	CreationTime   time.Time
+	LastAccessTime time.Time
+	LastWriteTime  time.Time
+	ChangeTime     time.Time
+	FileAttributes uint32
+}
+
+func (fbi FileBasicInfo) Encode() []byte {
+	buf := make([]byte, 40)
+	binary.LittleEndian.PutUint64(buf[:8], utils.UnixToFiletime(fbi.CreationTime))
+	binary.LittleEndian.PutUint64(buf[8:16], utils.UnixToFiletime(fbi.LastAccessTime))
+	binary.LittleEndian.PutUint64(buf[16:24], utils.UnixToFiletime(fbi.LastWriteTime))
+	binary.LittleEndian.PutUint64(buf[24:32], utils.UnixToFiletime(fbi.ChangeTime))
+	binary.LittleEndian.PutUint32(buf[32:36], fbi.FileAttributes)
+	return buf
+}
+
+type FileStandardInfo struct {
+	AllocationSize uint64
+	EndOfFile      uint64
+	NumberOfLinks  uint32
+	DeletePending  bool
+	Directory      bool
+}
+
+func (fsi FileStandardInfo) Encode() []byte {
+	buf := make([]byte, 24)
+	binary.LittleEndian.PutUint64(buf[:8], fsi.AllocationSize)
+	binary.LittleEndian.PutUint64(buf[8:16], fsi.EndOfFile)
+	binary.LittleEndian.PutUint32(buf[16:20], fsi.NumberOfLinks)
+	if fsi.DeletePending {
+		buf[20] = 1
+	}
+	if fsi.Directory {
+		buf[21] = 1
+	}
+	return buf
+}
+
+type FileInternalInfo struct {
+	IndexNumber uint64
+}
+
+func (fii FileInternalInfo) Encode() []byte {
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, fii.IndexNumber)
+	return buf
+}
+
+type FileEaInfo struct {
+	EaSize uint32
+}
+
+func (fei FileEaInfo) Encode() []byte {
+	buf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(buf, fei.EaSize)
+	return buf
+}
+
+type FileAccessInfo struct {
+	AccessFlags uint32
+}
+
+func (fai FileAccessInfo) Encode() []byte {
+	buf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(buf, fai.AccessFlags)
+	return buf
+}
+
+type FilePositionInfo struct {
+	CurrentByteOffset uint64
+}
+
+func (fpi FilePositionInfo) Encode() []byte {
+	buf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(buf, fpi.CurrentByteOffset)
+	return buf
+}
+
+type FileModeInfo struct {
+	Mode uint32
+}
+
+func (fmi FileModeInfo) Encode() []byte {
+	buf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(buf, fmi.Mode)
+	return buf
+}
+
+type FileAlignmentInfo struct {
+	AlignmentRequirement uint32
+}
+
+func (fai FileAlignmentInfo) Encode() []byte {
+	buf := make([]byte, 4)
+	binary.LittleEndian.PutUint32(buf, fai.AlignmentRequirement)
+	return buf
+}
+
+type FileNameInfo struct {
+	FileName string
+}
+
+func (fni FileNameInfo) Encode() []byte {
+	name := utils.EncodeStringToBytes(fni.FileName)
+	buf := make([]byte, len(name)+4)
+	binary.LittleEndian.PutUint32(buf[:4], uint32(len(name)))
+	copy(buf[4:], name)
+	return buf
+}
+
+type FileAllInfo struct {
+	BasicInfo     FileBasicInfo
+	StandardInfo  FileStandardInfo
+	InternalInfo  FileInternalInfo
+	EaInfo        FileEaInfo
+	AccessInfo    FileAccessInfo
+	PositionInfo  FilePositionInfo
+	ModeInfo      FileModeInfo
+	AlignmentInfo FileAlignmentInfo
+	NameInfo      FileNameInfo
+}
+
+func (fai FileAllInfo) Encode() []byte {
+	return append(
+		append(
+			append(
+				append(
+					append(
+						append(
+							append(
+								append(
+									fai.BasicInfo.Encode(),
+									fai.StandardInfo.Encode()...,
+								),
+								fai.InternalInfo.Encode()...,
+							),
+							fai.EaInfo.Encode()...,
+						),
+						fai.AccessInfo.Encode()...,
+					),
+					fai.PositionInfo.Encode()...,
+				),
+				fai.ModeInfo.Encode()...,
+			),
+			fai.AlignmentInfo.Encode()...,
+		),
+		fai.NameInfo.Encode()...,
+	)
+}
