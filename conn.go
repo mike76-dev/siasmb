@@ -585,6 +585,33 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+	case smb2.SMB2_ECHO:
+		er := smb2.EchoRequest{Request: *req}
+		if err := er.Validate(); err != nil {
+			log.Println("Invalid SMB2_ECHO request:", err)
+			return nil, nil, err
+		}
+
+		var ss *session
+		var found bool
+		if er.Header().SessionID() != 0 || er.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
+			c.mu.Lock()
+			ss, found = c.sessionTable[er.Header().SessionID()]
+			c.mu.Unlock()
+
+			if !found {
+				resp := smb2.NewErrorResponse(er, smb2.STATUS_USER_SESSION_DELETED, nil)
+				return resp, nil, nil
+			}
+
+			ss.idleTime = time.Now()
+		}
+
+		resp := &smb2.EchoResponse{}
+		resp.FromRequest(er)
+
+		return resp, ss, nil
+
 	case smb2.SMB2_QUERY_DIRECTORY:
 		qdr := smb2.QueryDirectoryRequest{Request: *req}
 		if err := qdr.Validate(); err != nil {

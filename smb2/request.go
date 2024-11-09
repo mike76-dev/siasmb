@@ -17,6 +17,12 @@ var (
 const (
 	SMB2CancelRequestMinSize       = 4
 	SMB2CancelRequestStructureSize = 4
+
+	SMB2EchoRequestMinSize       = 4
+	SMB2EchoRequestStructureSize = 4
+
+	SMB2EchoResponseMinSize       = 4
+	SMB2EchoResponseStructureSize = 4
 )
 
 type GenericRequest interface {
@@ -268,4 +274,46 @@ func (cr CancelRequest) Validate() error {
 	}
 
 	return nil
+}
+
+type EchoRequest struct {
+	Request
+}
+
+func (er EchoRequest) Validate() error {
+	if err := Header(er.data).Validate(); err != nil {
+		return err
+	}
+
+	if len(er.data) < SMB2HeaderSize+SMB2EchoRequestMinSize {
+		return ErrWrongLength
+	}
+
+	if er.structureSize() != SMB2EchoRequestStructureSize {
+		return ErrWrongFormat
+	}
+
+	return nil
+}
+
+type EchoResponse struct {
+	Response
+}
+
+func (er *EchoResponse) setStructureSize() {
+	binary.LittleEndian.PutUint16(er.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2EchoResponseStructureSize)
+}
+
+func (er *EchoResponse) FromRequest(req GenericRequest) {
+	er.Response.FromRequest(req)
+
+	body := make([]byte, SMB2EchoResponseMinSize)
+	er.data = append(er.data, body...)
+
+	er.setStructureSize()
+	Header(er.data).SetNextCommand(0)
+	Header(er.data).SetStatus(STATUS_OK)
+	if Header(er.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
+		Header(er.data).SetCreditResponse(0)
+	}
 }
