@@ -7,6 +7,7 @@ import (
 
 	"github.com/mike76-dev/siasmb/utils"
 	"go.sia.tech/renterd/api"
+	"golang.org/x/crypto/blake2b"
 )
 
 const (
@@ -270,6 +271,9 @@ func QueryDirectoryBuffer(entries []api.ObjectMetadata, bufSize uint32, single, 
 		fid, _ := hex.DecodeString(entry.ETag)
 		if len(fid) >= 8 {
 			di.FileID = binary.LittleEndian.Uint64(fid[:8])
+		} else {
+			hash := blake2b.Sum256([]byte(entry.Name))
+			di.FileID = binary.LittleEndian.Uint64(hash[:8])
 		}
 
 		info = append(info, di)

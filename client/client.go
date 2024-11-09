@@ -9,6 +9,7 @@ import (
 
 	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
+	"golang.org/x/crypto/blake2b"
 )
 
 type Client struct {
@@ -138,6 +139,8 @@ func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (id, pa
 			}
 		}
 	} else {
+		hash := blake2b.Sum256([]byte("/"))
+		id = binary.LittleEndian.Uint64(hash[:8])
 		createdAt = b.CreatedAt
 	}
 
@@ -159,7 +162,13 @@ func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (id, pa
 			}
 		}
 	} else {
+		hash := blake2b.Sum256([]byte("/"))
+		parentID = binary.LittleEndian.Uint64(hash[:8])
 		parentCreatedAt = b.CreatedAt
+	}
+
+	if parentID == id {
+		parentID = 0
 	}
 
 	return

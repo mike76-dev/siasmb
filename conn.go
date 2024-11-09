@@ -450,7 +450,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			case smb2.CREATE_QUERY_MAXIMAL_ACCESS_REQUEST:
 				respContexts[id] = smb2.HandleCreateQueryMaximalAccessRequest(ctx, op.lastModified, op.grantedAccess)
 			case smb2.CREATE_QUERY_ON_DISK_ID:
-				respContexts[id] = smb2.HandleCreateQueryOnDiskID(op.durableFileID, tc.share.volumeID)
+				respContexts[id] = smb2.HandleCreateQueryOnDiskID(op.handle, tc.share.volumeID)
 			}
 		}
 
@@ -526,13 +526,14 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		c.mu.Unlock()
 
 		for aid, r := range toNotify {
-			resp := &smb2.ChangeNotifyResponse{}
-			resp.FromRequest(r)
-			resp.Header().SetStatus(smb2.STATUS_NOTIFY_CLEANUP)
+			resp := smb2.NewErrorResponse(r, smb2.STATUS_NOTIFY_CLEANUP, nil)
+			resp.Header().ClearFlag(smb2.FLAGS_RELATED_OPERATIONS)
 			resp.Header().SetAsyncID(aid)
-			if err := c.server.writeResponse(c, ss, resp); err != nil {
-				log.Println("Error writing response:", err)
-			}
+			go func() {
+				if err := c.server.writeResponse(c, ss, resp); err != nil {
+					log.Println("Error writing response:", err)
+				}
+			}()
 		}
 
 		resp := &smb2.CloseResponse{}
@@ -882,11 +883,24 @@ func (c *connection) processRequests() {
 			c.mu.Unlock()
 
 			if resp.Header().Command() == smb2.SMB2_CHANGE_NOTIFY {
-				if err := c.server.writeResponse(c, ss, resp); err != nil {
-					log.Println("Error writing response:", err)
-					c.server.closeConnection(c)
-					return
+				if pendingResp != nil && req.Header().NextCommand() == 0 {
+					pendingResp.Header().SetCreditResponse(1)
+					if err := c.server.writeResponse(c, ss, pendingResp); err != nil {
+						log.Println("Error writing response:", err)
+						c.server.closeConnection(c)
+						return
+					}
+					c.mu.Lock()
+					delete(c.pendingResponses, resp.GroupID())
+					c.mu.Unlock()
 				}
+				go func() {
+					if err := c.server.writeResponse(c, ss, resp); err != nil {
+						log.Println("Error writing response:", err)
+						c.server.closeConnection(c)
+						return
+					}
+				}()
 			} else if pendingResp != nil {
 				pendingResp.Append(resp)
 				if req.Header().NextCommand() == 0 {
@@ -980,6 +994,7 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 	if cr.Header().IsFlagSet(smb2.FLAGS_ASYNC_COMMAND) {
 		resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
 		resp.Header().SetCreditResponse(0)
+		resp.Header().SetAsyncID(cr.Header().AsyncID())
 	}
 
 	if err := c.server.writeResponse(c, ss, resp); err != nil {

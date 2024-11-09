@@ -22,6 +22,7 @@ var (
 )
 
 type open struct {
+	handle                      uint64
 	fileID                      uint64
 	durableFileID               uint64
 	session                     *session
@@ -99,26 +100,26 @@ func grantAccess(cr smb2.CreateRequest, tc *treeConnect, ss *session) bool {
 }
 
 func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api.ObjectMetadata, ctx context.Context, cancel context.CancelFunc) *open {
-	fid := make([]byte, 8)
-	rand.Read(fid)
+	id := make([]byte, 16)
+	rand.Read(id)
 
-	var dfid []byte
-	if info.ETag == "" {
-		dfid = make([]byte, 8)
-		binary.LittleEndian.PutUint64(dfid, tc.share.volumeID)
-	} else {
+	var buf []byte
+	if info.ETag != "" {
 		var err error
-		dfid, err = hex.DecodeString(info.ETag)
-		if err != nil || len(dfid) < 8 {
+		buf, err = hex.DecodeString(info.ETag)
+		if err != nil || len(buf) < 8 {
 			return nil
 		}
+	} else {
+		buf = make([]byte, 8)
+		copy(buf, tc.share.name)
 	}
 
 	filepath, filename, isDir := utils.ExtractFilename(info.Name)
-
 	op := &open{
-		fileID:            binary.LittleEndian.Uint64(fid[:8]),
-		durableFileID:     binary.LittleEndian.Uint64(dfid[:8]),
+		handle:            binary.LittleEndian.Uint64(buf[:8]),
+		fileID:            binary.LittleEndian.Uint64(id[:8]),
+		durableFileID:     binary.LittleEndian.Uint64(id[8:]),
 		session:           ss,
 		connection:        ss.connection,
 		treeConnect:       tc,
