@@ -238,3 +238,21 @@ func (op *open) fileAllInformation() []byte {
 	}
 	return fai.Encode()
 }
+
+func (op *open) fileNetworkOpenInformation() []byte {
+	var size, alloc uint64
+	if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		size = op.size
+		alloc = (op.size + (smb2.ClusterSize - 1)) &^ (smb2.ClusterSize - 1)
+	}
+	fnoi := smb2.FileNetworkOpenInfo{
+		CreationTime:   op.lastModified,
+		LastAccessTime: op.lastModified,
+		LastWriteTime:  op.lastModified,
+		ChangeTime:     op.lastModified,
+		AllocationSize: alloc,
+		EndOfFile:      size,
+		FileAttributes: op.fileAttributes,
+	}
+	return fnoi.Encode()
+}

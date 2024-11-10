@@ -435,6 +435,16 @@ func FileFsAttributeInfo() []byte {
 	return info
 }
 
+func FileFsSizeInfo(spu int) []byte {
+	info := make([]byte, 32)
+	units := totalSize / ClusterSize / uint64(spu)
+	binary.LittleEndian.PutUint64(info[:8], units)
+	binary.LittleEndian.PutUint64(info[8:16], units)
+	binary.LittleEndian.PutUint32(info[16:20], uint32(spu))
+	binary.LittleEndian.PutUint32(info[20:24], uint32(ClusterSize))
+	return info
+}
+
 func FileFsFullSizeInfo(spu int) []byte {
 	info := make([]byte, 32)
 	units := totalSize / ClusterSize / uint64(spu)
@@ -596,4 +606,26 @@ func (fai FileAllInfo) Encode() []byte {
 		),
 		fai.NameInfo.Encode()...,
 	)
+}
+
+type FileNetworkOpenInfo struct {
+	CreationTime   time.Time
+	LastAccessTime time.Time
+	LastWriteTime  time.Time
+	ChangeTime     time.Time
+	AllocationSize uint64
+	EndOfFile      uint64
+	FileAttributes uint32
+}
+
+func (fnoi FileNetworkOpenInfo) Encode() []byte {
+	buf := make([]byte, 56)
+	binary.LittleEndian.PutUint64(buf[:8], utils.UnixToFiletime(fnoi.CreationTime))
+	binary.LittleEndian.PutUint64(buf[8:16], utils.UnixToFiletime(fnoi.LastAccessTime))
+	binary.LittleEndian.PutUint64(buf[16:24], utils.UnixToFiletime(fnoi.LastWriteTime))
+	binary.LittleEndian.PutUint64(buf[24:32], utils.UnixToFiletime(fnoi.ChangeTime))
+	binary.LittleEndian.PutUint64(buf[32:40], fnoi.AllocationSize)
+	binary.LittleEndian.PutUint64(buf[40:48], fnoi.EndOfFile)
+	binary.LittleEndian.PutUint32(buf[48:52], fnoi.FileAttributes)
+	return buf
 }
