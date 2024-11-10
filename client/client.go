@@ -29,6 +29,7 @@ func (c *Client) GetBucket(ctx context.Context, name string) (bucket api.Bucket,
 }
 
 func (c *Client) GetObject(ctx context.Context, bucket, path string) (obj api.ObjectsResponse, err error) {
+	path = strings.ReplaceAll(path, "\\", "/")
 	path = api.ObjectPathEscape(path)
 	path += "?bucket=" + bucket
 	err = c.c.WithContext(ctx).GET(fmt.Sprintf("/api/bus/objects/%s", path), &obj)
@@ -36,6 +37,7 @@ func (c *Client) GetObject(ctx context.Context, bucket, path string) (obj api.Ob
 }
 
 func (c *Client) GetObjectInfo(ctx context.Context, bucket, path string) (info api.ObjectMetadata, err error) {
+	path = strings.ReplaceAll(path, "\\", "/")
 	var resp api.ObjectsResponse
 	if path == "" {
 		var b api.Bucket
