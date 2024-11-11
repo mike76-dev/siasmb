@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
-	"fmt"
 	"log"
 	"math"
 	"net"
@@ -98,6 +97,8 @@ func (c *connection) acceptRequest(msg []byte) error {
 				return smb2.ErrWrongProtocol
 			}
 		} else {
+			mid = req.Header().MessageID()
+			c.grantCredits(mid, req.Header().CreditRequest())
 			if req.Header().Command() == smb2.SMB2_CANCEL {
 				if err := c.cancelRequest(req); err != nil {
 					log.Printf("Couldn't cancel request %d:, %v\n", req.Header().Command(), err)
@@ -105,12 +106,10 @@ func (c *connection) acceptRequest(msg []byte) error {
 
 				continue
 			}
-			mid = req.Header().MessageID()
 		}
 
 		_, ok := c.commandSequenceWindow[mid]
 		if !ok {
-			fmt.Printf("Received request No. %d, which is outside window: %+v\n", mid, c.commandSequenceWindow) //TODO
 			return errRequestNotWithinWindow
 		}
 

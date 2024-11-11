@@ -154,7 +154,6 @@ type GenericResponse interface {
 	OpenID() []byte
 	SetOpenID(id []byte)
 	Append(newResp GenericResponse)
-	CreditResponse() (lastMessageID uint64, lastCreditResponse uint16)
 }
 
 type Response struct {
@@ -236,24 +235,6 @@ func (resp *Response) Append(newResp GenericResponse) {
 	binary.LittleEndian.PutUint32(resp.data[off+20:off+24], uint32(newLen)-off)
 	newResp.Header().SetFlag(FLAGS_RELATED_OPERATIONS)
 	resp.data = append(resp.data, newResp.Encode()...)
-}
-
-func (resp *Response) CreditResponse() (lastMessageID uint64, lastCreditResponse uint16) {
-	h := resp.Header()
-	var off uint32
-	for {
-		lastMessageID = h.MessageID()
-		lastCreditResponse = h.CreditRequest()
-		next := h.NextCommand()
-		if next == 0 {
-			break
-		}
-
-		off += next
-		h = Header(resp.data[off:])
-	}
-
-	return
 }
 
 type CancelRequest struct {
