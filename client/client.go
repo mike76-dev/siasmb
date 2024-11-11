@@ -4,7 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
 
 	"go.sia.tech/jape"
@@ -184,4 +188,42 @@ func (c *Client) SectorPerSlab(ctx context.Context) (sps int, err error) {
 	}
 
 	return resp.MinShards, nil
+}
+
+func (c *Client) ReadObject(ctx context.Context, bucket, path string, offset, length uint64, buf io.Writer) (err error) {
+	values := url.Values{}
+	values.Set("bucket", bucket)
+
+	path = strings.ReplaceAll(url.PathEscape(path), "%2F", "/")
+	path = fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%v%v", c.c.BaseURL, path), nil)
+	if err != nil {
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, offset+length-1))
+	if c.c.Password != "" {
+		req.SetBasicAuth("", c.c.Password)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+
+	defer io.Copy(io.Discard, resp.Body)
+	defer resp.Body.Close()
+	if !(200 <= resp.StatusCode && resp.StatusCode < 300) {
+		err, _ := io.ReadAll(resp.Body)
+		return errors.New(string(err))
+	}
+
+	if resp == nil {
+		return nil
+	}
+
+	_, err = io.Copy(buf, resp.Body)
+	return
 }

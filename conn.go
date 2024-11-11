@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"log"
 	"math"
 	"net"
@@ -109,6 +110,7 @@ func (c *connection) acceptRequest(msg []byte) error {
 
 		_, ok := c.commandSequenceWindow[mid]
 		if !ok {
+			fmt.Printf("Received request No. %d, which is outside window: %+v\n", mid, c.commandSequenceWindow) //TODO
 			return errRequestNotWithinWindow
 		}
 
@@ -539,6 +541,92 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		resp := &smb2.CloseResponse{}
 		resp.FromRequest(cr)
 		resp.Generate(op.lastModified, op.size, op.fileAttributes)
+
+		return resp, ss, nil
+
+	case smb2.SMB2_READ:
+		rr := smb2.ReadRequest{Request: *req}
+		if err := rr.Validate(); err != nil {
+			log.Println("Invalid SMB2_READ request:", err)
+			return nil, nil, err
+		}
+
+		c.mu.Lock()
+		ss, found := c.sessionTable[rr.Header().SessionID()]
+		c.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(rr, smb2.STATUS_USER_SESSION_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		ss.mu.Lock()
+		tc, found := ss.treeConnectTable[rr.Header().TreeID()]
+		ss.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(rr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		ss.idleTime = time.Now()
+		if rr.Length() > uint32(c.maxReadSize) {
+			resp := smb2.NewErrorResponse(rr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		var op *open
+		id := rr.FileID()
+		fid := binary.LittleEndian.Uint64(id[:8])
+		dfid := binary.LittleEndian.Uint64(id[8:16])
+		ss.mu.Lock()
+		op, found = ss.openTable[fid]
+		ss.mu.Unlock()
+		if !found || op.durableFileID != dfid {
+			if req.GroupID() > 0 {
+				op = c.findOpen(req.GroupID())
+			}
+
+			if op == nil {
+				resp := smb2.NewErrorResponse(rr, smb2.STATUS_FILE_CLOSED, nil)
+				return resp, ss, nil
+			}
+
+			id = op.id()
+		}
+
+		req.SetOpenID(id)
+
+		if op.grantedAccess&smb2.FILE_READ_DATA == 0 {
+			resp := smb2.NewErrorResponse(rr, smb2.STATUS_ACCESS_DENIED, nil)
+			return resp, ss, nil
+		}
+
+		if rr.Offset() >= op.size {
+			resp := smb2.NewErrorResponse(rr, smb2.STATUS_END_OF_FILE, nil)
+			return resp, ss, nil
+		}
+
+		length := uint64(rr.Length())
+		if rr.Offset()+length >= op.size {
+			length = op.size - rr.Offset()
+		}
+
+		var data bytes.Buffer
+		if err := tc.share.client.ReadObject(op.ctx, tc.share.bucket, op.pathName, rr.Offset(), length, &data); err != nil {
+			log.Println("Error reading object:", err)
+			resp := smb2.NewErrorResponse(rr, smb2.STATUS_DATA_ERROR, nil)
+			return resp, ss, nil
+		}
+
+		if data.Len() < int(rr.MinimumCount()) {
+			resp := smb2.NewErrorResponse(rr, smb2.STATUS_END_OF_FILE, nil)
+			return resp, ss, nil
+		}
+
+		resp := &smb2.ReadResponse{}
+		resp.FromRequest(rr)
+		resp.Generate(data.Bytes(), rr.Padding())
 
 		return resp, ss, nil
 
