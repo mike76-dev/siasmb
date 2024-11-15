@@ -243,7 +243,7 @@ func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server) {
 	nr.setStructureSize()
 	nr.SetDialectRevision(SMB_DIALECT_202)
 	nr.SetSecurityMode(NEGOTIATE_SIGNING_ENABLED)
-	nr.SetCapabilities(GLOBAL_CAP_DFS)
+	nr.SetCapabilities(GLOBAL_CAP_DFS | GLOBAL_CAP_LARGE_MTU)
 	nr.SetServerGuid(serverGuid)
 	nr.SetMaxTransactSize(MaxTransactSize)
 	nr.SetMaxReadSize(MaxReadSize)
