@@ -65,6 +65,9 @@ func (rr *ReadResponse) setStructureSize() {
 }
 
 func (rr *ReadResponse) SetData(buf []byte, padding uint8) {
+	if padding == 0 { // Edge case on Nautilus (Ubuntu)
+		padding = SMB2HeaderSize + SMB2ReadResponseMinSize
+	}
 	if padding < SMB2HeaderSize+SMB2ReadResponseMinSize {
 		return
 	}
