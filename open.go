@@ -13,10 +13,6 @@ import (
 	"go.sia.tech/renterd/api"
 )
 
-const (
-	openTimeout = time.Hour
-)
-
 var (
 	errNoDirectory = errors.New("not a directory")
 )

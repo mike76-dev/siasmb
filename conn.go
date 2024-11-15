@@ -421,7 +421,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), openTimeout)
+		ctx, cancel := context.WithCancel(context.Background())
 
 		info, err := tc.share.client.GetObjectInfo(ctx, tc.share.bucket, path)
 		if err != nil {
@@ -1026,8 +1026,6 @@ func (c *connection) processRequests() {
 				c.pendingResponses[resp.GroupID()] = resp
 				c.mu.Unlock()
 			}
-		} else {
-			time.Sleep(100 * time.Millisecond)
 		}
 
 		select {
