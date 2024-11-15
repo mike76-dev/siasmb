@@ -20,9 +20,9 @@ const (
 )
 
 const (
-	MaxTransactSize = 1048576 * 2
-	MaxReadSize     = 1048576 * 2
-	MaxWriteSize    = 1048576 * 2
+	MaxTransactSize = 1048576 * 4
+	MaxReadSize     = 1048576 * 4
+	MaxWriteSize    = 1048576 * 4
 )
 
 const (

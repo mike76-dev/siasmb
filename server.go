@@ -78,6 +78,7 @@ func (s *server) newConnection(conn net.Conn) *connection {
 		maxReadSize:           smb2.MaxReadSize,
 		maxWriteSize:          smb2.MaxWriteSize,
 		server:                s,
+		writeChan:             make(chan []byte),
 		closeChan:             make(chan struct{}),
 	}
 
@@ -89,6 +90,7 @@ func (s *server) newConnection(conn net.Conn) *connection {
 	s.connectionList[c.clientName] = c
 	s.mu.Unlock()
 
+	go c.sendResponses()
 	go c.processRequests()
 
 	return c
@@ -99,10 +101,10 @@ func (s *server) closeConnection(c *connection) {
 	delete(s.connectionList, c.clientName)
 	s.mu.Unlock()
 	c.conn.Close()
-	c.closeChan <- struct{}{}
+	close(c.closeChan)
 }
 
-func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResponse) error {
+func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResponse) {
 	buf := resp.Encode()
 
 	if ss != nil && ss.state == sessionValid {
@@ -122,13 +124,9 @@ func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResp
 		}
 	}
 
-	if err := writeMessage(c.conn, buf); err != nil {
-		return err
-	}
+	c.writeChan <- buf
 
 	s.mu.Lock()
 	s.stats.bytesSent += uint64(len(buf))
 	s.mu.Unlock()
-
-	return nil
 }

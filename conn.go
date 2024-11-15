@@ -48,6 +48,7 @@ type connection struct {
 	mu         sync.Mutex
 	server     *server
 	ntlmServer *ntlm.Server
+	writeChan  chan []byte
 	closeChan  chan struct{}
 }
 
@@ -96,6 +97,7 @@ func (c *connection) acceptRequest(msg []byte) error {
 			if c.negotiateDialect != smb2.SMB_DIALECT_UNKNOWN || len(reqs) > 1 {
 				return smb2.ErrWrongProtocol
 			}
+			c.grantCredits(mid, 1)
 		} else {
 			mid = req.Header().MessageID()
 			c.grantCredits(mid, req.Header().CreditRequest())
@@ -530,11 +532,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			resp := smb2.NewErrorResponse(r, smb2.STATUS_NOTIFY_CLEANUP, nil)
 			resp.Header().ClearFlag(smb2.FLAGS_RELATED_OPERATIONS)
 			resp.Header().SetAsyncID(aid)
-			go func() {
-				if err := c.server.writeResponse(c, ss, resp); err != nil {
-					log.Println("Error writing response:", err)
-				}
-			}()
+			c.server.writeResponse(c, ss, resp)
 		}
 
 		resp := &smb2.CloseResponse{}
@@ -1005,40 +1003,22 @@ func (c *connection) processRequests() {
 			if resp.Header().Command() == smb2.SMB2_CHANGE_NOTIFY {
 				if pendingResp != nil && req.Header().NextCommand() == 0 {
 					pendingResp.Header().SetCreditResponse(1)
-					if err := c.server.writeResponse(c, ss, pendingResp); err != nil {
-						log.Println("Error writing response:", err)
-						c.server.closeConnection(c)
-						return
-					}
+					c.server.writeResponse(c, ss, pendingResp)
 					c.mu.Lock()
 					delete(c.pendingResponses, resp.GroupID())
 					c.mu.Unlock()
 				}
-				go func() {
-					if err := c.server.writeResponse(c, ss, resp); err != nil {
-						log.Println("Error writing response:", err)
-						c.server.closeConnection(c)
-						return
-					}
-				}()
+				c.server.writeResponse(c, ss, resp)
 			} else if pendingResp != nil {
 				pendingResp.Append(resp)
 				if req.Header().NextCommand() == 0 {
-					if err := c.server.writeResponse(c, ss, pendingResp); err != nil {
-						log.Println("Error writing response:", err)
-						c.server.closeConnection(c)
-						return
-					}
+					c.server.writeResponse(c, ss, pendingResp)
 					c.mu.Lock()
 					delete(c.pendingResponses, resp.GroupID())
 					c.mu.Unlock()
 				}
 			} else if resp.GroupID() == 0 || req.Header().NextCommand() == 0 {
-				if err := c.server.writeResponse(c, ss, resp); err != nil {
-					log.Println("Error writing response:", err)
-					c.server.closeConnection(c)
-					return
-				}
+				c.server.writeResponse(c, ss, resp)
 			} else {
 				c.mu.Lock()
 				resp.SetSessionID(resp.Header().SessionID())
@@ -1054,6 +1034,21 @@ func (c *connection) processRequests() {
 		case <-c.closeChan:
 			return
 		default:
+		}
+	}
+}
+
+func (c *connection) sendResponses() {
+	for {
+		select {
+		case <-c.closeChan:
+			return
+		case msg := <-c.writeChan:
+			err := writeMessage(c.conn, msg)
+			if err != nil {
+				log.Println("Error sending message:", err)
+				c.server.closeConnection(c)
+			}
 		}
 	}
 }
@@ -1117,9 +1112,7 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 		resp.Header().SetAsyncID(cr.Header().AsyncID())
 	}
 
-	if err := c.server.writeResponse(c, ss, resp); err != nil {
-		return err
-	}
+	c.server.writeResponse(c, ss, resp)
 
 	if cr.Header().IsFlagSet(smb2.FLAGS_ASYNC_COMMAND) {
 		delete(c.asyncCommandList, cr.Header().AsyncID())
