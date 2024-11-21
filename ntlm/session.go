@@ -4,9 +4,12 @@ package ntlm
 import (
 	"bytes"
 	"crypto/rc4"
+	"encoding/binary"
 	"errors"
 
 	"github.com/mike76-dev/siasmb/utils"
+	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
+	"golang.org/x/crypto/blake2b"
 )
 
 type Session struct {
@@ -27,8 +30,10 @@ type Session struct {
 }
 
 type SecurityContext struct {
-	UserSID    string
-	GroupSIDs  []string
+	User       string
+	Domain     string
+	UserRID    uint32
+	DomainSID  *dtyp.SID
 	SessionKey []byte
 }
 
@@ -37,23 +42,54 @@ func (s *Session) GetSecurityContext() (sc SecurityContext) {
 		return
 	}
 
+	h, _ := blake2b.New256(nil)
+	h.Write([]byte(s.user))
 	if s.domain == "" {
+		hash := h.Sum(nil)
 		return SecurityContext{
-			UserSID:    "S-1-5-0-0",
-			GroupSIDs:  []string{"S-1-5-0-544", "S-1-5-0-545"},
+			User:    s.user,
+			UserRID: binary.LittleEndian.Uint32(hash[:4]),
+			DomainSID: &dtyp.SID{
+				Revision:          1,
+				SubAuthorityCount: 2,
+				IDAuthority: &dtyp.SIDIDAuthority{
+					Value: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x05},
+				},
+				SubAuthority: []uint32{0, 0},
+			},
 			SessionKey: s.exportedSessionKey,
 		}
 	}
 
+	h.Write([]byte(s.domain))
+	hash := h.Sum(nil)
 	return SecurityContext{
-		UserSID:    "S-1-5-0-0",
-		GroupSIDs:  []string{"S-1-5-0-512", "S-1-5-0-513"},
+		User:    s.user,
+		Domain:  s.domain,
+		UserRID: binary.LittleEndian.Uint32(hash[:4]),
+		DomainSID: &dtyp.SID{
+			Revision:          1,
+			SubAuthorityCount: 4,
+			IDAuthority: &dtyp.SIDIDAuthority{
+				Value: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x05},
+			},
+			SubAuthority: []uint32{
+				0x15,
+				binary.LittleEndian.Uint32(hash[4:8]),
+				binary.LittleEndian.Uint32(hash[8:12]),
+				binary.LittleEndian.Uint32(hash[12:16]),
+			},
+		},
 		SessionKey: s.exportedSessionKey,
 	}
 }
 
 func (s *Session) User() string {
 	return s.user
+}
+
+func (s *Session) Domain() string {
+	return s.domain
 }
 
 func (s *Session) SessionKey() []byte {

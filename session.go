@@ -135,7 +135,7 @@ func (ss *session) validate(req smb2.SessionSetupRequest) {
 
 	if req.PreviousSessionID() != 0 {
 		pss, found := ss.connection.sessionTable[req.PreviousSessionID()]
-		if found && ss.securityContext.UserSID == pss.securityContext.UserSID && ss.sessionID != req.PreviousSessionID() {
+		if found && ss.securityContext.UserRID == pss.securityContext.UserRID && ss.sessionID != req.PreviousSessionID() {
 			delete(ss.connection.sessionTable, req.PreviousSessionID())
 			ss.connection.server.mu.Lock()
 			delete(ss.connection.server.globalSessionTable, req.PreviousSessionID())

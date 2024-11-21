@@ -6,15 +6,22 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"path/filepath"
+	"sync"
 	"time"
 
+	"github.com/mike76-dev/siasmb/ntlm"
+	"github.com/mike76-dev/siasmb/rpc"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/utils"
+	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
+	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
 	"go.sia.tech/renterd/api"
 )
 
 var (
 	errNoDirectory = errors.New("not a directory")
+	errNoFiles     = errors.New("no files found")
 )
 
 type open struct {
@@ -47,19 +54,9 @@ type open struct {
 	cancel        context.CancelFunc
 	lastSearch    string
 	searchResults []api.ObjectMetadata
-}
 
-func (s *server) findOpen(path string, treeID uint32) (*open, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, op := range s.globalOpenTable {
-		if op.pathName == path && op.treeConnect.treeID == treeID {
-			return op, true
-		}
-	}
-
-	return nil, false
+	lsaFrames map[uint32]*rpc.Frame
+	mu        sync.Mutex
 }
 
 func grantAccess(cr smb2.CreateRequest, tc *treeConnect, ss *session) bool {
@@ -133,6 +130,7 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		size:              uint64(info.Size),
 		ctx:               ctx,
 		cancel:            cancel,
+		lsaFrames:         make(map[uint32]*rpc.Frame),
 	}
 
 	if isDir {
@@ -170,26 +168,32 @@ func (s *server) closeOpen(op *open) {
 	s.mu.Unlock()
 }
 
-func (op *open) queryDirectory(path string) error {
+func (op *open) queryDirectory(pattern string) error {
 	if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
 		return errNoDirectory
 	}
 
-	p := op.pathName
-	if path != "*" {
-		p += path + "/"
-	} else {
-		p += "/"
-	}
-
 	share := op.treeConnect.share
-	resp, err := share.client.GetObject(op.ctx, share.bucket, p)
+	resp, err := share.client.GetObject(op.ctx, share.bucket, op.pathName+"/")
 	if err != nil {
 		return err
 	}
 
-	op.lastSearch = path
-	op.searchResults = resp.Entries
+	var results []api.ObjectMetadata
+	for _, entry := range resp.Entries {
+		_, name, _ := utils.ExtractFilename(entry.Name)
+		match, _ := filepath.Match(pattern, name)
+		if match {
+			results = append(results, entry)
+		}
+	}
+
+	op.lastSearch = pattern
+	op.searchResults = results
+	if len(results) == 0 && len(resp.Entries) > 0 {
+		return errNoFiles
+	}
+
 	return nil
 }
 
@@ -251,4 +255,23 @@ func (op *open) fileNetworkOpenInformation() []byte {
 		FileAttributes: op.fileAttributes,
 	}
 	return fnoi.Encode()
+}
+
+func (op *open) newLSAFrame(ctx ntlm.SecurityContext) *rpc.Frame {
+	op.mu.Lock()
+	defer op.mu.Unlock()
+
+	id := make([]byte, 16)
+	rand.Read(id)
+	guid, _ := dtyp.GUIDFromBytes(id)
+	frame := &rpc.Frame{
+		Handle: lsarpc.Handle{
+			Attributes: 1,
+			UUID:       guid,
+		},
+		SecurityContext: ctx,
+	}
+
+	op.lsaFrames[frame.Handle.UUID.Data1] = frame
+	return frame
 }

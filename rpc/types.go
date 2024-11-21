@@ -1,0 +1,275 @@
+package rpc
+
+import (
+	"encoding/binary"
+	"io"
+
+	"github.com/mike76-dev/siasmb/ntlm"
+	"github.com/mike76-dev/siasmb/utils"
+	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
+)
+
+type Encoder interface {
+	Encode(w io.Writer)
+}
+
+type Decoder interface {
+	Decode(r io.Reader)
+}
+
+type SyntaxID struct {
+	IfUUID         [16]byte
+	IfVersionMajor uint16
+	IfVersionMinor uint16
+}
+
+func (sid *SyntaxID) Encode(w io.Writer) {
+	buf := make([]byte, 16)
+	copy(buf, sid.IfUUID[:])
+	buf = binary.LittleEndian.AppendUint16(buf, sid.IfVersionMajor)
+	buf = binary.LittleEndian.AppendUint16(buf, sid.IfVersionMinor)
+	w.Write(buf)
+}
+
+func (sid *SyntaxID) Decode(r io.Reader) {
+	buf := make([]byte, 20)
+	_, err := r.Read(buf)
+	if err != nil {
+		return
+	}
+
+	copy(sid.IfUUID[:], buf[:16])
+	sid.IfVersionMajor = binary.LittleEndian.Uint16(buf[16:18])
+	sid.IfVersionMinor = binary.LittleEndian.Uint16(buf[18:20])
+}
+
+type Context struct {
+	ContextID        uint16
+	AbstractSyntax   *SyntaxID
+	TransferSyntaxes []*SyntaxID
+}
+
+func (c *Context) Encode(w io.Writer) {
+	var buf []byte
+	buf = binary.LittleEndian.AppendUint16(buf, c.ContextID)
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(c.TransferSyntaxes)))
+	w.Write(buf)
+	c.AbstractSyntax.Encode(w)
+	for _, ts := range c.TransferSyntaxes {
+		ts.Encode(w)
+	}
+}
+
+func (c *Context) Decode(r io.Reader) {
+	buf := make([]byte, 4)
+	_, err := r.Read(buf)
+	if err != nil {
+		return
+	}
+
+	c.ContextID = binary.LittleEndian.Uint16(buf[:2])
+	c.TransferSyntaxes = make([]*SyntaxID, binary.LittleEndian.Uint16(buf[2:]))
+	c.AbstractSyntax = &SyntaxID{}
+	c.AbstractSyntax.Decode(r)
+	for i := range c.TransferSyntaxes {
+		c.TransferSyntaxes[i] = &SyntaxID{}
+		c.TransferSyntaxes[i].Decode(r)
+	}
+}
+
+type Bind struct {
+	MaxXmitFrag  uint16
+	MaxRecvFrag  uint16
+	AssocGroupID uint32
+	ContextList  []*Context
+}
+
+func (b *Bind) Encode(w io.Writer) {
+	var buf []byte
+	buf = binary.LittleEndian.AppendUint16(buf, b.MaxXmitFrag)
+	buf = binary.LittleEndian.AppendUint16(buf, b.MaxRecvFrag)
+	buf = binary.LittleEndian.AppendUint32(buf, b.AssocGroupID)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(b.ContextList)))
+	w.Write(buf)
+	for _, c := range b.ContextList {
+		c.Encode(w)
+	}
+}
+
+func (b *Bind) Decode(r io.Reader) {
+	buf := make([]byte, 12)
+	_, err := r.Read(buf)
+	if err != nil {
+		return
+	}
+
+	b.MaxXmitFrag = binary.LittleEndian.Uint16(buf[:2])
+	b.MaxRecvFrag = binary.LittleEndian.Uint16(buf[2:4])
+	b.AssocGroupID = binary.LittleEndian.Uint32(buf[4:8])
+	b.ContextList = make([]*Context, binary.LittleEndian.Uint32(buf[8:]))
+	for i := range b.ContextList {
+		b.ContextList[i] = &Context{}
+		b.ContextList[i].Decode(r)
+	}
+}
+
+type Result struct {
+	DefResult      uint16
+	ProviderReason uint16
+	TransferSyntax *SyntaxID
+}
+
+func (res *Result) Encode(w io.Writer) {
+	var buf []byte
+	buf = binary.LittleEndian.AppendUint16(buf, res.DefResult)
+	buf = binary.LittleEndian.AppendUint16(buf, res.ProviderReason)
+	w.Write(buf)
+	res.TransferSyntax.Encode(w)
+}
+
+func (res *Result) Decode(r io.Reader) {
+	buf := make([]byte, 4)
+	_, err := r.Read(buf)
+	if err != nil {
+		return
+	}
+
+	res.DefResult = binary.LittleEndian.Uint16(buf[:2])
+	res.ProviderReason = binary.LittleEndian.Uint16(buf[2:4])
+	res.TransferSyntax = &SyntaxID{}
+	res.TransferSyntax.Decode(r)
+}
+
+type BindAck struct {
+	MaxXmitFrag  uint16
+	MaxRecvFrag  uint16
+	AssocGroupID uint32
+	PortSpec     string
+	ResultList   []*Result
+}
+
+func (ba *BindAck) Encode(w io.Writer) {
+	var buf []byte
+	buf = binary.LittleEndian.AppendUint16(buf, ba.MaxXmitFrag)
+	buf = binary.LittleEndian.AppendUint16(buf, ba.MaxRecvFrag)
+	buf = binary.LittleEndian.AppendUint32(buf, ba.AssocGroupID)
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(ba.PortSpec)+1))
+	buf = append(buf, []byte(ba.PortSpec)...)
+	buf = append(buf, 0)
+	padLen := utils.Roundup(len(buf), 4)
+	padding := make([]byte, padLen-len(buf))
+	buf = append(buf, padding...)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(ba.ResultList)))
+	w.Write(buf)
+	for _, res := range ba.ResultList {
+		res.Encode(w)
+	}
+}
+
+func (ba *BindAck) Decode(r io.Reader) {
+	buf := make([]byte, 10)
+	_, err := r.Read(buf)
+	if err != nil {
+		return
+	}
+
+	ba.MaxXmitFrag = binary.LittleEndian.Uint16(buf[:2])
+	ba.MaxRecvFrag = binary.LittleEndian.Uint16(buf[2:4])
+	ba.AssocGroupID = binary.LittleEndian.Uint32(buf[4:8])
+	addrLen := binary.LittleEndian.Uint16(buf[8:])
+	addr := make([]byte, addrLen)
+	_, err = r.Read(addr)
+	if err != nil {
+		return
+	}
+
+	ba.PortSpec = string(addr[:addrLen-1])
+	padLen := utils.Roundup(len(buf)+int(addrLen), 4)
+	padding := make([]byte, padLen-len(buf)-int(addrLen))
+	_, err = r.Read(padding)
+	if err != nil {
+		return
+	}
+
+	resNum := make([]byte, 4)
+	_, err = r.Read(resNum)
+	if err != nil {
+		return
+	}
+
+	ba.ResultList = make([]*Result, binary.LittleEndian.Uint32(resNum))
+	for i := range ba.ResultList {
+		ba.ResultList[i] = &Result{}
+		ba.ResultList[i].Decode(r)
+	}
+}
+
+type Request struct {
+	AllocHint  uint32
+	ContextID  uint16
+	OpNum      uint16
+	ObjectUUID []byte
+}
+
+func (req *Request) Encode(w io.Writer) {
+	var buf []byte
+	buf = binary.LittleEndian.AppendUint32(buf, req.AllocHint)
+	buf = binary.LittleEndian.AppendUint16(buf, req.ContextID)
+	buf = binary.LittleEndian.AppendUint16(buf, req.OpNum)
+	if req.ObjectUUID != nil {
+		buf = append(buf, req.ObjectUUID...)
+	}
+	w.Write(buf)
+}
+
+func (req *Request) Decode(r io.Reader) {
+	buf := make([]byte, 8)
+	_, err := r.Read(buf)
+	if err != nil {
+		return
+	}
+
+	req.AllocHint = binary.LittleEndian.Uint32(buf[:4])
+	req.ContextID = binary.LittleEndian.Uint16(buf[4:6])
+	req.OpNum = binary.LittleEndian.Uint16(buf[6:8])
+	if req.ObjectUUID != nil {
+		uuid := make([]byte, 16)
+		_, err := r.Read(uuid)
+		if err != nil {
+			return
+		}
+
+		copy(req.ObjectUUID, uuid)
+	}
+}
+
+type Response struct {
+	AllocHint   uint32
+	ContextID   uint16
+	CancelCount uint16
+}
+
+func (resp *Response) Encode(w io.Writer) {
+	var buf []byte
+	buf = binary.LittleEndian.AppendUint32(buf, resp.AllocHint)
+	buf = binary.LittleEndian.AppendUint16(buf, resp.ContextID)
+	buf = binary.LittleEndian.AppendUint16(buf, resp.CancelCount)
+	w.Write(buf)
+}
+
+func (resp *Response) Decode(r io.Reader) {
+	buf := make([]byte, 8)
+	_, err := r.Read(buf)
+	if err != nil {
+		return
+	}
+
+	resp.AllocHint = binary.LittleEndian.Uint32(buf[:4])
+	resp.ContextID = binary.LittleEndian.Uint16(buf[4:6])
+	resp.CancelCount = binary.LittleEndian.Uint16(buf[6:8])
+}
+
+type Frame struct {
+	Handle          lsarpc.Handle
+	SecurityContext ntlm.SecurityContext
+}
