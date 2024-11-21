@@ -54,6 +54,7 @@ type connection struct {
 	ntlmServer *ntlm.Server
 	writeChan  chan []byte
 	closeChan  chan struct{}
+	once       sync.Once
 }
 
 func (c *connection) grantCredits(mid uint64, numCredits uint16) error {
@@ -620,26 +621,48 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		length := uint64(rr.Length())
-		if rr.Offset()+length >= op.size {
-			length = op.size - rr.Offset()
-		}
+		aid := make([]byte, 8)
+		rand.Read(aid)
+		asyncID := binary.LittleEndian.Uint64(aid)
+		c.mu.Lock()
+		c.asyncCommandList[asyncID] = req
+		c.mu.Unlock()
 
-		var data bytes.Buffer
-		if err := tc.share.client.ReadObject(op.ctx, tc.share.bucket, op.pathName, rr.Offset(), length, &data); err != nil {
-			log.Println("Error reading object:", err)
-			resp := smb2.NewErrorResponse(rr, smb2.STATUS_DATA_ERROR, nil)
-			return resp, ss, nil
-		}
+		resp := smb2.NewErrorResponse(rr, smb2.STATUS_PENDING, nil)
+		resp.Header().SetAsyncID(asyncID)
+		resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
+		resp.Header().ClearFlag(smb2.FLAGS_RELATED_OPERATIONS)
+		resp.Header().ClearFlag(smb2.FLAGS_SIGNED)
+		resp.Header()[len(resp.Header())-1] = 0x21
 
-		if data.Len() < int(rr.MinimumCount()) {
-			resp := smb2.NewErrorResponse(rr, smb2.STATUS_END_OF_FILE, nil)
-			return resp, ss, nil
-		}
+		go func() {
+			length := uint64(rr.Length())
+			if rr.Offset()+length >= op.size {
+				length = op.size - rr.Offset()
+			}
 
-		resp := &smb2.ReadResponse{}
-		resp.FromRequest(rr)
-		resp.Generate(data.Bytes(), rr.Padding())
+			var resp smb2.GenericResponse
+			var data bytes.Buffer
+			if err := tc.share.client.ReadObject(op.ctx, tc.share.bucket, op.pathName, rr.Offset(), length, &data); err != nil {
+				log.Println("Error reading object:", err)
+				resp = smb2.NewErrorResponse(rr, smb2.STATUS_DATA_ERROR, nil)
+			} else if data.Len() < int(rr.MinimumCount()) {
+				resp = smb2.NewErrorResponse(rr, smb2.STATUS_END_OF_FILE, nil)
+			} else {
+				resp = &smb2.ReadResponse{}
+				resp.FromRequest(rr)
+				resp.(*smb2.ReadResponse).Generate(data.Bytes(), rr.Padding())
+				resp.Header().SetAsyncID(asyncID)
+				resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
+			}
+
+			c.mu.Lock()
+			delete(c.requestList, resp.Header().MessageID())
+			delete(c.asyncCommandList, asyncID)
+			c.mu.Unlock()
+
+			c.server.writeResponse(c, ss, resp)
+		}()
 
 		return resp, ss, nil
 

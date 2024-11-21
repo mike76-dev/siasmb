@@ -43,7 +43,6 @@ type server struct {
 
 	listener net.Listener
 	mu       sync.Mutex
-	once     sync.Once
 }
 
 func newServer(l net.Listener) *server {
@@ -102,7 +101,7 @@ func (s *server) closeConnection(c *connection) {
 	delete(s.connectionList, c.clientName)
 	s.mu.Unlock()
 	c.conn.Close()
-	s.once.Do(func() { close(c.closeChan) })
+	c.once.Do(func() { close(c.closeChan) })
 }
 
 func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResponse) {
