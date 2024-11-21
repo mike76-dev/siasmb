@@ -436,7 +436,7 @@ func FileFsAttributeInfo() []byte {
 }
 
 func FileFsSizeInfo(spu int) []byte {
-	info := make([]byte, 32)
+	info := make([]byte, 24)
 	units := totalSize / ClusterSize / uint64(spu)
 	binary.LittleEndian.PutUint64(info[:8], units)
 	binary.LittleEndian.PutUint64(info[8:16], units)

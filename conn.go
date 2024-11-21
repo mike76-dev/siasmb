@@ -14,9 +14,13 @@ import (
 	"time"
 
 	"github.com/mike76-dev/siasmb/ntlm"
+	"github.com/mike76-dev/siasmb/rpc"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/spnego"
 	"github.com/mike76-dev/siasmb/utils"
+	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
+	"github.com/oiweiwei/go-msrpc/ndr"
+	"go.sia.tech/renterd/api"
 )
 
 var (
@@ -100,7 +104,12 @@ func (c *connection) acceptRequest(msg []byte) error {
 			c.grantCredits(mid, 1)
 		} else {
 			mid = req.Header().MessageID()
-			c.grantCredits(mid, req.Header().CreditRequest())
+			credits := req.Header().CreditRequest()
+			if credits == 0 {
+				credits = 1
+			}
+
+			c.grantCredits(mid, credits)
 			if req.Header().Command() == smb2.SMB2_CANCEL {
 				if err := c.cancelRequest(req); err != nil {
 					log.Printf("Couldn't cancel request %d:, %v\n", req.Header().Command(), err)
@@ -380,14 +389,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		if tc.share.name == "ipc$" {
-			c.server.mu.Lock()
-			c.server.stats.permErrors++
-			c.server.mu.Unlock()
-			resp := smb2.NewErrorResponse(cr, smb2.STATUS_ACCESS_DENIED, nil)
-			return resp, ss, nil
-		}
-
 		contexts, err := cr.CreateContexts()
 		if err != nil {
 			resp := smb2.NewErrorResponse(cr, smb2.STATUS_INVALID_PARAMETER, nil)
@@ -412,29 +413,44 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		co = co &^ smb2.FILE_OPEN_FOR_FREE_SPACE_QUERY
 		cr.SetCreateOptions(co)
 
-		access := grantAccess(cr, tc, ss)
-		if !access {
-			resp := smb2.NewErrorResponse(cr, smb2.STATUS_ACCESS_DENIED, nil)
-			c.server.mu.Lock()
-			c.server.stats.permErrors++
-			c.server.mu.Unlock()
-			return resp, ss, nil
-		}
-
 		ctx, cancel := context.WithCancel(context.Background())
+		var info api.ObjectMetadata
 
-		info, err := tc.share.client.GetObjectInfo(ctx, tc.share.bucket, path)
-		if err != nil {
-			log.Printf("Error getting object info (bucket: %s, path: %s): %v\n", tc.share.bucket, path, err)
-			if errors.Is(err, context.DeadlineExceeded) {
+		if tc.share.name == "ipc$" {
+			if strings.ToLower(path) == "srvsvc" || strings.ToLower(path) == "lsarpc" {
+				info = api.ObjectMetadata{Name: path}
+			} else {
 				cancel()
-				resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, nil)
+				c.server.mu.Lock()
+				c.server.stats.permErrors++
+				c.server.mu.Unlock()
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_ACCESS_DENIED, nil)
+				return resp, ss, nil
+			}
+		} else {
+			access := grantAccess(cr, tc, ss)
+			if !access {
+				cancel()
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_ACCESS_DENIED, nil)
+				c.server.mu.Lock()
+				c.server.stats.permErrors++
+				c.server.mu.Unlock()
 				return resp, ss, nil
 			}
 
-			cancel()
-			resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
-			return resp, ss, nil
+			info, err = tc.share.client.GetObjectInfo(ctx, tc.share.bucket, path)
+			if err != nil {
+				log.Printf("Error getting object info (bucket: %s, path: %s): %v\n", tc.share.bucket, path, err)
+				if errors.Is(err, context.DeadlineExceeded) {
+					cancel()
+					resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, nil)
+					return resp, ss, nil
+				}
+
+				cancel()
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
+				return resp, ss, nil
+			}
 		}
 
 		op := ss.registerOpen(cr, tc, info, ctx, cancel)
@@ -647,6 +663,15 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.mu.Lock()
+		tc, found := ss.treeConnectTable[ir.Header().TreeID()]
+		ss.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
 		ss.idleTime = time.Now()
 		if ir.MaxInputResponse() > uint32(c.maxTransactSize) || ir.MaxOutputResponse() > uint32(c.maxTransactSize) || len(ir.InputBuffer()) > int(c.maxTransactSize) {
 			resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
@@ -665,6 +690,108 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		case smb2.FSCTL_DFS_GET_REFERRALS:
 			resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_FOUND, nil)
 			return resp, ss, nil
+		case smb2.FSCTL_PIPE_TRANSCEIVE:
+			if tc.share.name != "ipc$" {
+				resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
+				return resp, ss, nil
+			}
+
+			var op *open
+			id := ir.FileID()
+			fid := binary.LittleEndian.Uint64(id[:8])
+			dfid := binary.LittleEndian.Uint64(id[8:16])
+			ss.mu.Lock()
+			op, found = ss.openTable[fid]
+			ss.mu.Unlock()
+			if !found || op.durableFileID != dfid {
+				if req.GroupID() > 0 {
+					op = c.findOpen(req.GroupID())
+				}
+
+				if op == nil {
+					resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
+					return resp, ss, nil
+				}
+
+				id = op.id()
+			}
+
+			req.SetOpenID(id)
+			ip := rpc.InboundPacket{}
+			ip.Read(bytes.NewBuffer(ir.InputBuffer()))
+
+			var packet *rpc.OutboundPacket
+			switch ip.Header.PacketType {
+			case rpc.PACKET_TYPE_BIND:
+				packet = rpc.NewBindAck(ip.Header.CallID, "\\pipe\\lsass")
+			case rpc.PACKET_TYPE_REQUEST:
+				body := ip.Body.(*rpc.Request)
+				switch body.OpNum {
+				case rpc.LSA_GET_USER_NAME:
+					packet = rpc.NewGetUserNameResponse(
+						ip.Header.CallID,
+						c.ntlmServer.Session().User(),
+						c.ntlmServer.Session().Domain(),
+						smb2.STATUS_OK,
+					)
+				case rpc.LSA_OPEN_POLICY_2:
+					ctx := c.ntlmServer.Session().GetSecurityContext()
+					frame := op.newLSAFrame(ctx)
+					packet = rpc.NewOpenPolicy2Response(
+						ip.Header.CallID,
+						frame,
+						smb2.STATUS_OK,
+					)
+				case rpc.LSA_LOOKUP_NAMES:
+					var request lsarpc.LookupNamesRequest
+					if err := ndr.Unmarshal(ip.Payload, &request); err != nil {
+						log.Println("Error decoding request:", err)
+					} else {
+						op.mu.Lock()
+						frame, ok := op.lsaFrames[request.Policy.UUID.Data1]
+						op.mu.Unlock()
+						if !ok {
+							resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
+							return resp, ss, nil
+						}
+
+						packet = rpc.NewLookupNamesResponse(
+							ip.Header.CallID,
+							frame.SecurityContext,
+							smb2.STATUS_OK,
+						)
+					}
+				case rpc.LSA_CLOSE:
+					var request lsarpc.CloseRequest
+					if err := ndr.Unmarshal(ip.Payload, &request); err != nil {
+						log.Println("Error decoding request:", err)
+					} else {
+						op.mu.Lock()
+						_, ok := op.lsaFrames[request.Object.UUID.Data1]
+						delete(op.lsaFrames, request.Object.UUID.Data1)
+						op.mu.Unlock()
+						if !ok {
+							resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
+							return resp, ss, nil
+						}
+
+						packet = rpc.NewCloseResponse(
+							ip.Header.CallID,
+							smb2.STATUS_OK,
+						)
+					}
+				default:
+				}
+			default:
+			}
+
+			var buf bytes.Buffer
+			packet.Write(&buf)
+			resp := &smb2.IoctlResponse{}
+			resp.FromRequest(ir)
+			resp.Generate(ir.CtlCode(), id, 0, buf.Bytes())
+			return resp, ss, nil
+
 		default:
 			resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
 			return resp, ss, nil
@@ -783,6 +910,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			op.searchResults = op.searchResults[num:]
 		} else {
 			if err := op.queryDirectory(searchPath); err != nil {
+				if errors.Is(err, errNoFiles) {
+					resp := smb2.NewErrorResponse(qdr, smb2.STATUS_NO_SUCH_FILE, nil)
+					return resp, ss, nil
+				}
+
 				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, ss, nil
 			}
@@ -794,7 +926,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 			var num int
-			buf, num = smb2.QueryDirectoryBuffer(op.searchResults, qdr.OutputBufferLength(), single, true, id, pid, time.Time(ct), time.Time(pct))
+			buf, num = smb2.QueryDirectoryBuffer(op.searchResults, qdr.OutputBufferLength(), single, qdr.FileName() == "*", id, pid, time.Time(ct), time.Time(pct))
 			op.searchResults = op.searchResults[num:]
 		}
 
