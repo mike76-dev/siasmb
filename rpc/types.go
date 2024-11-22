@@ -1,12 +1,14 @@
 package rpc
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 
 	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
+	"github.com/oiweiwei/go-msrpc/ndr"
 )
 
 type Encoder interface {
@@ -272,4 +274,56 @@ func (resp *Response) Decode(r io.Reader) {
 type Frame struct {
 	Handle          lsarpc.Handle
 	SecurityContext ntlm.SecurityContext
+}
+
+type NetShareGetInfoRequest struct {
+	Server string
+	Share  string
+	Level  uint32
+}
+
+func (req *NetShareGetInfoRequest) Unmarshal(buf []byte) {
+	srvLength := binary.LittleEndian.Uint32(buf[12:16])
+	req.Server = utils.DecodeToString(buf[16 : 16+srvLength*2-2])
+	off := 16 + srvLength*2
+	shLength := binary.LittleEndian.Uint32(buf[off+8 : off+12])
+	req.Share = utils.DecodeToString(buf[off+12 : off+12+shLength*2-2])
+	off += 12 + shLength*2
+	off = uint32(utils.Roundup(int(off), 4))
+	req.Level = binary.LittleEndian.Uint32(buf[off : off+4])
+}
+
+type NetShareInfo1Response struct {
+	Share   string
+	Type    uint32
+	Comment string
+	Result  uint32
+}
+
+func (resp *NetShareInfo1Response) MarshalNDR(ctx context.Context, w ndr.Writer) error {
+	var buf []byte
+	buf = binary.LittleEndian.AppendUint32(buf, 1)
+	buf = binary.LittleEndian.AppendUint32(buf, 0x00020004)
+	buf = binary.LittleEndian.AppendUint32(buf, 0x00020008)
+	buf = binary.LittleEndian.AppendUint32(buf, resp.Type)
+	buf = binary.LittleEndian.AppendUint32(buf, 0x0002000c)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(resp.Share)+1))
+	buf = binary.LittleEndian.AppendUint32(buf, 0)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(resp.Share)+1))
+	buf = append(buf, utils.EncodeStringToBytes(resp.Share)...)
+	buf = append(buf, 0, 0)
+	padLen := utils.Roundup(len(buf), 4) - len(buf)
+	padding := make([]byte, padLen)
+	buf = append(buf, padding...)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(resp.Comment)+1))
+	buf = binary.LittleEndian.AppendUint32(buf, 0)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(resp.Comment)+1))
+	buf = append(buf, utils.EncodeStringToBytes(resp.Comment)...)
+	buf = append(buf, 0, 0)
+	padLen = utils.Roundup(len(buf), 4) - len(buf)
+	padding = make([]byte, padLen)
+	buf = append(buf, padding...)
+	buf = binary.LittleEndian.AppendUint32(buf, resp.Result)
+	_, err := w.Write(buf)
+	return err
 }

@@ -2,10 +2,13 @@
 package rpc
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"io"
 	"log"
 
 	"github.com/mike76-dev/siasmb/ntlm"
+	"github.com/oiweiwei/go-msrpc/dcerpc"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
 	"github.com/oiweiwei/go-msrpc/ndr"
@@ -16,6 +19,8 @@ const (
 	LSA_LOOKUP_NAMES  = 0x000e
 	LSA_OPEN_POLICY_2 = 0x002c
 	LSA_GET_USER_NAME = 0x002d
+
+	NET_SHARE_GET_INFO = 0x0010
 )
 
 type ResponseBody struct {
@@ -35,22 +40,45 @@ func (rb *ResponseBody) Encode(w io.Writer) {
 	w.Write(payload)
 }
 
-func NewBindAck(callID uint32, addr string) *OutboundPacket {
+func NewBindAck(callID uint32, addr string, contexts []*Context) *OutboundPacket {
+	var results []*Result
+	for _, ctx := range contexts {
+		for _, ts := range ctx.TransferSyntaxes {
+			switch ts.IfUUID {
+			case [16]byte(NDR32):
+				results = append(results, &Result{TransferSyntax: ts})
+			case [16]byte(NDR64):
+				results = append(results, &Result{
+					DefResult:      uint16(dcerpc.ProviderRejection),
+					ProviderReason: uint16(dcerpc.ProposedTransferSyntaxesNotSupported),
+					TransferSyntax: &SyntaxID{},
+				})
+			case [16]byte(BIND_TIME_FEATURES):
+				results = append(results, &Result{
+					DefResult:      uint16(dcerpc.NegotiateAck),
+					ProviderReason: 0x0003,
+					TransferSyntax: &SyntaxID{},
+				})
+			default:
+				results = append(results, &Result{
+					DefResult:      uint16(dcerpc.ProviderRejection),
+					ProviderReason: uint16(dcerpc.ProposedTransferSyntaxesNotSupported),
+					TransferSyntax: &SyntaxID{},
+				})
+			}
+		}
+	}
+
+	ag := make([]byte, 4)
+	rand.Read(ag)
 	packet := &OutboundPacket{
 		Header: NewHeader(PACKET_TYPE_BIND_ACK, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),
 		Body: &BindAck{
-			MaxXmitFrag: 0xffff,
-			MaxRecvFrag: 0xffff,
-			PortSpec:    addr,
-			ResultList: []*Result{
-				{
-					TransferSyntax: &SyntaxID{
-						IfUUID:         [16]byte(LSARPC),
-						IfVersionMajor: 2,
-						IfVersionMinor: 0,
-					},
-				},
-			},
+			MaxXmitFrag:  0xffff,
+			MaxRecvFrag:  0xffff,
+			AssocGroupID: binary.LittleEndian.Uint32(ag),
+			PortSpec:     addr,
+			ResultList:   results,
 		},
 	}
 
@@ -138,6 +166,20 @@ func NewCloseResponse(callID uint32, status uint32) *OutboundPacket {
 		Body: &ResponseBody{
 			Payload: &lsarpc.CloseResponse{
 				Return: int32(status),
+			},
+		},
+	}
+
+	return packet
+}
+
+func NewNetShareGetInfo1Response(callID uint32, share string, status uint32) *OutboundPacket {
+	packet := &OutboundPacket{
+		Header: NewHeader(PACKET_TYPE_RESPONSE, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),
+		Body: &ResponseBody{
+			Payload: &NetShareInfo1Response{
+				Share:  share,
+				Result: status,
 			},
 		},
 	}

@@ -616,6 +616,29 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		if strings.ToLower(op.fileName) == "srvsvc" {
+			if op.srvsrcData != nil {
+				ip := rpc.InboundPacket{}
+				ip.Read(bytes.NewBuffer(op.srvsrcData))
+
+				var packet *rpc.OutboundPacket
+				switch ip.Header.PacketType {
+				case rpc.PACKET_TYPE_BIND:
+					body := ip.Body.(*rpc.Bind)
+					packet = rpc.NewBindAck(ip.Header.CallID, "\\pipe\\srvsvc", body.ContextList)
+				default:
+				}
+
+				var buf bytes.Buffer
+				packet.Write(&buf)
+				resp := &smb2.ReadResponse{}
+				resp.FromRequest(rr)
+				resp.Generate(buf.Bytes(), rr.Padding())
+				op.srvsrcData = nil
+				return resp, ss, nil
+			}
+		}
+
 		if rr.Offset() >= op.size {
 			resp := smb2.NewErrorResponse(rr, smb2.STATUS_END_OF_FILE, nil)
 			return resp, ss, nil
@@ -664,6 +687,80 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			c.server.writeResponse(c, ss, resp)
 		}()
 
+		return resp, ss, nil
+
+	case smb2.SMB2_WRITE:
+		wr := smb2.WriteRequest{Request: *req}
+		if err := wr.Validate(); err != nil {
+			log.Println("Invalid SMB2_WRITE request:", err)
+			return nil, nil, err
+		}
+
+		c.mu.Lock()
+		ss, found := c.sessionTable[wr.Header().SessionID()]
+		c.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(wr, smb2.STATUS_USER_SESSION_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		/*ss.mu.Lock()
+		tc, found := ss.treeConnectTable[wr.Header().TreeID()]
+		ss.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}*/
+
+		ss.idleTime = time.Now()
+		length := uint64(len(wr.Buffer()))
+		if length > c.maxWriteSize {
+			resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		var op *open
+		id := wr.FileID()
+		fid := binary.LittleEndian.Uint64(id[:8])
+		dfid := binary.LittleEndian.Uint64(id[8:16])
+		ss.mu.Lock()
+		op, found = ss.openTable[fid]
+		ss.mu.Unlock()
+		if !found || op.durableFileID != dfid {
+			if req.GroupID() > 0 {
+				op = c.findOpen(req.GroupID())
+			}
+
+			if op == nil {
+				resp := smb2.NewErrorResponse(wr, smb2.STATUS_FILE_CLOSED, nil)
+				return resp, ss, nil
+			}
+
+			id = op.id()
+		}
+
+		req.SetOpenID(id)
+
+		if (length <= op.size && op.grantedAccess&smb2.FILE_WRITE_DATA == 0) || op.grantedAccess&smb2.FILE_APPEND_DATA == 0 {
+			resp := smb2.NewErrorResponse(wr, smb2.STATUS_ACCESS_DENIED, nil)
+			return resp, ss, nil
+		}
+
+		if strings.ToLower(op.fileName) == "srvsvc" {
+			buf := make([]byte, len(wr.Buffer()))
+			copy(buf, wr.Buffer())
+			op.mu.Lock()
+			op.srvsrcData = buf
+			op.mu.Unlock()
+			resp := &smb2.WriteResponse{}
+			resp.FromRequest(wr)
+			resp.Generate(uint32(len(buf)))
+			return resp, ss, nil
+		}
+
+		resp := smb2.NewErrorResponse(wr, smb2.STATUS_NOT_SUPPORTED, nil) //TODO
 		return resp, ss, nil
 
 	case smb2.SMB2_IOCTL:
@@ -746,7 +843,17 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			var packet *rpc.OutboundPacket
 			switch ip.Header.PacketType {
 			case rpc.PACKET_TYPE_BIND:
-				packet = rpc.NewBindAck(ip.Header.CallID, "\\pipe\\lsass")
+				var addr string
+				switch strings.ToLower(op.fileName) {
+				case "lsarpc":
+					addr = "\\pipe\\lsass"
+				case "srvsvc":
+					addr = "\\pipe\\srvsvc"
+				}
+
+				body := ip.Body.(*rpc.Bind)
+				packet = rpc.NewBindAck(ip.Header.CallID, addr, body.ContextList)
+
 			case rpc.PACKET_TYPE_REQUEST:
 				body := ip.Body.(*rpc.Request)
 				switch body.OpNum {
@@ -757,6 +864,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						c.ntlmServer.Session().Domain(),
 						smb2.STATUS_OK,
 					)
+
 				case rpc.LSA_OPEN_POLICY_2:
 					ctx := c.ntlmServer.Session().GetSecurityContext()
 					frame := op.newLSAFrame(ctx)
@@ -765,6 +873,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						frame,
 						smb2.STATUS_OK,
 					)
+
 				case rpc.LSA_LOOKUP_NAMES:
 					var request lsarpc.LookupNamesRequest
 					if err := ndr.Unmarshal(ip.Payload, &request); err != nil {
@@ -784,6 +893,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 							smb2.STATUS_OK,
 						)
 					}
+
 				case rpc.LSA_CLOSE:
 					var request lsarpc.CloseRequest
 					if err := ndr.Unmarshal(ip.Payload, &request); err != nil {
@@ -803,8 +913,21 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 							smb2.STATUS_OK,
 						)
 					}
+
+				case rpc.NET_SHARE_GET_INFO:
+					var request rpc.NetShareGetInfoRequest
+					request.Unmarshal(ip.Payload)
+					if request.Level == 1 {
+						packet = rpc.NewNetShareGetInfo1Response(
+							ip.Header.CallID,
+							request.Share,
+							smb2.STATUS_OK,
+						)
+					}
+
 				default:
 				}
+
 			default:
 			}
 
@@ -1095,6 +1218,8 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			switch qir.FileInfoClass() {
 			case smb2.FileAllInformation:
 				info = op.fileAllInformation()
+			case smb2.FileStandardInformation:
+				info = op.fileStandardInformation()
 			case smb2.FileNetworkOpenInformation:
 				info = op.fileNetworkOpenInformation()
 			default:

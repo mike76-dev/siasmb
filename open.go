@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -55,8 +56,9 @@ type open struct {
 	lastSearch    string
 	searchResults []api.ObjectMetadata
 
-	lsaFrames map[uint32]*rpc.Frame
-	mu        sync.Mutex
+	lsaFrames  map[uint32]*rpc.Frame
+	srvsrcData []byte
+	mu         sync.Mutex
 }
 
 func grantAccess(cr smb2.CreateRequest, tc *treeConnect, ss *session) bool {
@@ -108,7 +110,17 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		copy(buf, tc.share.name)
 	}
 
-	filepath, filename, isDir := utils.ExtractFilename(info.Name)
+	var filepath, filename string
+	var isDir bool
+	access := tc.maximalAccess
+	name := strings.ToLower(info.Name)
+	if name == "lsarpc" || name == "srvsvc" {
+		filename = name
+		access = cr.DesiredAccess()
+	} else {
+		filepath, filename, isDir = utils.ExtractFilename(info.Name)
+	}
+
 	op := &open{
 		handle:            binary.LittleEndian.Uint64(buf[:8]),
 		fileID:            binary.LittleEndian.Uint64(id[:8]),
@@ -119,7 +131,7 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		oplockLevel:       smb2.OPLOCK_LEVEL_NONE,
 		oplockState:       smb2.OplockNone,
 		durableOwner:      ss.userName,
-		grantedAccess:     tc.maximalAccess,
+		grantedAccess:     access,
 		currentEaIndex:    1,
 		currentQuotaIndex: 1,
 		fileName:          filename,
@@ -206,7 +218,13 @@ func (op *open) id() []byte {
 
 func (op *open) fileAllInformation() []byte {
 	var size, alloc uint64
-	if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
+	var lc uint32
+	var pd bool
+	if strings.ToLower(op.fileName) == "srvsvc" {
+		alloc = 4096
+		lc = 1
+		pd = true
+	} else if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
 		size = op.size
 		alloc = (op.size + (smb2.ClusterSize - 1)) &^ (smb2.ClusterSize - 1)
 	}
@@ -221,6 +239,8 @@ func (op *open) fileAllInformation() []byte {
 		StandardInfo: smb2.FileStandardInfo{
 			AllocationSize: alloc,
 			EndOfFile:      size,
+			NumberOfLinks:  lc,
+			DeletePending:  pd,
 			Directory:      op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
 		},
 		InternalInfo: smb2.FileInternalInfo{
@@ -237,6 +257,28 @@ func (op *open) fileAllInformation() []byte {
 		},
 	}
 	return fai.Encode()
+}
+
+func (op *open) fileStandardInformation() []byte {
+	var size, alloc uint64
+	var lc uint32
+	var pd bool
+	if strings.ToLower(op.fileName) == "srvsvc" {
+		alloc = 4096
+		lc = 1
+		pd = true
+	} else if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
+		size = op.size
+		alloc = (op.size + (smb2.ClusterSize - 1)) &^ (smb2.ClusterSize - 1)
+	}
+	fsi := smb2.FileStandardInfo{
+		AllocationSize: alloc,
+		EndOfFile:      size,
+		NumberOfLinks:  lc,
+		DeletePending:  pd,
+		Directory:      op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
+	}
+	return fsi.Encode()
 }
 
 func (op *open) fileNetworkOpenInformation() []byte {
