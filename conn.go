@@ -1519,6 +1519,16 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					op.fileAttributes = fbi.FileAttributes
 				}
 
+			case smb2.FileDispositionInformation:
+				if op.grantedAccess&smb2.DELETE == 0 {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_ACCESS_DENIED, nil)
+					return resp, ss, nil
+				}
+
+				if sir.Buffer()[0] == 1 {
+					op.createOptions |= smb2.FILE_DELETE_ON_CLOSE
+				}
+
 			default:
 				resp := smb2.NewErrorResponse(sir, smb2.STATUS_NOT_SUPPORTED, nil)
 				return resp, ss, nil
