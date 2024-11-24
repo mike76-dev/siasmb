@@ -1550,6 +1550,35 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					op.createOptions |= smb2.FILE_DELETE_ON_CLOSE
 				}
 
+			case smb2.FileRenameInformation:
+				if op.grantedAccess&smb2.DELETE == 0 {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_ACCESS_DENIED, nil)
+					return resp, ss, nil
+				}
+
+				var fri smb2.FileRenameInfo
+				if err := fri.Decode(sir.Buffer()); err != nil {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_INFO_LENGTH_MISMATCH, nil)
+					return resp, ss, nil
+				}
+
+				if fri.RootDirectory != 0 {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, nil)
+					return resp, ss, nil
+				}
+
+				if err := tc.share.client.RenameObject(
+					op.ctx,
+					tc.share.bucket,
+					op.pathName,
+					fri.FileName,
+					op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
+					fri.ReplaceIfExists,
+				); err != nil {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_OBJECT_NAME_COLLISION, nil)
+					return resp, ss, nil
+				}
+
 			default:
 				resp := smb2.NewErrorResponse(sir, smb2.STATUS_NOT_SUPPORTED, nil)
 				return resp, ss, nil

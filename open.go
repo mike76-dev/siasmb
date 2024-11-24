@@ -156,6 +156,7 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 
 	if isDir {
 		op.fileAttributes |= smb2.FILE_ATTRIBUTE_DIRECTORY
+		op.fileAttributes = op.fileAttributes &^ smb2.FILE_ATTRIBUTE_NORMAL
 	}
 
 	ss.mu.Lock()

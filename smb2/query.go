@@ -650,3 +650,28 @@ func (fnoi FileNetworkOpenInfo) Encode() []byte {
 	binary.LittleEndian.PutUint32(buf[48:52], fnoi.FileAttributes)
 	return buf
 }
+
+type FileRenameInfo struct {
+	ReplaceIfExists bool
+	RootDirectory   uint64
+	FileName        string
+}
+
+func (fri *FileRenameInfo) Decode(buf []byte) error {
+	if len(buf) < 20 {
+		return ErrInvalidParameter
+	}
+
+	if buf[0] > 0 {
+		fri.ReplaceIfExists = true
+	}
+
+	fri.RootDirectory = binary.LittleEndian.Uint64(buf[8:16])
+	length := binary.LittleEndian.Uint32(buf[16:20])
+	if len(buf) < 20+int(length) {
+		return ErrInvalidParameter
+	}
+
+	fri.FileName = utils.DecodeToString(buf[20 : 20+length])
+	return nil
+}

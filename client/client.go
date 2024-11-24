@@ -323,7 +323,24 @@ func (c *Client) MakeDirectory(ctx context.Context, bucket, path string) (err er
 	path += "/"
 	values := make(url.Values)
 	values.Set("bucket", bucket)
-	err = c.c.WithContext(ctx).PUT(fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path), nil)
+	return
+}
+
+func (c *Client) RenameObject(ctx context.Context, bucket, oldName, newName string, isDir, force bool) (err error) {
+	mode := api.ObjectsRenameModeSingle
+	if isDir {
+		oldName += "/"
+		newName += "/"
+		mode = api.ObjectsRenameModeMulti
+	}
+	err = c.c.WithContext(ctx).POST("/api/bus/objects/rename", api.ObjectsRenameRequest{
+		Bucket: bucket,
+		Force:  force,
+		From:   "/" + oldName,
+		To:     "/" + newName,
+		Mode:   mode,
+	}, nil)
+	fmt.Printf("Renaming object: bucket=%s, from=%s, to=%s, isDir=%v, force=%v, err=%v\n", bucket, oldName, newName, isDir, force, err) //TODO
 	return
 }
 
