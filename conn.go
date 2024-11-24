@@ -471,6 +471,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				if err != nil {
 					info = api.ObjectMetadata{Name: "/" + path, ModTime: api.TimeRFC3339(time.Now())}
 					result = smb2.FILE_CREATED
+					if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 {
+						info.Name += "/"
+						if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
+							resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
+							return resp, ss, nil
+						}
+					}
 				} else {
 					cancel()
 					resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_COLLISION, nil)
@@ -480,6 +487,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				if err != nil {
 					info = api.ObjectMetadata{Name: "/" + path, ModTime: api.TimeRFC3339(time.Now())}
 					result = smb2.FILE_CREATED
+					if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 {
+						info.Name += "/"
+						if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
+							resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
+							return resp, ss, nil
+						}
+					}
 				} else {
 					result = smb2.FILE_OPENED
 				}
@@ -497,6 +511,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				if err != nil {
 					info = api.ObjectMetadata{Name: "/" + path, ModTime: api.TimeRFC3339(time.Now())}
 					result = smb2.FILE_CREATED
+					if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 {
+						info.Name += "/"
+						if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
+							resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
+							return resp, ss, nil
+						}
+					}
 				} else {
 					info.ModTime = api.TimeRFC3339(time.Now())
 					info.Size = 0

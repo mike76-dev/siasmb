@@ -317,6 +317,16 @@ func (c *Client) DeleteObject(ctx context.Context, bucket, path string, batch bo
 	return
 }
 
+func (c *Client) MakeDirectory(ctx context.Context, bucket, path string) (err error) {
+	path = strings.ReplaceAll(path, "\\", "/")
+	path = api.ObjectPathEscape(path)
+	path += "/"
+	values := make(url.Values)
+	values.Set("bucket", bucket)
+	err = c.c.WithContext(ctx).PUT(fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path), nil)
+	return
+}
+
 func sizeFromSeeker(r io.Reader) (int64, error) {
 	s, ok := r.(io.Seeker)
 	if !ok {
