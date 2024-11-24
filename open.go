@@ -25,6 +25,14 @@ var (
 	errNoFiles     = errors.New("no files found")
 )
 
+type upload struct {
+	uploadID  string
+	partCount int
+	parts     []api.MultipartCompletedPart
+	totalSize uint64
+	mu        sync.Mutex
+}
+
 type open struct {
 	handle                      uint64
 	fileID                      uint64
@@ -55,6 +63,7 @@ type open struct {
 	cancel        context.CancelFunc
 	lastSearch    string
 	searchResults []api.ObjectMetadata
+	pendingUpload *upload
 
 	lsaFrames  map[uint32]*rpc.Frame
 	srvsrcData []byte
@@ -107,7 +116,7 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		}
 	} else {
 		buf = make([]byte, 8)
-		copy(buf, tc.share.name)
+		rand.Read(buf)
 	}
 
 	var filepath, filename string
@@ -137,7 +146,7 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		fileName:          filename,
 		pathName:          filepath,
 		createOptions:     cr.CreateOptions(),
-		fileAttributes:    cr.FileAttributes(),
+		fileAttributes:    smb2.FILE_ATTRIBUTE_NORMAL,
 		lastModified:      time.Time(info.ModTime),
 		size:              uint64(info.Size),
 		ctx:               ctx,

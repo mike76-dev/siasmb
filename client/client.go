@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"go.sia.tech/jape"
@@ -226,4 +228,112 @@ func (c *Client) ReadObject(ctx context.Context, bucket, path string, offset, le
 
 	_, err = io.Copy(buf, resp.Body)
 	return
+}
+
+func (c *Client) StartUpload(ctx context.Context, bucket, path string) (uploadID string, err error) {
+	path = strings.ReplaceAll(path, "\\", "/")
+	var resp api.MultipartCreateResponse
+	if err = c.c.WithContext(ctx).POST("/api/bus/multipart/create", api.MultipartCreateRequest{
+		Bucket: bucket,
+		Path:   "/" + path,
+	}, &resp); err != nil {
+		return
+	}
+	return resp.UploadID, nil
+}
+
+func (c *Client) AbortUpload(ctx context.Context, bucket, path string, uploadID string) (err error) {
+	path = strings.ReplaceAll(path, "\\", "/")
+	err = c.c.WithContext(ctx).POST("/api/bus/multipart/abort", api.MultipartAbortRequest{
+		Bucket:   bucket,
+		Path:     "/" + path,
+		UploadID: uploadID,
+	}, nil)
+	return
+}
+
+func (c *Client) FinishUpload(ctx context.Context, bucket, path string, uploadID string, parts []api.MultipartCompletedPart) (eTag string, err error) {
+	path = strings.ReplaceAll(path, "\\", "/")
+	slices.SortFunc(parts, func(a, b api.MultipartCompletedPart) int { return a.PartNumber - b.PartNumber })
+	var resp api.MultipartCompleteResponse
+	if err = c.c.WithContext(ctx).POST("/api/bus/multipart/complete", api.MultipartCompleteRequest{
+		Bucket:   bucket,
+		Path:     "/" + path,
+		UploadID: uploadID,
+		Parts:    parts,
+	}, &resp); err != nil {
+		return
+	}
+	return resp.ETag, nil
+}
+
+func (c *Client) UploadPart(ctx context.Context, r io.Reader, bucket, path, uploadID string, partNumber int, offset, length uint64) (eTag string, err error) {
+	path = strings.ReplaceAll(path, "\\", "/")
+	path = api.ObjectPathEscape(path)
+	values := make(url.Values)
+	values.Set("bucket", bucket)
+	values.Set("uploadid", uploadID)
+	values.Set("partnumber", fmt.Sprint(partNumber))
+	off := int(offset)
+	opts := api.UploadMultipartUploadPartOptions{
+		EncryptionOffset: &off,
+		ContentLength:    int64(length),
+	}
+
+	opts.Apply(values)
+	u, err := url.Parse(fmt.Sprintf("%v/api/worker/multipart/%v", c.c.BaseURL, path))
+	if err != nil {
+		return
+	}
+	u.RawQuery = values.Encode()
+	req, err := http.NewRequestWithContext(ctx, "PUT", u.String(), r)
+	if err != nil {
+		return
+	}
+	req.SetBasicAuth("", c.c.WithContext(ctx).Password)
+	if length != 0 {
+		req.ContentLength = int64(length)
+	} else if req.ContentLength, err = sizeFromSeeker(r); err != nil {
+		return "", fmt.Errorf("failed to get content length from seeker: %v", err)
+	}
+	header, _, err := doRequest(req, nil)
+	if err != nil {
+		return "", err
+	}
+	return header.Get("ETag"), nil
+}
+
+func sizeFromSeeker(r io.Reader) (int64, error) {
+	s, ok := r.(io.Seeker)
+	if !ok {
+		return 0, nil
+	}
+	size, err := s.Seek(0, io.SeekEnd)
+	if err != nil {
+		return 0, err
+	}
+	_, err = s.Seek(0, io.SeekStart)
+	if err != nil {
+		return 0, err
+	}
+	return size, nil
+}
+
+func doRequest(req *http.Request, resp interface{}) (http.Header, int, error) {
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer r.Body.Close()
+	defer io.Copy(io.Discard, r.Body)
+
+	if r.StatusCode < 200 || r.StatusCode >= 300 {
+		lr := io.LimitReader(r.Body, 1<<20) // 1MiB
+		errMsg, _ := io.ReadAll(lr)
+		return r.Header, r.StatusCode, fmt.Errorf("HTTP error: %s (status: %d)", string(errMsg), r.StatusCode)
+	} else if resp != nil {
+		return r.Header, r.StatusCode, json.NewDecoder(r.Body).Decode(resp)
+	}
+
+	return r.Header, r.StatusCode, nil
 }

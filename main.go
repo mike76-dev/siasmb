@@ -50,7 +50,7 @@ func main() {
 			fs[p.Username] = stores.FlagsFromAccessRights(p)
 		}
 		if err := server.registerShare(sh.Name, sh.ServerName, sh.Password, sh.Bucket, cs, fs, sh.Remark); err != nil {
-			log.Println("Error registering share:", sh.Name)
+			log.Printf("Error registering share %s: %v\n", sh.Name, err)
 		}
 	}
 

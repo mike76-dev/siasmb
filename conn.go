@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"log"
 	"math"
@@ -416,10 +417,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		ctx, cancel := context.WithCancel(context.Background())
 		var info api.ObjectMetadata
-
+		var result uint32
 		if tc.share.name == "ipc$" {
 			if strings.ToLower(path) == "srvsvc" || strings.ToLower(path) == "lsarpc" {
 				info = api.ObjectMetadata{Name: path}
+				result = smb2.FILE_OPENED
 			} else {
 				cancel()
 				c.server.mu.Lock()
@@ -447,10 +449,59 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, nil)
 					return resp, ss, nil
 				}
+			}
 
-				cancel()
-				resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
-				return resp, ss, nil
+			switch cr.CreateDisposition() {
+			case smb2.FILE_SUPERSEDE:
+				if err != nil {
+					info = api.ObjectMetadata{Name: "/" + path, ModTime: api.TimeRFC3339(time.Now())}
+					result = smb2.FILE_SUPERSEDED
+				} else {
+					result = smb2.FILE_OPENED
+				}
+			case smb2.FILE_OPEN:
+				if err != nil {
+					cancel()
+					resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
+					return resp, ss, nil
+				} else {
+					result = smb2.FILE_OPENED
+				}
+			case smb2.FILE_CREATE:
+				if err != nil {
+					info = api.ObjectMetadata{Name: "/" + path, ModTime: api.TimeRFC3339(time.Now())}
+					result = smb2.FILE_CREATED
+				} else {
+					cancel()
+					resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_COLLISION, nil)
+					return resp, ss, nil
+				}
+			case smb2.FILE_OPEN_IF:
+				if err != nil {
+					info = api.ObjectMetadata{Name: "/" + path, ModTime: api.TimeRFC3339(time.Now())}
+					result = smb2.FILE_CREATED
+				} else {
+					result = smb2.FILE_OPENED
+				}
+			case smb2.FILE_OVERWRITE:
+				if err != nil {
+					cancel()
+					resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
+					return resp, ss, nil
+				} else {
+					info.ModTime = api.TimeRFC3339(time.Now())
+					info.Size = 0
+					result = smb2.FILE_OVERWRITTEN
+				}
+			case smb2.FILE_OVERWRITE_IF:
+				if err != nil {
+					info = api.ObjectMetadata{Name: "/" + path, ModTime: api.TimeRFC3339(time.Now())}
+					result = smb2.FILE_CREATED
+				} else {
+					info.ModTime = api.TimeRFC3339(time.Now())
+					info.Size = 0
+					result = smb2.FILE_OVERWRITTEN
+				}
 			}
 		}
 
@@ -478,7 +529,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		resp.FromRequest(cr)
 		resp.Generate(
 			op.oplockLevel,
-			cr.CreateDisposition(),
+			result,
 			op.size,
 			op.lastModified,
 			op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
@@ -705,14 +756,14 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
-		/*ss.mu.Lock()
+		ss.mu.Lock()
 		tc, found := ss.treeConnectTable[wr.Header().TreeID()]
 		ss.mu.Unlock()
 
 		if !found {
 			resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, nil)
 			return resp, ss, nil
-		}*/
+		}
 
 		ss.idleTime = time.Now()
 		length := uint64(len(wr.Buffer()))
@@ -760,7 +811,95 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		resp := smb2.NewErrorResponse(wr, smb2.STATUS_NOT_SUPPORTED, nil) //TODO
+		if op.pendingUpload == nil {
+			resp := smb2.NewErrorResponse(wr, smb2.STATUS_NOT_SUPPORTED, nil)
+			return resp, ss, nil
+		}
+
+		aid := make([]byte, 8)
+		rand.Read(aid)
+		asyncID := binary.LittleEndian.Uint64(aid)
+		c.mu.Lock()
+		c.asyncCommandList[asyncID] = req
+		c.mu.Unlock()
+
+		resp := smb2.NewErrorResponse(wr, smb2.STATUS_PENDING, nil)
+		resp.Header().SetAsyncID(asyncID)
+		resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
+		resp.Header().ClearFlag(smb2.FLAGS_RELATED_OPERATIONS)
+		resp.Header().ClearFlag(smb2.FLAGS_SIGNED)
+		resp.Header()[len(resp.Header())-1] = 0x21
+
+		go func() {
+			var resp smb2.GenericResponse
+			r := bytes.NewReader(wr.Buffer())
+			if op.pendingUpload == nil {
+				resp = smb2.NewErrorResponse(wr, smb2.STATUS_NOT_SUPPORTED, nil)
+			} else {
+				op.pendingUpload.mu.Lock()
+				op.pendingUpload.partCount++
+				count := op.pendingUpload.partCount
+				op.pendingUpload.mu.Unlock()
+				eTag, err := tc.share.client.UploadPart(
+					op.ctx,
+					r,
+					tc.share.bucket,
+					op.pathName,
+					op.pendingUpload.uploadID,
+					count,
+					wr.Offset(),
+					uint64(len(wr.Buffer())),
+				)
+				if err != nil {
+					log.Println("Error writing data:", err)
+					resp = smb2.NewErrorResponse(wr, smb2.STATUS_DATA_ERROR, nil)
+				} else {
+					if op.pendingUpload != nil {
+						op.pendingUpload.mu.Lock()
+						op.pendingUpload.parts = append(op.pendingUpload.parts, api.MultipartCompletedPart{
+							PartNumber: count,
+							ETag:       eTag,
+						})
+						op.pendingUpload.totalSize += uint64(len(wr.Buffer()))
+						size := op.pendingUpload.totalSize
+						op.pendingUpload.mu.Unlock()
+						if size >= op.size {
+							eTag, err = tc.share.client.FinishUpload(
+								op.ctx,
+								tc.share.bucket,
+								op.pathName,
+								op.pendingUpload.uploadID,
+								op.pendingUpload.parts,
+							)
+							if err != nil {
+								log.Println("Error completing write:", err)
+								resp = smb2.NewErrorResponse(wr, smb2.STATUS_DATA_ERROR, nil)
+							} else {
+								op.pendingUpload = nil
+								buf, err := hex.DecodeString(eTag)
+								if err == nil && len(buf) >= 8 {
+									op.handle = binary.LittleEndian.Uint64(buf[:8])
+								}
+							}
+						}
+
+						resp = &smb2.WriteResponse{}
+						resp.FromRequest(wr)
+						resp.(*smb2.WriteResponse).Generate(uint32(len(wr.Buffer())))
+						resp.Header().SetAsyncID(asyncID)
+						resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
+					}
+				}
+			}
+
+			c.mu.Lock()
+			delete(c.requestList, resp.Header().MessageID())
+			delete(c.asyncCommandList, asyncID)
+			c.mu.Unlock()
+
+			c.server.writeResponse(c, ss, resp)
+		}()
+
 		return resp, ss, nil
 
 	case smb2.SMB2_IOCTL:
@@ -1248,6 +1387,135 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		resp := &smb2.QueryInfoResponse{}
 		resp.FromRequest(qir)
 		resp.Generate(info)
+		return resp, ss, nil
+
+	case smb2.SMB2_SET_INFO:
+		sir := smb2.SetInfoRequest{Request: *req}
+		if err := sir.Validate(); err != nil {
+			if errors.Is(err, smb2.ErrInvalidParameter) {
+				resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, nil, nil
+			}
+			log.Println("Invalid SMB2_SET_INFO request:", err)
+			return nil, nil, err
+		}
+
+		c.mu.Lock()
+		ss, found := c.sessionTable[sir.Header().SessionID()]
+		c.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(sir, smb2.STATUS_USER_SESSION_DELETED, nil)
+			return resp, nil, nil
+		}
+
+		ss.mu.Lock()
+		tc, found := ss.treeConnectTable[sir.Header().TreeID()]
+		ss.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		ss.idleTime = time.Now()
+		if len(sir.Buffer()) == 0 || uint64(len(sir.Buffer())) > c.maxTransactSize {
+			resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
+		var op *open
+		id := sir.FileID()
+		fid := binary.LittleEndian.Uint64(id[:8])
+		dfid := binary.LittleEndian.Uint64(id[8:16])
+		ss.mu.Lock()
+		op, found = ss.openTable[fid]
+		ss.mu.Unlock()
+		if !found || op.durableFileID != dfid {
+			if req.GroupID() > 0 {
+				op = c.findOpen(req.GroupID())
+			}
+
+			if op == nil {
+				resp := smb2.NewErrorResponse(sir, smb2.STATUS_FILE_CLOSED, nil)
+				return resp, ss, nil
+			}
+
+			id = op.id()
+		}
+
+		req.SetOpenID(id)
+		switch sir.InfoType() {
+		case smb2.INFO_FILE:
+			switch sir.FileInfoClass() {
+			case smb2.FileEndOfFileInformation:
+				if op.grantedAccess&smb2.FILE_WRITE_DATA == 0 {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_ACCESS_DENIED, nil)
+					return resp, ss, nil
+				}
+
+				if op.pendingUpload != nil {
+					if err := tc.share.client.AbortUpload(op.ctx, tc.share.bucket, op.pathName, op.pendingUpload.uploadID); err != nil {
+						log.Println("Failed to abort upload:", err)
+					}
+				}
+
+				op.pendingUpload = nil
+				id, err := tc.share.client.StartUpload(op.ctx, tc.share.bucket, op.pathName)
+				if err != nil {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_DATA_ERROR, nil)
+					return resp, ss, nil
+				}
+
+				eof := binary.LittleEndian.Uint64(sir.Buffer())
+				op.size = eof
+				op.pendingUpload = &upload{uploadID: id}
+
+			case smb2.FileBasicInformation:
+				if op.grantedAccess&smb2.FILE_WRITE_ATTRIBUTES == 0 {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_ACCESS_DENIED, nil)
+					return resp, ss, nil
+				}
+
+				var fbi smb2.FileBasicInfo
+				if err := fbi.Decode(sir.Buffer()); err != nil {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, nil)
+					return resp, ss, nil
+				}
+
+				var modTime time.Time
+				if !fbi.CreationTime.IsZero() {
+					modTime = fbi.CreationTime
+				}
+
+				if !fbi.LastWriteTime.IsZero() && fbi.LastWriteTime.After(modTime) {
+					modTime = fbi.LastWriteTime
+				}
+
+				if !fbi.ChangeTime.IsZero() && fbi.ChangeTime.After(modTime) {
+					modTime = fbi.ChangeTime
+				}
+
+				if modTime.After(op.lastModified) {
+					op.lastModified = modTime
+				}
+
+				if fbi.FileAttributes != 0 {
+					op.fileAttributes = fbi.FileAttributes
+				}
+
+			default:
+				resp := smb2.NewErrorResponse(sir, smb2.STATUS_NOT_SUPPORTED, nil)
+				return resp, ss, nil
+			}
+
+		default:
+			resp := smb2.NewErrorResponse(sir, smb2.STATUS_NOT_SUPPORTED, nil)
+			return resp, ss, nil
+		}
+
+		resp := &smb2.SetInfoResponse{}
+		resp.FromRequest(sir)
 		return resp, ss, nil
 
 	default:

@@ -54,27 +54,34 @@ const (
 )
 
 const (
-	FileAccessInformation         = 0x08
-	FileAlignmentInformation      = 0x11
-	FileAllInformation            = 0x12
-	FileAlternateNameInformation  = 0x15
-	FileAttributeTagInformation   = 0x23
-	FileBasicInformation          = 0x04
-	FileCompressionInformation    = 0x1c
-	FileEaInformation             = 0x07
-	FileFullEaInformation         = 0x0f
-	FileIdInformation             = 0x3b
-	FileInternalInformation       = 0x06
-	FileModeInformation           = 0x10
-	FileNetworkOpenInformation    = 0x22
-	FileNormalizedNameInformation = 0x30
-	FilePipeInformation           = 0x17
-	FilePipeLocalInformation      = 0x18
-	FilePipeRemoteInformation     = 0x19
-	FilePositionInformation       = 0x0e
-	FileStandardInformation       = 0x05
-	FileStreamInformation         = 0x16
-	FileInfoClass_Reserved        = 0x64
+	FileAccessInformation          = 0x08
+	FileAlignmentInformation       = 0x11
+	FileAllInformation             = 0x12
+	FileAllocationInformation      = 0x13
+	FileAlternateNameInformation   = 0x15
+	FileAttributeTagInformation    = 0x23
+	FileBasicInformation           = 0x04
+	FileCompressionInformation     = 0x1c
+	FileDispositionInformation     = 0x0d
+	FileEaInformation              = 0x07
+	FileEndOfFileInformation       = 0x14
+	FileFullEaInformation          = 0x0f
+	FileIdInformation              = 0x3b
+	FileInternalInformation        = 0x06
+	FileLinkInformation            = 0x0b
+	FileModeInformation            = 0x10
+	FileNetworkOpenInformation     = 0x22
+	FileNormalizedNameInformation  = 0x30
+	FilePipeInformation            = 0x17
+	FilePipeLocalInformation       = 0x18
+	FilePipeRemoteInformation      = 0x19
+	FilePositionInformation        = 0x0e
+	FileRenameInformation          = 0x0a
+	FileShortNameInformation       = 0x28
+	FileStandardInformation        = 0x05
+	FileStreamInformation          = 0x16
+	FileValidDataLengthInformation = 0x27
+	FileInfoClass_Reserved         = 0x64
 
 	FileFsAttributeInformation  = 0x05
 	FileFsControlInformation    = 0x06
@@ -472,6 +479,20 @@ func (fbi FileBasicInfo) Encode() []byte {
 	binary.LittleEndian.PutUint64(buf[24:32], utils.UnixToFiletime(fbi.ChangeTime))
 	binary.LittleEndian.PutUint32(buf[32:36], fbi.FileAttributes)
 	return buf
+}
+
+func (fbi *FileBasicInfo) Decode(buf []byte) error {
+	if len(buf) < 40 {
+		return ErrInvalidParameter
+	}
+
+	fbi.CreationTime = utils.FiletimeToUnix(binary.LittleEndian.Uint64(buf[:8]))
+	fbi.LastAccessTime = utils.FiletimeToUnix(binary.LittleEndian.Uint64(buf[8:16]))
+	fbi.LastWriteTime = utils.FiletimeToUnix(binary.LittleEndian.Uint64(buf[16:24]))
+	fbi.ChangeTime = utils.FiletimeToUnix(binary.LittleEndian.Uint64(buf[24:32]))
+	fbi.FileAttributes = binary.LittleEndian.Uint32(buf[32:36])
+
+	return nil
 }
 
 type FileStandardInfo struct {
