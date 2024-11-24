@@ -303,6 +303,20 @@ func (c *Client) UploadPart(ctx context.Context, r io.Reader, bucket, path, uplo
 	return header.Get("ETag"), nil
 }
 
+func (c *Client) DeleteObject(ctx context.Context, bucket, path string, batch bool) (err error) {
+	path = strings.ReplaceAll(path, "\\", "/")
+	path = api.ObjectPathEscape(path)
+	if batch {
+		path += "/"
+	}
+	values := make(url.Values)
+	values.Set("bucket", bucket)
+	opts := api.DeleteObjectOptions{Batch: batch}
+	opts.Apply(values)
+	err = c.c.WithContext(ctx).DELETE(fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path))
+	return
+}
+
 func sizeFromSeeker(r io.Reader) (int64, error) {
 	s, ok := r.(io.Seeker)
 	if !ok {

@@ -561,12 +561,21 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.mu.Lock()
+		ss.idleTime = time.Now()
+		tc, found := ss.treeConnectTable[cr.Header().TreeID()]
+		ss.mu.Unlock()
+
+		if !found {
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_INVALID_PARAMETER, nil)
+			return resp, ss, nil
+		}
+
 		id := cr.FileID()
 		fid := binary.LittleEndian.Uint64(id[:8])
 		dfid := binary.LittleEndian.Uint64(id[8:16])
 		var op *open
 		ss.mu.Lock()
-		ss.idleTime = time.Now()
 		op, found = ss.openTable[fid]
 		ss.mu.Unlock()
 
@@ -584,6 +593,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		req.SetOpenID(id)
+		if op.createOptions&smb2.FILE_DELETE_ON_CLOSE > 0 {
+			if err := tc.share.client.DeleteObject(op.ctx, tc.share.bucket, op.pathName, op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0); err != nil {
+				log.Println("Error deleting object:", err)
+			}
+		}
+
 		c.server.closeOpen(op)
 
 		toNotify := make(map[uint64]*smb2.Request)
