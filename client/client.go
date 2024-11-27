@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
 	"golang.org/x/crypto/blake2b"
@@ -182,14 +183,50 @@ func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (id, pa
 	return
 }
 
-func (c *Client) SectorPerSlab(ctx context.Context) (sps int, err error) {
-	var resp api.RedundancySettings
+func (c *Client) Redundancy(ctx context.Context) (resp api.RedundancySettings, err error) {
 	err = c.c.WithContext(ctx).GET("/api/bus/setting/redundancy", &resp)
+	return
+}
+
+func (c *Client) contracts(ctx context.Context) (contracts []api.ContractMetadata, err error) {
+	err = c.c.WithContext(ctx).GET("/api/bus/contracts", &contracts)
+	return
+}
+
+func (c *Client) host(ctx context.Context, pk types.PublicKey) (h api.Host, err error) {
+	err = c.c.WithContext(ctx).GET(fmt.Sprintf("/api/bus/host/%s", pk), &h)
+	return
+}
+
+func (c *Client) RemainingStorage(ctx context.Context) (rs uint64, err error) {
+	var contracts []api.ContractMetadata
+	contracts, err = c.contracts(ctx)
 	if err != nil {
 		return
 	}
+	for _, contract := range contracts {
+		if contract.State != api.ContractStateActive {
+			continue
+		}
+		var h api.Host
+		h, err = c.host(ctx, contract.HostKey)
+		if err != nil {
+			return
+		}
+		rs += h.Settings.RemainingStorage
+	}
+	return rs, nil
+}
 
-	return resp.MinShards, nil
+func (c *Client) UsedStorage(ctx context.Context, bucket string) (us uint64, err error) {
+	values := url.Values{}
+	values.Set("bucket", bucket)
+	var osr api.ObjectsStatsResponse
+	err = c.c.WithContext(ctx).GET("/api/bus/stats/objects?"+values.Encode(), &osr)
+	if err != nil {
+		return
+	}
+	return osr.TotalUploadedSize, nil
 }
 
 func (c *Client) ReadObject(ctx context.Context, bucket, path string, offset, length uint64, buf io.Writer) (err error) {

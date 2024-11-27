@@ -130,7 +130,7 @@ const (
 )
 
 const (
-	ClusterSize = uint64(4 * 1024 * 1024)
+	BytesPerSector = 4 * 1024 * 1024
 )
 
 type CreateRequest struct {
@@ -285,8 +285,7 @@ func (cr *CreateResponse) SetFileTime(creation, lastAccess, lastWrite, change ti
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+32:SMB2HeaderSize+40], utils.UnixToFiletime(change))
 }
 
-func (cr *CreateResponse) SetFilesize(size uint64) {
-	allocated := (size + (ClusterSize - 1)) &^ (ClusterSize - 1)
+func (cr *CreateResponse) SetFilesize(size, allocated uint64) {
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+40:SMB2HeaderSize+48], size)
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+48:SMB2HeaderSize+56], allocated)
 }
@@ -353,6 +352,7 @@ func (cr *CreateResponse) Generate(
 	oplockLevel uint8,
 	createAction uint32,
 	size uint64,
+	allocated uint64,
 	modTime time.Time,
 	isDir bool,
 	fileID uint64,
@@ -388,7 +388,7 @@ func (cr *CreateResponse) Generate(
 		cr.SetFileAttributes(FILE_ATTRIBUTE_DIRECTORY)
 	} else {
 		cr.SetFileAttributes(FILE_ATTRIBUTE_NORMAL)
-		cr.SetFilesize(size)
+		cr.SetFilesize(size, allocated)
 	}
 
 	fid := make([]byte, 16)

@@ -543,6 +543,8 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				respContexts[id] = smb2.HandleCreateQueryMaximalAccessRequest(ctx, op.lastModified, op.grantedAccess)
 			case smb2.CREATE_QUERY_ON_DISK_ID:
 				respContexts[id] = smb2.HandleCreateQueryOnDiskID(op.handle, tc.share.volumeID)
+			case smb2.CREATE_ALLOCATION_SIZE:
+				op.allocated = binary.LittleEndian.Uint64(ctx)
 			}
 		}
 
@@ -552,6 +554,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			op.oplockLevel,
 			result,
 			op.size,
+			op.allocated,
 			op.lastModified,
 			op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
 			op.fileID,
@@ -641,7 +644,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		resp := &smb2.CloseResponse{}
 		resp.FromRequest(cr)
-		resp.Generate(op.lastModified, op.size, op.fileAttributes)
+		resp.Generate(op.lastModified, op.size, op.allocated, op.fileAttributes)
 
 		return resp, ss, nil
 
@@ -1408,9 +1411,39 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			case smb2.FileFsAttributeInformation:
 				info = smb2.FileFsAttributeInfo()
 			case smb2.FileFsSizeInformation:
-				info = smb2.FileFsSizeInfo(tc.share.sectorsPerUnit)
+				rs, err := tc.share.client.RemainingStorage(op.ctx)
+				if err != nil {
+					log.Println("Error calculating remaining storage:", err)
+				} else {
+					us, err := tc.share.client.UsedStorage(op.ctx, tc.share.bucket)
+					if err != nil {
+						log.Println("Error calculating used storage:", err)
+					} else {
+						red, err := tc.share.client.Redundancy(op.ctx)
+						if err != nil {
+							log.Println("Error getting redundancy settings:", err)
+						} else {
+							info = smb2.FileFsSizeInfo(rs+us, us, red)
+						}
+					}
+				}
 			case smb2.FileFsFullSizeInformation:
-				info = smb2.FileFsFullSizeInfo(tc.share.sectorsPerUnit)
+				rs, err := tc.share.client.RemainingStorage(op.ctx)
+				if err != nil {
+					log.Println("Error calculating remaining storage:", err)
+				} else {
+					us, err := tc.share.client.UsedStorage(op.ctx, tc.share.bucket)
+					if err != nil {
+						log.Println("Error calculating used storage:", err)
+					} else {
+						red, err := tc.share.client.Redundancy(op.ctx)
+						if err != nil {
+							log.Println("Error getting redundancy settings:", err)
+						} else {
+							info = smb2.FileFsFullSizeInfo(rs+us, us, red)
+						}
+					}
+				}
 			default:
 				resp := smb2.NewErrorResponse(qir, smb2.STATUS_NOT_SUPPORTED, nil)
 				return resp, ss, nil

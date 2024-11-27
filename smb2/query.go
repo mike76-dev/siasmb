@@ -110,10 +110,6 @@ const (
 	SL_INDEX_SPECIFIED     = 0x00000004
 )
 
-const (
-	totalSize = 1024 * 1024 * 1024 * 1024
-)
-
 type QueryDirectoryRequest struct {
 	Request
 }
@@ -272,7 +268,7 @@ func QueryDirectoryBuffer(entries []api.ObjectMetadata, bufSize uint32, single, 
 		} else {
 			di.FileAttributes = FILE_ATTRIBUTE_NORMAL
 			di.EndOfFile = uint64(entry.Size)
-			di.AllocationSize = (uint64(entry.Size) + (ClusterSize - 1)) &^ (ClusterSize - 1)
+			di.AllocationSize = uint64(entry.Size)
 		}
 
 		fid, _ := hex.DecodeString(entry.ETag)
@@ -442,24 +438,32 @@ func FileFsAttributeInfo() []byte {
 	return info
 }
 
-func FileFsSizeInfo(spu int) []byte {
+func FileFsSizeInfo(total, used uint64, redundancy api.RedundancySettings) []byte {
+	spu := uint32(1)
+	if redundancy.MinShards != 0 {
+		spu = uint32(redundancy.TotalShards / redundancy.MinShards)
+	}
+
 	info := make([]byte, 24)
-	units := totalSize / ClusterSize / uint64(spu)
-	binary.LittleEndian.PutUint64(info[:8], units)
-	binary.LittleEndian.PutUint64(info[8:16], units)
-	binary.LittleEndian.PutUint32(info[16:20], uint32(spu))
-	binary.LittleEndian.PutUint32(info[20:24], uint32(ClusterSize))
+	binary.LittleEndian.PutUint64(info[:8], total/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[8:16], (total-used)/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint32(info[16:20], spu)
+	binary.LittleEndian.PutUint32(info[20:24], uint32(BytesPerSector))
 	return info
 }
 
-func FileFsFullSizeInfo(spu int) []byte {
+func FileFsFullSizeInfo(total, used uint64, redundancy api.RedundancySettings) []byte {
+	spu := uint32(1)
+	if redundancy.MinShards != 0 {
+		spu = uint32(redundancy.TotalShards / redundancy.MinShards)
+	}
+
 	info := make([]byte, 32)
-	units := totalSize / ClusterSize / uint64(spu)
-	binary.LittleEndian.PutUint64(info[:8], units)
-	binary.LittleEndian.PutUint64(info[8:16], units)
-	binary.LittleEndian.PutUint64(info[16:24], units)
-	binary.LittleEndian.PutUint32(info[24:28], uint32(spu))
-	binary.LittleEndian.PutUint32(info[28:32], uint32(ClusterSize))
+	binary.LittleEndian.PutUint64(info[:8], total/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[8:16], (total-used)/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[16:24], (total-used)/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint32(info[24:28], spu)
+	binary.LittleEndian.PutUint32(info[28:32], uint32(BytesPerSector))
 	return info
 }
 

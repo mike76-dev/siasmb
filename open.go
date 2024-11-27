@@ -59,6 +59,7 @@ type open struct {
 
 	lastModified  time.Time
 	size          uint64
+	allocated     uint64
 	ctx           context.Context
 	cancel        context.CancelFunc
 	lastSearch    string
@@ -149,6 +150,7 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		fileAttributes:    smb2.FILE_ATTRIBUTE_NORMAL,
 		lastModified:      time.Time(info.ModTime),
 		size:              uint64(info.Size),
+		allocated:         uint64(info.Size),
 		ctx:               ctx,
 		cancel:            cancel,
 		lsaFrames:         make(map[uint32]*rpc.Frame),
@@ -236,7 +238,7 @@ func (op *open) fileAllInformation() []byte {
 		pd = true
 	} else if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
 		size = op.size
-		alloc = (op.size + (smb2.ClusterSize - 1)) &^ (smb2.ClusterSize - 1)
+		alloc = op.allocated
 	}
 	fai := smb2.FileAllInfo{
 		BasicInfo: smb2.FileBasicInfo{
@@ -279,7 +281,7 @@ func (op *open) fileStandardInformation() []byte {
 		pd = true
 	} else if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
 		size = op.size
-		alloc = (op.size + (smb2.ClusterSize - 1)) &^ (smb2.ClusterSize - 1)
+		alloc = op.allocated
 	}
 	fsi := smb2.FileStandardInfo{
 		AllocationSize: alloc,
@@ -295,7 +297,7 @@ func (op *open) fileNetworkOpenInformation() []byte {
 	var size, alloc uint64
 	if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
 		size = op.size
-		alloc = (op.size + (smb2.ClusterSize - 1)) &^ (smb2.ClusterSize - 1)
+		alloc = op.allocated
 	}
 	fnoi := smb2.FileNetworkOpenInfo{
 		CreationTime:   op.lastModified,
