@@ -80,6 +80,7 @@ func (s *server) newConnection(conn net.Conn) *connection {
 		server:                s,
 		writeChan:             make(chan []byte),
 		closeChan:             make(chan struct{}),
+		stopChans:             make(map[uint64]chan struct{}),
 	}
 
 	c.mu.Lock()

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
@@ -18,6 +19,7 @@ import (
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
 	"go.sia.tech/renterd/api"
+	"golang.org/x/crypto/blake2b"
 )
 
 var (
@@ -328,4 +330,53 @@ func (op *open) newLSAFrame(ctx ntlm.SecurityContext) *rpc.Frame {
 
 	op.lsaFrames[frame.Handle.UUID.Data1] = frame
 	return frame
+}
+
+func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan struct{}) {
+	resp, err := op.treeConnect.share.client.GetObject(op.ctx, op.treeConnect.share.bucket, op.pathName)
+	if err != nil {
+		return
+	}
+
+	snapshot := makeSnapshot(resp.Entries)
+	for {
+		select {
+		case <-stopChan:
+			return
+		case <-time.After(15 * time.Second):
+		}
+
+		resp, err := op.treeConnect.share.client.GetObject(op.ctx, op.treeConnect.share.bucket, op.pathName)
+		if err != nil {
+			continue
+		}
+
+		newSnapshot := makeSnapshot(resp.Entries)
+		if !bytes.Equal(newSnapshot, snapshot) {
+			resp := &smb2.ChangeNotifyResponse{}
+			resp.FromRequest(req)
+			resp.Header().SetStatus(smb2.STATUS_NOTIFY_ENUM_DIR)
+			op.connection.server.writeResponse(op.connection, op.session, resp)
+			op.connection.mu.Lock()
+			delete(op.connection.stopChans, req.CancelRequestID())
+			op.connection.mu.Unlock()
+			return
+		}
+	}
+}
+
+func makeSnapshot(entries []api.ObjectMetadata) []byte {
+	h, err := blake2b.New256(nil)
+	if err != nil {
+		return nil
+	}
+
+	for _, entry := range entries {
+		h.Write([]byte(entry.ETag))
+		h.Write([]byte(entry.ModTime.String()))
+		h.Write([]byte(entry.Name))
+		h.Write(binary.LittleEndian.AppendUint64(nil, uint64(entry.Size)))
+	}
+
+	return h.Sum(nil)
 }

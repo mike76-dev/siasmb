@@ -56,6 +56,7 @@ type connection struct {
 	writeChan  chan []byte
 	closeChan  chan struct{}
 	once       sync.Once
+	stopChans  map[uint64]chan struct{}
 }
 
 func (c *connection) grantCredits(mid uint64, numCredits uint16) error {
@@ -1320,9 +1321,15 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		aid := make([]byte, 8)
 		rand.Read(aid)
 		asyncID := binary.LittleEndian.Uint64(aid)
+		req.Header().SetAsyncID(asyncID)
+		req.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
 		c.mu.Lock()
 		c.asyncCommandList[asyncID] = req
+		ch := make(chan struct{})
+		c.stopChans[req.CancelRequestID()] = ch
 		c.mu.Unlock()
+
+		go op.checkForChanges(cnr, ch)
 
 		resp := smb2.NewErrorResponse(cnr, smb2.STATUS_PENDING, nil)
 		resp.Header().SetAsyncID(asyncID)
@@ -1772,6 +1779,12 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 		delete(c.asyncCommandList, cr.Header().AsyncID())
 	} else {
 		delete(c.requestList, cr.Header().MessageID())
+	}
+
+	ch, ok := c.stopChans[target.CancelRequestID()]
+	if ok {
+		close(ch)
+		delete(c.stopChans, target.CancelRequestID())
 	}
 
 	return nil
