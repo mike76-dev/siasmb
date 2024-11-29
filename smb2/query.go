@@ -5,7 +5,10 @@ import (
 	"encoding/hex"
 	"time"
 
+	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/utils"
+	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
+	"github.com/oiweiwei/go-msrpc/ndr"
 	"go.sia.tech/renterd/api"
 	"golang.org/x/crypto/blake2b"
 )
@@ -655,27 +658,180 @@ func (fnoi FileNetworkOpenInfo) Encode() []byte {
 	return buf
 }
 
-type FileRenameInfo struct {
-	ReplaceIfExists bool
-	RootDirectory   uint64
-	FileName        string
+type ACE struct {
+	Type   uint8
+	Flags  uint8
+	Access uint32
+	SID    dtyp.SID
 }
 
-func (fri *FileRenameInfo) Decode(buf []byte) error {
-	if len(buf) < 20 {
-		return ErrInvalidParameter
+func (ace *ACE) Encode() []byte {
+	var buf []byte
+	buf = append(buf, ace.Type)
+	buf = append(buf, ace.Flags)
+	buf = binary.LittleEndian.AppendUint16(buf, 0)
+	buf = binary.LittleEndian.AppendUint32(buf, ace.Access)
+	sid, err := ndr.Marshal(&ace.SID)
+	if err != nil {
+		return nil
 	}
 
-	if buf[0] > 0 {
-		fri.ReplaceIfExists = true
+	sid = sid[4:]
+	buf = append(buf, sid...)
+	binary.LittleEndian.PutUint16(buf[2:4], uint16(len(buf)))
+	return buf
+}
+
+type ACL struct {
+	Revision uint16
+	ACEs     []ACE
+}
+
+func (acl *ACL) Encode() []byte {
+	var buf []byte
+	buf = binary.LittleEndian.AppendUint16(buf, acl.Revision)
+	var aceBuf []byte
+	var count int
+	for _, ace := range acl.ACEs {
+		b := ace.Encode()
+		if b != nil {
+			aceBuf = append(aceBuf, b...)
+			count++
+		}
 	}
 
-	fri.RootDirectory = binary.LittleEndian.Uint64(buf[8:16])
-	length := binary.LittleEndian.Uint32(buf[16:20])
-	if len(buf) < 20+int(length) {
-		return ErrInvalidParameter
+	buf = binary.LittleEndian.AppendUint16(buf, uint16(len(aceBuf)))
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(count))
+	buf = append(buf, aceBuf...)
+	return buf
+}
+
+type SecInfo struct {
+	Revision uint16
+	Type     uint16
+	Owner    dtyp.SID
+	Group    dtyp.SID
+	SACL     ACL
+	DACL     ACL
+}
+
+func (si *SecInfo) Encode() []byte {
+	var buf []byte
+	buf = binary.LittleEndian.AppendUint16(buf, si.Revision)
+	buf = binary.LittleEndian.AppendUint16(buf, si.Type)
+	var owner []byte
+	var err error
+	if si.Type&dtyp.OwnerDefaulted == 0 {
+		owner, err = ndr.Marshal(&si.Owner)
+		if err != nil {
+			return nil
+		}
+
+		owner = owner[4:]
+		buf = binary.LittleEndian.AppendUint32(buf, 20)
+	} else {
+		buf = binary.LittleEndian.AppendUint32(buf, 0)
 	}
 
-	fri.FileName = utils.DecodeToString(buf[20 : 20+length])
-	return nil
+	var group []byte
+	if si.Type&dtyp.GroupDefaulted == 0 {
+		group, err = ndr.Marshal(&si.Group)
+		if err != nil {
+			return nil
+		}
+
+		group = group[4:]
+		buf = binary.LittleEndian.AppendUint32(buf, 20+uint32(len(owner)))
+	} else {
+		buf = binary.LittleEndian.AppendUint32(buf, 0)
+	}
+
+	var sacl []byte
+	if si.Type&dtyp.SACLPresent > 0 {
+		sacl = si.SACL.Encode()
+		buf = binary.LittleEndian.AppendUint32(buf, 20+uint32(len(owner)+len(group)))
+	} else {
+		buf = binary.LittleEndian.AppendUint32(buf, 0)
+	}
+
+	var dacl []byte
+	if si.Type&dtyp.DACLPresent > 0 {
+		dacl = si.DACL.Encode()
+		buf = binary.LittleEndian.AppendUint32(buf, 20+uint32(len(owner)+len(group)+len(sacl)))
+	} else {
+		buf = binary.LittleEndian.AppendUint32(buf, 0)
+	}
+
+	buf = append(buf, owner...)
+	buf = append(buf, group...)
+	buf = append(buf, sacl...)
+	buf = append(buf, dacl...)
+	return buf
+}
+
+func NewSecInfo(ctx ntlm.SecurityContext, info uint32, access uint32) []byte {
+	si := SecInfo{
+		Revision: 1,
+		Type:     dtyp.SelfRelative,
+	}
+
+	if info&OWNER_SECURITY_INFORMATION > 0 {
+		si.Owner = dtyp.SID{
+			Revision:          1,
+			SubAuthorityCount: uint8(len(ctx.DomainSID.SubAuthority)) + 1,
+			IDAuthority:       &dtyp.SIDIDAuthority{Value: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x05}},
+			SubAuthority:      append(ctx.DomainSID.SubAuthority, ctx.UserRID),
+		}
+	}
+
+	if info&GROUP_SECURITY_INFORMATION > 0 {
+		si.Group = dtyp.SID{
+			Revision:          1,
+			SubAuthorityCount: 2,
+			IDAuthority:       &dtyp.SIDIDAuthority{Value: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x16}},
+			SubAuthority:      append([]uint32{2}, ctx.UserRID),
+		}
+	}
+
+	if info&SACL_SECURITY_INFORMATION > 0 {
+		si.Type |= dtyp.SACLPresent | dtyp.SACLProtected
+		si.SACL = ACL{
+			Revision: 2,
+			ACEs:     []ACE{},
+		}
+	}
+
+	if info&DACL_SECURITY_INFORMATION > 0 {
+		si.Type |= dtyp.DACLPresent | dtyp.DACLProtected
+		si.DACL = ACL{
+			Revision: 2,
+			ACEs: []ACE{
+				{
+					Type:   0,
+					Flags:  0,
+					Access: access,
+					SID:    si.Owner,
+				},
+				{
+					Type:   1,
+					Flags:  0,
+					Access: 0,
+					SID:    si.Group,
+				},
+				{
+					Type:   1,
+					Flags:  0,
+					Access: 0,
+					SID: dtyp.SID{
+						Revision:          1,
+						SubAuthorityCount: 1,
+						IDAuthority:       &dtyp.SIDIDAuthority{Value: []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x01}},
+						SubAuthority:      []uint32{0},
+					},
+				},
+			},
+		}
+	}
+
+	return si.Encode()
 }

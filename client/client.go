@@ -377,7 +377,6 @@ func (c *Client) RenameObject(ctx context.Context, bucket, oldName, newName stri
 		To:     "/" + newName,
 		Mode:   mode,
 	}, nil)
-	fmt.Printf("Renaming object: bucket=%s, from=%s, to=%s, isDir=%v, force=%v, err=%v\n", bucket, oldName, newName, isDir, force, err) //TODO
 	return
 }
 

@@ -18,13 +18,14 @@ var (
 )
 
 type treeConnect struct {
-	treeID        uint32
-	session       *session
-	share         *share
-	openCount     uint64
-	creationTime  time.Time
-	maximalAccess uint32
-	mu            sync.Mutex
+	treeID         uint32
+	session        *session
+	share          *share
+	openCount      uint64
+	creationTime   time.Time
+	maximalAccess  uint32
+	persistedOpens map[string]*open
+	mu             sync.Mutex
 }
 
 func extractShareName(path string) string {
@@ -93,11 +94,12 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 	rand.Read(id[:])
 
 	tc := &treeConnect{
-		treeID:        binary.LittleEndian.Uint32(id[:]),
-		session:       ss,
-		share:         sh,
-		creationTime:  time.Now(),
-		maximalAccess: access,
+		treeID:         binary.LittleEndian.Uint32(id[:]),
+		session:        ss,
+		share:          sh,
+		creationTime:   time.Now(),
+		maximalAccess:  access,
+		persistedOpens: make(map[string]*open),
 	}
 
 	ss.mu.Lock()

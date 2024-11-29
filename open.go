@@ -126,10 +126,11 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 	var isDir bool
 	access := tc.maximalAccess
 	name := strings.ToLower(info.Name)
-	if name == "lsarpc" || name == "srvsvc" {
+	switch name {
+	case "lsarpc", "srvsvc", "mdssvc":
 		filename = name
 		access = cr.DesiredAccess()
-	} else {
+	default:
 		filepath, filename, isDir = utils.ExtractFilename(info.Name)
 	}
 
@@ -178,6 +179,20 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 	return op
 }
 
+func (s *server) restoreOpen(op *open) {
+	op.session.mu.Lock()
+	op.session.openTable[op.fileID] = op
+	op.session.mu.Unlock()
+
+	op.connection.server.mu.Lock()
+	op.connection.server.globalOpenTable[op.durableFileID] = op
+	op.connection.server.mu.Unlock()
+
+	op.treeConnect.mu.Lock()
+	op.treeConnect.openCount++
+	op.treeConnect.mu.Unlock()
+}
+
 func (s *server) closeOpen(op *open) {
 	op.cancel()
 
@@ -216,7 +231,7 @@ func (op *open) queryDirectory(pattern string) error {
 
 	op.lastSearch = pattern
 	op.searchResults = results
-	if len(results) == 0 && len(resp.Entries) > 0 {
+	if len(results) == 0 {
 		return errNoFiles
 	}
 

@@ -327,3 +327,52 @@ func (resp *NetShareInfo1Response) MarshalNDR(ctx context.Context, w ndr.Writer)
 	_, err := w.Write(buf)
 	return err
 }
+
+type MdsOpenRequest struct {
+	DeviceID       uint32
+	Unkn2          uint32
+	Unkn3          uint32
+	ShareMountPath string
+	ShareName      string
+	MaxCount       uint32
+}
+
+func (req *MdsOpenRequest) Unmarshal(buf []byte) {
+	req.DeviceID = binary.LittleEndian.Uint32(buf[:4])
+	req.Unkn2 = binary.LittleEndian.Uint32(buf[4:8])
+	req.Unkn3 = binary.LittleEndian.Uint32(buf[8:12])
+	req.MaxCount = binary.LittleEndian.Uint32(buf[12:16])
+	smpLen := binary.LittleEndian.Uint32(buf[20:24])
+	req.ShareMountPath = string(buf[24 : 24+smpLen-1])
+	off := 24 + smpLen
+	off = uint32(utils.Roundup(int(off), 4))
+	snLen := binary.LittleEndian.Uint32(buf[off+8 : off+12])
+	req.ShareName = string(buf[off+12 : off+12+snLen-1])
+}
+
+type MdsOpenResponse struct {
+	DeviceID     uint32
+	Unkn2        uint32
+	Unkn3        uint32
+	SharePath    string
+	PolicyHandle [20]byte
+	MaxCount     uint32
+}
+
+func (resp *MdsOpenResponse) MarshalNDR(ctx context.Context, w ndr.Writer) error {
+	var buf []byte
+	buf = binary.LittleEndian.AppendUint32(buf, resp.DeviceID)
+	buf = binary.LittleEndian.AppendUint32(buf, resp.Unkn2)
+	buf = binary.LittleEndian.AppendUint32(buf, resp.Unkn3)
+	buf = binary.LittleEndian.AppendUint32(buf, resp.MaxCount)
+	buf = binary.LittleEndian.AppendUint32(buf, 0)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(resp.SharePath)+1))
+	buf = append(buf, []byte(resp.SharePath)...)
+	buf = append(buf, 0)
+	padLen := utils.Roundup(len(buf), 4) - len(buf)
+	padding := make([]byte, padLen)
+	buf = append(buf, padding...)
+	buf = append(buf, resp.PolicyHandle[:]...)
+	_, err := w.Write(buf)
+	return err
+}

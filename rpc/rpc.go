@@ -21,6 +21,8 @@ const (
 	LSA_GET_USER_NAME = 0x002d
 
 	NET_SHARE_GET_INFO = 0x0010
+
+	MDS_OPEN = 0x0000
 )
 
 type ResponseBody struct {
@@ -180,6 +182,23 @@ func NewNetShareGetInfo1Response(callID uint32, share string, status uint32) *Ou
 			Payload: &NetShareInfo1Response{
 				Share:  share,
 				Result: status,
+			},
+		},
+	}
+
+	return packet
+}
+
+func NewMdsOpenResponse(callID uint32, req MdsOpenRequest, path string, status uint32) *OutboundPacket {
+	packet := &OutboundPacket{
+		Header: NewHeader(PACKET_TYPE_RESPONSE, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),
+		Body: &ResponseBody{
+			Payload: &MdsOpenResponse{
+				DeviceID:  req.DeviceID,
+				Unkn2:     req.Unkn2,
+				Unkn3:     req.Unkn3,
+				MaxCount:  req.MaxCount,
+				SharePath: path,
 			},
 		},
 	}

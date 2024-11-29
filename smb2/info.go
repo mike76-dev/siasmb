@@ -1,6 +1,11 @@
 package smb2
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"strings"
+
+	"github.com/mike76-dev/siasmb/utils"
+)
 
 const (
 	SMB2SetInfoRequestMinSize       = 32
@@ -80,4 +85,30 @@ func (sir *SetInfoResponse) FromRequest(req GenericRequest) {
 	if Header(sir.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(sir.data).SetCreditResponse(0)
 	}
+}
+
+type FileRenameInfo struct {
+	ReplaceIfExists bool
+	RootDirectory   uint64
+	FileName        string
+}
+
+func (fri *FileRenameInfo) Decode(buf []byte) error {
+	if len(buf) < 20 {
+		return ErrInvalidParameter
+	}
+
+	if buf[0] > 0 {
+		fri.ReplaceIfExists = true
+	}
+
+	fri.RootDirectory = binary.LittleEndian.Uint64(buf[8:16])
+	length := binary.LittleEndian.Uint32(buf[16:20])
+	if len(buf) < 20+int(length) {
+		return ErrInvalidParameter
+	}
+
+	name := utils.DecodeToString(buf[20 : 20+length])
+	fri.FileName = strings.ReplaceAll(name, "\\", "/")
+	return nil
 }
