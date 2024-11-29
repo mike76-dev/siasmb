@@ -671,7 +671,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 		}
 
-		c.server.closeOpen(op)
+		tc.mu.Lock()
+		_, found = tc.persistedOpens[op.pathName]
+		tc.mu.Unlock()
+		c.server.closeOpen(op, found)
 
 		toNotify := make(map[uint64]*smb2.Request)
 		c.mu.Lock()
@@ -1710,6 +1713,31 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 				if fbi.FileAttributes != 0 {
 					op.fileAttributes = fbi.FileAttributes
+				}
+
+				if op.pendingUpload != nil {
+					size := op.pendingUpload.totalSize
+					eTag, err := tc.share.client.FinishUpload(
+						op.ctx,
+						tc.share.bucket,
+						op.pathName,
+						op.pendingUpload.uploadID,
+						op.pendingUpload.parts,
+					)
+					if err != nil {
+						log.Println("Error completing write:", err)
+						resp := smb2.NewErrorResponse(sir, smb2.STATUS_DATA_ERROR, nil)
+						return resp, ss, nil
+					} else {
+						op.pendingUpload = nil
+						buf, err := hex.DecodeString(eTag)
+						if err == nil && len(buf) >= 8 {
+							op.handle = binary.LittleEndian.Uint64(buf[:8])
+						}
+					}
+
+					op.size = size
+					op.allocated = size
 				}
 
 			case smb2.FileDispositionInformation:

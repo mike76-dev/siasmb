@@ -193,8 +193,10 @@ func (s *server) restoreOpen(op *open) {
 	op.treeConnect.mu.Unlock()
 }
 
-func (s *server) closeOpen(op *open) {
-	op.cancel()
+func (s *server) closeOpen(op *open, persist bool) {
+	if !persist {
+		op.cancel()
+	}
 
 	op.treeConnect.mu.Lock()
 	op.treeConnect.openCount--
