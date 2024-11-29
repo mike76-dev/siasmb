@@ -183,6 +183,7 @@ type dirInfo struct {
 }
 
 type fileIDBothDirInfo []dirInfo
+type fileIDFullDirInfo []dirInfo
 
 func (info fileIDBothDirInfo) encode() []byte {
 	var buf []byte
@@ -221,8 +222,41 @@ func (info fileIDBothDirInfo) encode() []byte {
 	return buf
 }
 
-func QueryDirectoryBuffer(entries []api.ObjectMetadata, bufSize uint32, single, root bool, id, parentID uint64, createdAt, parentCreatedAt time.Time) (buf []byte, num int) {
-	var info fileIDBothDirInfo
+func (info fileIDFullDirInfo) encode() []byte {
+	var buf []byte
+	for i, entry := range info {
+		name := utils.EncodeStringToBytes(entry.FileName)
+		length := 80 + len(name)
+		if i < len(info)-1 {
+			length = utils.Roundup(length, 8)
+		}
+
+		di := make([]byte, length)
+		if i < len(info)-1 {
+			binary.LittleEndian.PutUint32(di[:4], uint32(length))
+		}
+
+		binary.LittleEndian.PutUint32(di[4:8], entry.FileIndex)
+		binary.LittleEndian.PutUint64(di[8:16], utils.UnixToFiletime(entry.CreationTime))
+		binary.LittleEndian.PutUint64(di[16:24], utils.UnixToFiletime(entry.LastAccessTime))
+		binary.LittleEndian.PutUint64(di[24:32], utils.UnixToFiletime(entry.LastWriteTime))
+		binary.LittleEndian.PutUint64(di[32:40], utils.UnixToFiletime(entry.ChangeTime))
+		binary.LittleEndian.PutUint64(di[40:48], entry.EndOfFile)
+		binary.LittleEndian.PutUint64(di[48:56], entry.AllocationSize)
+		binary.LittleEndian.PutUint32(di[56:60], entry.FileAttributes)
+		binary.LittleEndian.PutUint32(di[60:64], uint32(len(name)))
+		binary.LittleEndian.PutUint32(di[64:68], entry.EaSize)
+		binary.LittleEndian.PutUint64(di[72:80], entry.FileID)
+		copy(di[80:80+len(name)], name)
+
+		buf = append(buf, di...)
+	}
+
+	return buf
+}
+
+func QueryDirectoryBuffer(full bool, entries []api.ObjectMetadata, bufSize uint32, single, root bool, id, parentID uint64, createdAt, parentCreatedAt time.Time) (buf []byte, num int) {
+	var info []dirInfo
 	size := uint32(224)
 	if bufSize < size {
 		return nil, 0
@@ -291,7 +325,11 @@ func QueryDirectoryBuffer(entries []api.ObjectMetadata, bufSize uint32, single, 
 		}
 	}
 
-	return info.encode(), num
+	if full {
+		return fileIDFullDirInfo(info).encode(), num
+	} else {
+		return fileIDBothDirInfo(info).encode(), num
+	}
 }
 
 type QueryDirectoryResponse struct {
@@ -470,6 +508,12 @@ func FileFsFullSizeInfo(total, used uint64, redundancy api.RedundancySettings) [
 	return info
 }
 
+func FileFsDeviceInfo() []byte {
+	buf := binary.LittleEndian.AppendUint32(nil, 0x00000007)
+	buf = binary.LittleEndian.AppendUint32(buf, 0x00000030)
+	return buf
+}
+
 type FileBasicInfo struct {
 	CreationTime   time.Time
 	LastAccessTime time.Time
@@ -590,9 +634,12 @@ type FileNameInfo struct {
 
 func (fni FileNameInfo) Encode() []byte {
 	name := utils.EncodeStringToBytes(fni.FileName)
-	buf := make([]byte, len(name)+4)
+	buf := make([]byte, len(name)+6)
 	binary.LittleEndian.PutUint32(buf[:4], uint32(len(name)))
 	copy(buf[4:], name)
+	padLen := utils.Roundup(len(buf), 4)
+	padding := make([]byte, padLen-len(buf))
+	buf = append(buf, padding...)
 	return buf
 }
 

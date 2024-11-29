@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -107,20 +106,9 @@ func grantAccess(cr smb2.CreateRequest, tc *treeConnect, ss *session) bool {
 }
 
 func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api.ObjectMetadata, ctx context.Context, cancel context.CancelFunc) *open {
-	id := make([]byte, 16)
-	rand.Read(id)
-
-	var buf []byte
-	if info.ETag != "" {
-		var err error
-		buf, err = hex.DecodeString(info.ETag)
-		if err != nil || len(buf) < 8 {
-			return nil
-		}
-	} else {
-		buf = make([]byte, 8)
-		rand.Read(buf)
-	}
+	h, _ := blake2b.New256(nil)
+	h.Write([]byte(info.ETag))
+	id := h.Sum(nil)
 
 	var filepath, filename string
 	var isDir bool
@@ -129,15 +117,16 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 	switch name {
 	case "lsarpc", "srvsvc", "mdssvc":
 		filename = name
+		filepath = name
 		access = cr.DesiredAccess()
 	default:
 		filepath, filename, isDir = utils.ExtractFilename(info.Name)
 	}
 
 	op := &open{
-		handle:            binary.LittleEndian.Uint64(buf[:8]),
-		fileID:            binary.LittleEndian.Uint64(id[:8]),
-		durableFileID:     binary.LittleEndian.Uint64(id[8:]),
+		handle:            binary.LittleEndian.Uint64(id[:8]),
+		fileID:            binary.LittleEndian.Uint64(id[8:16]),
+		durableFileID:     binary.LittleEndian.Uint64(id[16:24]),
 		session:           ss,
 		connection:        ss.connection,
 		treeConnect:       tc,

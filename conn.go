@@ -219,9 +219,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		if found {
 			authToken, err := spnego.DecodeNegTokenResp(ssr.SecurityBuffer())
 			if err != nil {
-				c.server.deregisterSession(c, ss.sessionID)
+				authToken = &spnego.NegTokenResp{ResponseToken: ssr.SecurityBuffer()}
+				/*c.server.deregisterSession(c, ss.sessionID)
 				log.Println("Couldn't decode AUTHENTICATE token:", err)
-				return nil, nil, err
+				return nil, nil, err*/
 			}
 
 			if err := c.ntlmServer.Authenticate(authToken.ResponseToken); err != nil {
@@ -238,10 +239,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			token = spnego.FinalNegTokenResp
 		} else {
 			negToken, err := spnego.DecodeNegTokenInit(ssr.SecurityBuffer())
+			var noSpnego bool
 			if err != nil {
-				c.server.deregisterSession(c, ss.sessionID)
+				negToken = &spnego.NegTokenInit{MechToken: ssr.SecurityBuffer()}
+				noSpnego = true
+				/*c.server.deregisterSession(c, ss.sessionID)
 				log.Println("Couldn't decode NEGOTIATE token:", err)
-				return nil, nil, err
+				return nil, nil, err*/
 			}
 
 			challenge, err := c.ntlmServer.Challenge(negToken.MechToken)
@@ -251,11 +255,15 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return nil, nil, err
 			}
 
-			token, err = spnego.EncodeNegTokenResp(0x01, spnego.NlmpOid, challenge, nil)
-			if err != nil {
-				c.server.deregisterSession(c, ss.sessionID)
-				log.Println("Couldn't generate CHALLENGE token:", err)
-				return nil, nil, err
+			if noSpnego {
+				token = challenge
+			} else {
+				token, err = spnego.EncodeNegTokenResp(0x01, spnego.NlmpOid, challenge, nil)
+				if err != nil {
+					c.server.deregisterSession(c, ss.sessionID)
+					log.Println("Couldn't generate CHALLENGE token:", err)
+					return nil, nil, err
+				}
 			}
 		}
 
@@ -1000,11 +1008,27 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 								op.size = size
 								op.allocated = size
 								op.pendingUpload = nil
-								buf, err := hex.DecodeString(eTag)
-								if err == nil && len(buf) >= 8 {
-									op.handle = binary.LittleEndian.Uint64(buf[:8])
-								}
 							}
+						} else {
+							go func(size uint64) {
+								<-time.After(10 * time.Second)
+								if op != nil && op.pendingUpload != nil && op.pendingUpload.totalSize == size {
+									eTag, err = op.treeConnect.share.client.FinishUpload(
+										op.ctx,
+										op.treeConnect.share.bucket,
+										op.pathName,
+										op.pendingUpload.uploadID,
+										op.pendingUpload.parts,
+									)
+									if err != nil {
+										log.Println("Error completing write:", err)
+									} else {
+										op.size = size
+										op.allocated = size
+										op.pendingUpload = nil
+									}
+								}
+							}(op.pendingUpload.totalSize)
 						}
 
 						resp = &smb2.WriteResponse{}
@@ -1292,7 +1316,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
-		if qdr.FileInformationClass() != smb2.FILE_ID_BOTH_DIRECTORY_INFORMATION {
+		if qdr.FileInformationClass() != smb2.FILE_ID_BOTH_DIRECTORY_INFORMATION && qdr.FileInformationClass() != smb2.FILE_ID_FULL_DIRECTORY_INFORMATION {
 			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_NOT_SUPPORTED, nil)
 			return resp, ss, nil
 		}
@@ -1346,6 +1370,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		searchPath := qdr.FileName()
 		single := qdr.Flags()&smb2.RETURN_SINGLE_ENTRY > 0
 		var buf []byte
+		full := qdr.FileInformationClass() == smb2.FILE_ID_FULL_DIRECTORY_INFORMATION
 		if op.lastSearch != "" && op.lastSearch == searchPath && qdr.Flags()&smb2.RESTART_SCANS == 0 {
 			if len(op.searchResults) == 0 {
 				op.lastSearch = ""
@@ -1354,7 +1379,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 			var num int
-			buf, num = smb2.QueryDirectoryBuffer(op.searchResults, qdr.OutputBufferLength(), single, false, 0, 0, time.Time{}, time.Time{})
+			buf, num = smb2.QueryDirectoryBuffer(full, op.searchResults, qdr.OutputBufferLength(), single, false, 0, 0, time.Time{}, time.Time{})
 			op.searchResults = op.searchResults[num:]
 		} else {
 			if err := op.queryDirectory(searchPath); err != nil && searchPath != "*" {
@@ -1374,7 +1399,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 			var num int
-			buf, num = smb2.QueryDirectoryBuffer(op.searchResults, qdr.OutputBufferLength(), single, qdr.FileName() == "*", id, pid, time.Time(ct), time.Time(pct))
+			buf, num = smb2.QueryDirectoryBuffer(full, op.searchResults, qdr.OutputBufferLength(), single, qdr.FileName() == "*", id, pid, time.Time(ct), time.Time(pct))
 			op.searchResults = op.searchResults[num:]
 		}
 
@@ -1574,6 +1599,8 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						}
 					}
 				}
+			case smb2.FileFsDeviceInformation:
+				info = smb2.FileFsDeviceInfo()
 			default:
 				resp := smb2.NewErrorResponse(qir, smb2.STATUS_NOT_SUPPORTED, nil)
 				return resp, ss, nil
