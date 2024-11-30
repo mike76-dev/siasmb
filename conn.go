@@ -220,9 +220,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			authToken, err := spnego.DecodeNegTokenResp(ssr.SecurityBuffer())
 			if err != nil {
 				authToken = &spnego.NegTokenResp{ResponseToken: ssr.SecurityBuffer()}
-				/*c.server.deregisterSession(c, ss.sessionID)
-				log.Println("Couldn't decode AUTHENTICATE token:", err)
-				return nil, nil, err*/
 			}
 
 			if err := c.ntlmServer.Authenticate(authToken.ResponseToken); err != nil {
@@ -243,9 +240,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			if err != nil {
 				negToken = &spnego.NegTokenInit{MechToken: ssr.SecurityBuffer()}
 				noSpnego = true
-				/*c.server.deregisterSession(c, ss.sessionID)
-				log.Println("Couldn't decode NEGOTIATE token:", err)
-				return nil, nil, err*/
 			}
 
 			challenge, err := c.ntlmServer.Challenge(negToken.MechToken)
