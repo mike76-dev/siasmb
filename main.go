@@ -24,6 +24,11 @@ func main() {
 		panic(err)
 	}
 
+	bs, err := stores.NewJSONBansStore(dir)
+	if err != nil {
+		panic(err)
+	}
+
 	as, err := stores.NewJSONAccountStore(dir)
 	if err != nil {
 		panic(err)
@@ -56,6 +61,7 @@ func main() {
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
+	connections := make(map[string]int)
 	go func() {
 		<-c
 		log.Println("Received interrupt signal, shutting down...")
@@ -67,6 +73,9 @@ func main() {
 			connection.conn.Close()
 		}
 		l.Close()
+		for host, num := range connections {
+			log.Printf("Host %s: %d connections\n", host, num)
+		}
 		os.Exit(0)
 	}()
 
@@ -74,6 +83,14 @@ func main() {
 		if conn, err := l.Accept(); err != nil {
 			log.Println(err)
 		} else {
+			host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
+			if _, banned := bs.Bans[host]; banned {
+				conn.Close()
+				continue
+			}
+
+			num := connections[host]
+			connections[host] = num + 1
 			go func() {
 				if !server.enabled {
 					return
