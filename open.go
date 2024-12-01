@@ -107,7 +107,7 @@ func grantAccess(cr smb2.CreateRequest, tc *treeConnect, ss *session) bool {
 
 func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api.ObjectMetadata, ctx context.Context, cancel context.CancelFunc) *open {
 	h, _ := blake2b.New256(nil)
-	h.Write([]byte(info.ETag))
+	h.Write([]byte(info.Name))
 	id := h.Sum(nil)
 
 	var filepath, filename string
@@ -123,10 +123,12 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		filepath, filename, isDir = utils.ExtractFilename(info.Name)
 	}
 
+	fid := make([]byte, 16)
+	rand.Read(fid)
 	op := &open{
 		handle:            binary.LittleEndian.Uint64(id[:8]),
-		fileID:            binary.LittleEndian.Uint64(id[8:16]),
-		durableFileID:     binary.LittleEndian.Uint64(id[16:24]),
+		fileID:            binary.LittleEndian.Uint64(fid[:8]),
+		durableFileID:     binary.LittleEndian.Uint64(fid[8:]),
 		session:           ss,
 		connection:        ss.connection,
 		treeConnect:       tc,
