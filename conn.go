@@ -1005,7 +1005,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 							}
 						} else {
 							go func(size uint64) {
-								<-time.After(10 * time.Second)
+								<-time.After(30 * time.Second)
 								if op != nil && op.pendingUpload != nil && op.pendingUpload.totalSize == size {
 									eTag, err = op.treeConnect.share.client.FinishUpload(
 										op.ctx,
@@ -1231,6 +1231,18 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 							packet = rpc.NewNetShareGetInfo1Response(
 								ip.Header.CallID,
 								request.Share,
+								tc.share.remark,
+								smb2.STATUS_OK,
+							)
+						}
+
+					case rpc.NET_SHARE_ENUM_ALL:
+						var request rpc.NetShareEnumAllRequest
+						request.Unmarshal(ip.Payload)
+						if request.Level == 1 {
+							packet = rpc.NewNetShareEnumAllResponse(
+								ip.Header.CallID,
+								c.server.enumShares(),
 								smb2.STATUS_OK,
 							)
 						}

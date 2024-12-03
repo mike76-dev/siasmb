@@ -293,11 +293,15 @@ func (req *NetShareGetInfoRequest) Unmarshal(buf []byte) {
 	req.Level = binary.LittleEndian.Uint32(buf[off : off+4])
 }
 
-type NetShareInfo1Response struct {
+type NetShareInfo1 struct {
 	Share   string
 	Type    uint32
 	Comment string
-	Result  uint32
+}
+
+type NetShareInfo1Response struct {
+	NetShareInfo1
+	Result uint32
 }
 
 func (resp *NetShareInfo1Response) MarshalNDR(ctx context.Context, w ndr.Writer) error {
@@ -373,6 +377,68 @@ func (resp *MdsOpenResponse) MarshalNDR(ctx context.Context, w ndr.Writer) error
 	padding := make([]byte, padLen)
 	buf = append(buf, padding...)
 	buf = append(buf, resp.PolicyHandle[:]...)
+	_, err := w.Write(buf)
+	return err
+}
+
+type NetShareEnumAllRequest struct {
+	Server    string
+	Level     uint32
+	MaxBuffer uint32
+}
+
+func (req *NetShareEnumAllRequest) Unmarshal(buf []byte) {
+	srvLength := binary.LittleEndian.Uint32(buf[12:16])
+	req.Server = utils.DecodeToString(buf[16 : 16+srvLength*2-2])
+	off := 16 + srvLength*2
+	off = uint32(utils.Roundup(int(off), 4))
+	req.Level = binary.LittleEndian.Uint32(buf[off : off+4])
+	off += 20
+	req.MaxBuffer = binary.LittleEndian.Uint32(buf[off : off+4])
+}
+
+type NetShareEnumAllResponse struct {
+	Shares []NetShareInfo1
+	Result uint32
+}
+
+func (resp *NetShareEnumAllResponse) MarshalNDR(ctx context.Context, w ndr.Writer) error {
+	var buf []byte
+	buf = binary.LittleEndian.AppendUint32(buf, 1)
+	buf = binary.LittleEndian.AppendUint32(buf, 1)
+	buf = binary.LittleEndian.AppendUint32(buf, 0x0002000c)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(resp.Shares)))
+	buf = binary.LittleEndian.AppendUint32(buf, 0x00020010)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(resp.Shares)))
+	for i, share := range resp.Shares {
+		buf = binary.LittleEndian.AppendUint32(buf, 0x00020014+uint32(i)*8)
+		buf = binary.LittleEndian.AppendUint32(buf, share.Type)
+		buf = binary.LittleEndian.AppendUint32(buf, 0x00020018+uint32(i)*8)
+	}
+
+	for _, share := range resp.Shares {
+		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(share.Share)+1))
+		buf = binary.LittleEndian.AppendUint32(buf, 0)
+		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(share.Share)+1))
+		buf = append(buf, utils.EncodeStringToBytes(share.Share)...)
+		buf = append(buf, 0, 0)
+		padLen := utils.Roundup(len(buf), 4) - len(buf)
+		padding := make([]byte, padLen)
+		buf = append(buf, padding...)
+		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(share.Comment)+1))
+		buf = binary.LittleEndian.AppendUint32(buf, 0)
+		buf = binary.LittleEndian.AppendUint32(buf, uint32(len(share.Comment)+1))
+		buf = append(buf, utils.EncodeStringToBytes(share.Comment)...)
+		buf = append(buf, 0, 0)
+		padLen = utils.Roundup(len(buf), 4) - len(buf)
+		padding = make([]byte, padLen)
+		buf = append(buf, padding...)
+	}
+
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(len(resp.Shares)))
+	buf = binary.LittleEndian.AppendUint32(buf, 0x00020014+uint32(len(resp.Shares)*2))
+	buf = binary.LittleEndian.AppendUint32(buf, 0)
+	buf = binary.LittleEndian.AppendUint32(buf, resp.Result)
 	_, err := w.Write(buf)
 	return err
 }

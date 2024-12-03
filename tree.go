@@ -59,6 +59,7 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 		sh = &share{
 			name:            name,
 			shareType:       smb2.SHARE_TYPE_PIPE,
+			remark:          "IPC service",
 			connectSecurity: map[string]struct{}{},
 			fileSecurity:    make(map[string]uint32),
 		}

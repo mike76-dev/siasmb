@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/mike76-dev/siasmb/rpc"
 	"github.com/mike76-dev/siasmb/smb2"
 )
 
@@ -130,4 +131,25 @@ func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResp
 	s.mu.Lock()
 	s.stats.bytesSent += uint64(len(buf))
 	s.mu.Unlock()
+}
+
+func (s *server) enumShares() []rpc.NetShareInfo1 {
+	var shares []rpc.NetShareInfo1
+	for _, sh := range s.shareList {
+		share := rpc.NetShareInfo1{
+			Share:   sh.name,
+			Type:    rpc.STYPE_DISKTREE,
+			Comment: sh.remark,
+		}
+
+		shares = append(shares, share)
+	}
+
+	shares = append(shares, rpc.NetShareInfo1{
+		Share:   "IPC$",
+		Type:    rpc.STYPE_IPC_HIDDEN,
+		Comment: "IPC service",
+	})
+
+	return shares
 }

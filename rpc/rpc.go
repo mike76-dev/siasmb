@@ -21,8 +21,14 @@ const (
 	LSA_GET_USER_NAME = 0x002d
 
 	NET_SHARE_GET_INFO = 0x0010
+	NET_SHARE_ENUM_ALL = 0x000f
 
 	MDS_OPEN = 0x0000
+)
+
+const (
+	STYPE_DISKTREE   = 0x00000000
+	STYPE_IPC_HIDDEN = 0x80000003
 )
 
 type ResponseBody struct {
@@ -175,12 +181,15 @@ func NewCloseResponse(callID uint32, status uint32) *OutboundPacket {
 	return packet
 }
 
-func NewNetShareGetInfo1Response(callID uint32, share string, status uint32) *OutboundPacket {
+func NewNetShareGetInfo1Response(callID uint32, share, remark string, status uint32) *OutboundPacket {
 	packet := &OutboundPacket{
 		Header: NewHeader(PACKET_TYPE_RESPONSE, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),
 		Body: &ResponseBody{
 			Payload: &NetShareInfo1Response{
-				Share:  share,
+				NetShareInfo1: NetShareInfo1{
+					Share:   share,
+					Comment: remark,
+				},
 				Result: status,
 			},
 		},
@@ -199,6 +208,20 @@ func NewMdsOpenResponse(callID uint32, req MdsOpenRequest, path string, status u
 				Unkn3:     req.Unkn3,
 				MaxCount:  req.MaxCount,
 				SharePath: path,
+			},
+		},
+	}
+
+	return packet
+}
+
+func NewNetShareEnumAllResponse(callID uint32, shares []NetShareInfo1, status uint32) *OutboundPacket {
+	packet := &OutboundPacket{
+		Header: NewHeader(PACKET_TYPE_RESPONSE, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),
+		Body: &ResponseBody{
+			Payload: &NetShareEnumAllResponse{
+				Shares: shares,
+				Result: status,
 			},
 		},
 	}
