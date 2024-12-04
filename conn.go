@@ -24,6 +24,10 @@ import (
 	"go.sia.tech/renterd/api"
 )
 
+const (
+	staleThreshold = 10 * time.Minute
+)
+
 var (
 	errRequestNotWithinWindow        = errors.New("request out of command sequence window")
 	errCommandSecuenceWindowExceeded = errors.New("command sequence window exceeded")
@@ -96,6 +100,10 @@ func (c *connection) acceptRequest(msg []byte) error {
 	var ss *session
 	var found bool
 	for i, req := range reqs {
+		if err := req.Header().Validate(); err != nil {
+			return err
+		}
+
 		var mid uint64
 		if req.Header().IsSmb() {
 			if c.negotiateDialect != smb2.SMB_DIALECT_UNKNOWN || len(reqs) > 1 {
@@ -1322,7 +1330,17 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
-		if qdr.FileInformationClass() != smb2.FILE_ID_BOTH_DIRECTORY_INFORMATION && qdr.FileInformationClass() != smb2.FILE_ID_FULL_DIRECTORY_INFORMATION {
+		switch qdr.FileInformationClass() {
+		case smb2.FILE_BOTH_DIRECTORY_INFORMATION,
+			smb2.FILE_DIRECTORY_INFORMATION,
+			smb2.FILE_ID_64_EXTD_BOTH_DIRECTORY_INFORMATION,
+			smb2.FILE_ID_64_EXTD_DIRECTORY_INFORMATION,
+			smb2.FILE_ID_ALL_EXTD_BOTH_DIRECTORY_INFORMATION,
+			smb2.FILE_ID_ALL_EXTD_DIRECTORY_INFORMATION,
+			smb2.FILE_ID_BOTH_DIRECTORY_INFORMATION,
+			smb2.FILE_ID_EXTD_DIRECTORY_INFORMATION,
+			smb2.FILE_ID_FULL_DIRECTORY_INFORMATION:
+		default:
 			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_NOT_SUPPORTED, nil)
 			return resp, ss, nil
 		}
@@ -1376,7 +1394,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		searchPath := qdr.FileName()
 		single := qdr.Flags()&smb2.RETURN_SINGLE_ENTRY > 0
 		var buf []byte
-		full := qdr.FileInformationClass() == smb2.FILE_ID_FULL_DIRECTORY_INFORMATION
 		if op.lastSearch != "" && op.lastSearch == searchPath && qdr.Flags()&smb2.RESTART_SCANS == 0 {
 			if len(op.searchResults) == 0 {
 				op.lastSearch = ""
@@ -1385,7 +1402,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 			var num int
-			buf, num = smb2.QueryDirectoryBuffer(full, op.searchResults, qdr.OutputBufferLength(), single, false, 0, 0, time.Time{}, time.Time{})
+			buf, num = smb2.QueryDirectoryBuffer(qdr.FileInformationClass(), op.searchResults, qdr.OutputBufferLength(), single, false, smb2.FileInfo{}, smb2.FileInfo{})
 			op.searchResults = op.searchResults[num:]
 		} else {
 			if err := op.queryDirectory(searchPath); err != nil && searchPath != "*" {
@@ -1398,14 +1415,14 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, ss, nil
 			}
 
-			id, pid, ct, pct, err := tc.share.client.GetParentInfo(op.ctx, tc.share.bucket, searchPath)
+			dir, parentDir, err := tc.share.client.GetParentInfo(op.ctx, tc.share.bucket, searchPath)
 			if err != nil {
 				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_BAD_NETWORK_NAME, nil)
 				return resp, ss, nil
 			}
 
 			var num int
-			buf, num = smb2.QueryDirectoryBuffer(full, op.searchResults, qdr.OutputBufferLength(), single, qdr.FileName() == "*", id, pid, time.Time(ct), time.Time(pct))
+			buf, num = smb2.QueryDirectoryBuffer(qdr.FileInformationClass(), op.searchResults, qdr.OutputBufferLength(), single, qdr.FileName() == "*", dir, parentDir)
 			op.searchResults = op.searchResults[num:]
 		}
 
@@ -2000,4 +2017,21 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 	}
 
 	return nil
+}
+
+func (c *connection) isStale() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if len(c.sessionTable) == 0 && time.Now().Sub(c.creationTime) > staleThreshold {
+		return true
+	}
+
+	for _, ss := range c.sessionTable {
+		if time.Now().Sub(ss.idleTime) > staleThreshold {
+			return true
+		}
+	}
+
+	return false
 }

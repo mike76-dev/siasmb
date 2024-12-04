@@ -1,8 +1,8 @@
 package smb2
 
 import (
+	"crypto/rand"
 	"encoding/binary"
-	"encoding/hex"
 	"time"
 
 	"github.com/mike76-dev/siasmb/ntlm"
@@ -168,22 +168,99 @@ func (qdr QueryDirectoryRequest) FileName() string {
 }
 
 type dirInfo struct {
-	FileIndex      uint32
-	CreationTime   time.Time
-	LastAccessTime time.Time
-	LastWriteTime  time.Time
-	ChangeTime     time.Time
-	EndOfFile      uint64
-	AllocationSize uint64
-	FileAttributes uint32
-	EaSize         uint32
-	ShortName      string
-	FileID         uint64
-	FileName       string
+	FileIndex       uint32
+	CreationTime    time.Time
+	LastAccessTime  time.Time
+	LastWriteTime   time.Time
+	ChangeTime      time.Time
+	EndOfFile       uint64
+	AllocationSize  uint64
+	FileAttributes  uint32
+	EaSize          uint32
+	ReparsePointTag uint32
+	ShortName       string
+	FileID64        uint64
+	FileID128       []byte
+	FileName        string
 }
 
+type fileDirInfo []dirInfo
+type fileBothDirInfo []dirInfo
 type fileIDBothDirInfo []dirInfo
+type fileID64ExtdBothDirInfo []dirInfo
+type fileFullDirInfo []dirInfo
 type fileIDFullDirInfo []dirInfo
+type fileIDExtdDirInfo []dirInfo
+type fileID64ExtdDirInfo []dirInfo
+type fileIDAllExtdDirInfo []dirInfo
+type fileIDAllExtdBothDirInfo []dirInfo
+
+func (info fileDirInfo) encode() []byte {
+	var buf []byte
+	for i, entry := range info {
+		long := utils.EncodeStringToBytes(entry.FileName)
+		length := 64 + len(long)
+		if i < len(info)-1 {
+			length = utils.Roundup(length, 8)
+		}
+
+		di := make([]byte, length)
+		if i < len(info)-1 {
+			binary.LittleEndian.PutUint32(di[:4], uint32(length))
+		}
+
+		binary.LittleEndian.PutUint32(di[4:8], entry.FileIndex)
+		binary.LittleEndian.PutUint64(di[8:16], utils.UnixToFiletime(entry.CreationTime))
+		binary.LittleEndian.PutUint64(di[16:24], utils.UnixToFiletime(entry.LastAccessTime))
+		binary.LittleEndian.PutUint64(di[24:32], utils.UnixToFiletime(entry.LastWriteTime))
+		binary.LittleEndian.PutUint64(di[32:40], utils.UnixToFiletime(entry.ChangeTime))
+		binary.LittleEndian.PutUint64(di[40:48], entry.EndOfFile)
+		binary.LittleEndian.PutUint64(di[48:56], entry.AllocationSize)
+		binary.LittleEndian.PutUint32(di[56:60], entry.FileAttributes)
+		binary.LittleEndian.PutUint32(di[60:64], uint32(len(long)))
+		copy(di[64:64+len(long)], long)
+
+		buf = append(buf, di...)
+	}
+
+	return buf
+}
+
+func (info fileBothDirInfo) encode() []byte {
+	var buf []byte
+	for i, entry := range info {
+		short := utils.EncodeStringToBytes(entry.ShortName)
+		long := utils.EncodeStringToBytes(entry.FileName)
+		length := 94 + len(long)
+		if i < len(info)-1 {
+			length = utils.Roundup(length, 8)
+		}
+
+		di := make([]byte, length)
+		if i < len(info)-1 {
+			binary.LittleEndian.PutUint32(di[:4], uint32(length))
+		}
+
+		binary.LittleEndian.PutUint32(di[4:8], entry.FileIndex)
+		binary.LittleEndian.PutUint64(di[8:16], utils.UnixToFiletime(entry.CreationTime))
+		binary.LittleEndian.PutUint64(di[16:24], utils.UnixToFiletime(entry.LastAccessTime))
+		binary.LittleEndian.PutUint64(di[24:32], utils.UnixToFiletime(entry.LastWriteTime))
+		binary.LittleEndian.PutUint64(di[32:40], utils.UnixToFiletime(entry.ChangeTime))
+		binary.LittleEndian.PutUint64(di[40:48], entry.EndOfFile)
+		binary.LittleEndian.PutUint64(di[48:56], entry.AllocationSize)
+		binary.LittleEndian.PutUint32(di[56:60], entry.FileAttributes)
+		binary.LittleEndian.PutUint32(di[64:68], entry.EaSize)
+
+		di[68] = uint8(len(short))
+		copy(di[70:94], short)
+		binary.LittleEndian.PutUint32(di[60:64], uint32(len(long)))
+		copy(di[94:94+len(long)], long)
+
+		buf = append(buf, di...)
+	}
+
+	return buf
+}
 
 func (info fileIDBothDirInfo) encode() []byte {
 	var buf []byte
@@ -209,12 +286,82 @@ func (info fileIDBothDirInfo) encode() []byte {
 		binary.LittleEndian.PutUint64(di[48:56], entry.AllocationSize)
 		binary.LittleEndian.PutUint32(di[56:60], entry.FileAttributes)
 		binary.LittleEndian.PutUint32(di[64:68], entry.EaSize)
-		binary.LittleEndian.PutUint64(di[96:104], entry.FileID)
+		binary.LittleEndian.PutUint64(di[96:104], entry.FileID64)
 
 		di[68] = uint8(len(short))
 		copy(di[70:94], short)
 		binary.LittleEndian.PutUint32(di[60:64], uint32(len(long)))
 		copy(di[104:104+len(long)], long)
+
+		buf = append(buf, di...)
+	}
+
+	return buf
+}
+
+func (info fileID64ExtdBothDirInfo) encode() []byte {
+	var buf []byte
+	for i, entry := range info {
+		short := utils.EncodeStringToBytes(entry.ShortName)
+		long := utils.EncodeStringToBytes(entry.FileName)
+		length := 106 + len(long)
+		if i < len(info)-1 {
+			length = utils.Roundup(length, 8)
+		}
+
+		di := make([]byte, length)
+		if i < len(info)-1 {
+			binary.LittleEndian.PutUint32(di[:4], uint32(length))
+		}
+
+		binary.LittleEndian.PutUint32(di[4:8], entry.FileIndex)
+		binary.LittleEndian.PutUint64(di[8:16], utils.UnixToFiletime(entry.CreationTime))
+		binary.LittleEndian.PutUint64(di[16:24], utils.UnixToFiletime(entry.LastAccessTime))
+		binary.LittleEndian.PutUint64(di[24:32], utils.UnixToFiletime(entry.LastWriteTime))
+		binary.LittleEndian.PutUint64(di[32:40], utils.UnixToFiletime(entry.ChangeTime))
+		binary.LittleEndian.PutUint64(di[40:48], entry.EndOfFile)
+		binary.LittleEndian.PutUint64(di[48:56], entry.AllocationSize)
+		binary.LittleEndian.PutUint32(di[56:60], entry.FileAttributes)
+		binary.LittleEndian.PutUint32(di[64:68], entry.EaSize)
+		binary.LittleEndian.PutUint32(di[68:72], entry.ReparsePointTag)
+		binary.LittleEndian.PutUint64(di[72:80], entry.FileID64)
+
+		di[80] = uint8(len(short))
+		copy(di[82:106], short)
+		binary.LittleEndian.PutUint32(di[60:64], uint32(len(long)))
+		copy(di[106:106+len(long)], long)
+
+		buf = append(buf, di...)
+	}
+
+	return buf
+}
+
+func (info fileFullDirInfo) encode() []byte {
+	var buf []byte
+	for i, entry := range info {
+		long := utils.EncodeStringToBytes(entry.FileName)
+		length := 68 + len(long)
+		if i < len(info)-1 {
+			length = utils.Roundup(length, 8)
+		}
+
+		di := make([]byte, length)
+		if i < len(info)-1 {
+			binary.LittleEndian.PutUint32(di[:4], uint32(length))
+		}
+
+		binary.LittleEndian.PutUint32(di[4:8], entry.FileIndex)
+		binary.LittleEndian.PutUint64(di[8:16], utils.UnixToFiletime(entry.CreationTime))
+		binary.LittleEndian.PutUint64(di[16:24], utils.UnixToFiletime(entry.LastAccessTime))
+		binary.LittleEndian.PutUint64(di[24:32], utils.UnixToFiletime(entry.LastWriteTime))
+		binary.LittleEndian.PutUint64(di[32:40], utils.UnixToFiletime(entry.ChangeTime))
+		binary.LittleEndian.PutUint64(di[40:48], entry.EndOfFile)
+		binary.LittleEndian.PutUint64(di[48:56], entry.AllocationSize)
+		binary.LittleEndian.PutUint32(di[56:60], entry.FileAttributes)
+		binary.LittleEndian.PutUint32(di[60:64], uint32(len(long)))
+		binary.LittleEndian.PutUint32(di[64:68], entry.EaSize)
+		copy(di[68:68+len(long)], long)
 
 		buf = append(buf, di...)
 	}
@@ -246,7 +393,7 @@ func (info fileIDFullDirInfo) encode() []byte {
 		binary.LittleEndian.PutUint32(di[56:60], entry.FileAttributes)
 		binary.LittleEndian.PutUint32(di[60:64], uint32(len(name)))
 		binary.LittleEndian.PutUint32(di[64:68], entry.EaSize)
-		binary.LittleEndian.PutUint64(di[72:80], entry.FileID)
+		binary.LittleEndian.PutUint64(di[72:80], entry.FileID64)
 		copy(di[80:80+len(name)], name)
 
 		buf = append(buf, di...)
@@ -255,7 +402,156 @@ func (info fileIDFullDirInfo) encode() []byte {
 	return buf
 }
 
-func QueryDirectoryBuffer(full bool, entries []api.ObjectMetadata, bufSize uint32, single, root bool, id, parentID uint64, createdAt, parentCreatedAt time.Time) (buf []byte, num int) {
+func (info fileIDExtdDirInfo) encode() []byte {
+	var buf []byte
+	for i, entry := range info {
+		name := utils.EncodeStringToBytes(entry.FileName)
+		length := 88 + len(name)
+		if i < len(info)-1 {
+			length = utils.Roundup(length, 8)
+		}
+
+		di := make([]byte, length)
+		if i < len(info)-1 {
+			binary.LittleEndian.PutUint32(di[:4], uint32(length))
+		}
+
+		binary.LittleEndian.PutUint32(di[4:8], entry.FileIndex)
+		binary.LittleEndian.PutUint64(di[8:16], utils.UnixToFiletime(entry.CreationTime))
+		binary.LittleEndian.PutUint64(di[16:24], utils.UnixToFiletime(entry.LastAccessTime))
+		binary.LittleEndian.PutUint64(di[24:32], utils.UnixToFiletime(entry.LastWriteTime))
+		binary.LittleEndian.PutUint64(di[32:40], utils.UnixToFiletime(entry.ChangeTime))
+		binary.LittleEndian.PutUint64(di[40:48], entry.EndOfFile)
+		binary.LittleEndian.PutUint64(di[48:56], entry.AllocationSize)
+		binary.LittleEndian.PutUint32(di[56:60], entry.FileAttributes)
+		binary.LittleEndian.PutUint32(di[60:64], uint32(len(name)))
+		binary.LittleEndian.PutUint32(di[64:68], entry.EaSize)
+		binary.LittleEndian.PutUint32(di[68:72], entry.ReparsePointTag)
+		copy(di[72:88], entry.FileID128)
+		copy(di[88:88+len(name)], name)
+
+		buf = append(buf, di...)
+	}
+
+	return buf
+}
+
+func (info fileID64ExtdDirInfo) encode() []byte {
+	var buf []byte
+	for i, entry := range info {
+		name := utils.EncodeStringToBytes(entry.FileName)
+		length := 80 + len(name)
+		if i < len(info)-1 {
+			length = utils.Roundup(length, 8)
+		}
+
+		di := make([]byte, length)
+		if i < len(info)-1 {
+			binary.LittleEndian.PutUint32(di[:4], uint32(length))
+		}
+
+		binary.LittleEndian.PutUint32(di[4:8], entry.FileIndex)
+		binary.LittleEndian.PutUint64(di[8:16], utils.UnixToFiletime(entry.CreationTime))
+		binary.LittleEndian.PutUint64(di[16:24], utils.UnixToFiletime(entry.LastAccessTime))
+		binary.LittleEndian.PutUint64(di[24:32], utils.UnixToFiletime(entry.LastWriteTime))
+		binary.LittleEndian.PutUint64(di[32:40], utils.UnixToFiletime(entry.ChangeTime))
+		binary.LittleEndian.PutUint64(di[40:48], entry.EndOfFile)
+		binary.LittleEndian.PutUint64(di[48:56], entry.AllocationSize)
+		binary.LittleEndian.PutUint32(di[56:60], entry.FileAttributes)
+		binary.LittleEndian.PutUint32(di[60:64], uint32(len(name)))
+		binary.LittleEndian.PutUint32(di[64:68], entry.EaSize)
+		binary.LittleEndian.PutUint32(di[68:72], entry.ReparsePointTag)
+		binary.LittleEndian.PutUint64(di[72:80], entry.FileID64)
+		copy(di[80:80+len(name)], name)
+
+		buf = append(buf, di...)
+	}
+
+	return buf
+}
+
+func (info fileIDAllExtdDirInfo) encode() []byte {
+	var buf []byte
+	for i, entry := range info {
+		name := utils.EncodeStringToBytes(entry.FileName)
+		length := 96 + len(name)
+		if i < len(info)-1 {
+			length = utils.Roundup(length, 8)
+		}
+
+		di := make([]byte, length)
+		if i < len(info)-1 {
+			binary.LittleEndian.PutUint32(di[:4], uint32(length))
+		}
+
+		binary.LittleEndian.PutUint32(di[4:8], entry.FileIndex)
+		binary.LittleEndian.PutUint64(di[8:16], utils.UnixToFiletime(entry.CreationTime))
+		binary.LittleEndian.PutUint64(di[16:24], utils.UnixToFiletime(entry.LastAccessTime))
+		binary.LittleEndian.PutUint64(di[24:32], utils.UnixToFiletime(entry.LastWriteTime))
+		binary.LittleEndian.PutUint64(di[32:40], utils.UnixToFiletime(entry.ChangeTime))
+		binary.LittleEndian.PutUint64(di[40:48], entry.EndOfFile)
+		binary.LittleEndian.PutUint64(di[48:56], entry.AllocationSize)
+		binary.LittleEndian.PutUint32(di[56:60], entry.FileAttributes)
+		binary.LittleEndian.PutUint32(di[64:68], entry.EaSize)
+		binary.LittleEndian.PutUint32(di[68:72], entry.ReparsePointTag)
+		binary.LittleEndian.PutUint64(di[72:80], entry.FileID64)
+		copy(di[80:96], entry.FileID128)
+
+		binary.LittleEndian.PutUint32(di[60:64], uint32(len(name)))
+		copy(di[96:96+len(name)], name)
+
+		buf = append(buf, di...)
+	}
+
+	return buf
+}
+
+func (info fileIDAllExtdBothDirInfo) encode() []byte {
+	var buf []byte
+	for i, entry := range info {
+		short := utils.EncodeStringToBytes(entry.ShortName)
+		long := utils.EncodeStringToBytes(entry.FileName)
+		length := 122 + len(long)
+		if i < len(info)-1 {
+			length = utils.Roundup(length, 8)
+		}
+
+		di := make([]byte, length)
+		if i < len(info)-1 {
+			binary.LittleEndian.PutUint32(di[:4], uint32(length))
+		}
+
+		binary.LittleEndian.PutUint32(di[4:8], entry.FileIndex)
+		binary.LittleEndian.PutUint64(di[8:16], utils.UnixToFiletime(entry.CreationTime))
+		binary.LittleEndian.PutUint64(di[16:24], utils.UnixToFiletime(entry.LastAccessTime))
+		binary.LittleEndian.PutUint64(di[24:32], utils.UnixToFiletime(entry.LastWriteTime))
+		binary.LittleEndian.PutUint64(di[32:40], utils.UnixToFiletime(entry.ChangeTime))
+		binary.LittleEndian.PutUint64(di[40:48], entry.EndOfFile)
+		binary.LittleEndian.PutUint64(di[48:56], entry.AllocationSize)
+		binary.LittleEndian.PutUint32(di[56:60], entry.FileAttributes)
+		binary.LittleEndian.PutUint32(di[64:68], entry.EaSize)
+		binary.LittleEndian.PutUint32(di[68:72], entry.ReparsePointTag)
+		binary.LittleEndian.PutUint64(di[72:80], entry.FileID64)
+		copy(di[80:96], entry.FileID128)
+
+		di[96] = uint8(len(short))
+		copy(di[98:122], short)
+		binary.LittleEndian.PutUint32(di[60:64], uint32(len(long)))
+		copy(di[122:122+len(long)], long)
+
+		buf = append(buf, di...)
+	}
+
+	return buf
+}
+
+type FileInfo struct {
+	ID64      uint64
+	ID        []byte
+	CreatedAt time.Time
+}
+
+func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uint32, single, root bool, dir, parent FileInfo) (buf []byte, num int) {
 	var info []dirInfo
 	size := uint32(224)
 	if bufSize < size {
@@ -265,21 +561,23 @@ func QueryDirectoryBuffer(full bool, entries []api.ObjectMetadata, bufSize uint3
 	if root {
 		info = append(info,
 			dirInfo{
-				CreationTime:   createdAt,
-				LastAccessTime: createdAt,
-				LastWriteTime:  createdAt,
-				ChangeTime:     createdAt,
+				CreationTime:   dir.CreatedAt,
+				LastAccessTime: dir.CreatedAt,
+				LastWriteTime:  dir.CreatedAt,
+				ChangeTime:     dir.CreatedAt,
 				FileAttributes: FILE_ATTRIBUTE_DIRECTORY,
-				FileID:         id,
+				FileID64:       dir.ID64,
+				FileID128:      dir.ID,
 				FileName:       ".",
 			},
 			dirInfo{
-				CreationTime:   parentCreatedAt,
-				LastAccessTime: parentCreatedAt,
-				LastWriteTime:  parentCreatedAt,
-				ChangeTime:     parentCreatedAt,
+				CreationTime:   parent.CreatedAt,
+				LastAccessTime: parent.CreatedAt,
+				LastWriteTime:  parent.CreatedAt,
+				ChangeTime:     parent.CreatedAt,
 				FileAttributes: FILE_ATTRIBUTE_DIRECTORY,
-				FileID:         parentID,
+				FileID64:       parent.ID64,
+				FileID128:      parent.ID,
 				FileName:       "..",
 			},
 		)
@@ -308,13 +606,10 @@ func QueryDirectoryBuffer(full bool, entries []api.ObjectMetadata, bufSize uint3
 			di.AllocationSize = uint64(entry.Size)
 		}
 
-		fid, _ := hex.DecodeString(entry.ETag)
-		if len(fid) >= 8 {
-			di.FileID = binary.LittleEndian.Uint64(fid[:8])
-		} else {
-			hash := blake2b.Sum256([]byte(entry.Name))
-			di.FileID = binary.LittleEndian.Uint64(hash[:8])
-		}
+		hash := blake2b.Sum256([]byte(entry.Name))
+		di.FileID64 = binary.LittleEndian.Uint64(hash[:8])
+		di.FileID128 = make([]byte, 16)
+		rand.Read(di.FileID128)
 
 		info = append(info, di)
 		num++
@@ -325,10 +620,27 @@ func QueryDirectoryBuffer(full bool, entries []api.ObjectMetadata, bufSize uint3
 		}
 	}
 
-	if full {
-		return fileIDFullDirInfo(info).encode(), num
-	} else {
+	switch class {
+	case FILE_BOTH_DIRECTORY_INFORMATION:
+		return fileBothDirInfo(info).encode(), num
+	case FILE_DIRECTORY_INFORMATION:
+		return fileDirInfo(info).encode(), num
+	case FILE_ID_64_EXTD_BOTH_DIRECTORY_INFORMATION:
+		return fileID64ExtdBothDirInfo(info).encode(), num
+	case FILE_ID_64_EXTD_DIRECTORY_INFORMATION:
+		return fileID64ExtdDirInfo(info).encode(), num
+	case FILE_ID_ALL_EXTD_BOTH_DIRECTORY_INFORMATION:
+		return fileIDAllExtdBothDirInfo(info).encode(), num
+	case FILE_ID_ALL_EXTD_DIRECTORY_INFORMATION:
+		return fileIDAllExtdDirInfo(info).encode(), num
+	case FILE_ID_BOTH_DIRECTORY_INFORMATION:
 		return fileIDBothDirInfo(info).encode(), num
+	case FILE_ID_EXTD_DIRECTORY_INFORMATION:
+		return fileIDExtdDirInfo(info).encode(), num
+	case FILE_ID_FULL_DIRECTORY_INFORMATION:
+		return fileIDFullDirInfo(info).encode(), num
+	default:
+		return
 	}
 }
 

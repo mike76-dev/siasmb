@@ -283,9 +283,22 @@ type NetShareGetInfoRequest struct {
 }
 
 func (req *NetShareGetInfoRequest) Unmarshal(buf []byte) {
-	srvLength := binary.LittleEndian.Uint32(buf[12:16])
-	req.Server = utils.DecodeToString(buf[16 : 16+srvLength*2-2])
-	off := 16 + srvLength*2
+	var off uint32
+	ptr := binary.LittleEndian.Uint32(buf[:4])
+	if ptr > 256 {
+		off += 4
+	}
+
+	srvLength := binary.LittleEndian.Uint32(buf[off+8 : off+12])
+	req.Server = utils.DecodeToString(buf[off+12 : off+12+srvLength*2-2])
+	off += 12 + srvLength*2
+	off = uint32(utils.Roundup(int(off), 4))
+
+	ptr = binary.LittleEndian.Uint32(buf[off : off+4])
+	if ptr > 256 {
+		off += 4
+	}
+
 	shLength := binary.LittleEndian.Uint32(buf[off+8 : off+12])
 	req.Share = utils.DecodeToString(buf[off+12 : off+12+shLength*2-2])
 	off += 12 + shLength*2

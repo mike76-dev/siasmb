@@ -12,7 +12,9 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/mike76-dev/siasmb/smb2"
 	"go.sia.tech/core/types"
 	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
@@ -96,7 +98,7 @@ func (c *Client) GetObjectInfo(ctx context.Context, bucket, path string) (info a
 	return api.ObjectMetadata{}, api.ErrObjectNotFound
 }
 
-func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (id, parentID uint64, createdAt, parentCreatedAt api.TimeRFC3339, err error) {
+func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (dir, parentDir smb2.FileInfo, err error) {
 	var parent, grandParent, name, parentName string
 	if path != "" {
 		name = path + "/"
@@ -140,17 +142,19 @@ func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (id, pa
 			if entry.Name == name {
 				etag, _ := hex.DecodeString(entry.ETag)
 				if len(etag) >= 8 {
-					id = binary.LittleEndian.Uint64(etag[:8])
+					dir.ID64 = binary.LittleEndian.Uint64(etag[:8])
 				}
 
-				createdAt = entry.ModTime
+				dir.CreatedAt = time.Time(entry.ModTime)
+				dir.ID = make([]byte, 16)
 				break
 			}
 		}
 	} else {
 		hash := blake2b.Sum256([]byte("/"))
-		id = binary.LittleEndian.Uint64(hash[:8])
-		createdAt = b.CreatedAt
+		dir.ID64 = binary.LittleEndian.Uint64(hash[:8])
+		dir.CreatedAt = time.Time(b.CreatedAt)
+		dir.ID = make([]byte, 16)
 	}
 
 	if grandParent != "" {
@@ -163,21 +167,23 @@ func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (id, pa
 			if entry.Name == parentName {
 				etag, _ := hex.DecodeString(entry.ETag)
 				if len(etag) >= 8 {
-					parentID = binary.LittleEndian.Uint64(etag[:8])
+					parentDir.ID64 = binary.LittleEndian.Uint64(etag[:8])
 				}
 
-				parentCreatedAt = entry.ModTime
+				parentDir.CreatedAt = time.Time(entry.ModTime)
+				parentDir.ID = make([]byte, 16)
 				break
 			}
 		}
 	} else {
 		hash := blake2b.Sum256([]byte("/"))
-		parentID = binary.LittleEndian.Uint64(hash[:8])
-		parentCreatedAt = b.CreatedAt
+		parentDir.ID64 = binary.LittleEndian.Uint64(hash[:8])
+		parentDir.CreatedAt = time.Time(b.CreatedAt)
+		parentDir.ID = make([]byte, 16)
 	}
 
-	if parentID == id {
-		parentID = 0
+	if parentDir.ID64 == dir.ID64 {
+		parentDir.ID64 = 0
 	}
 
 	return
