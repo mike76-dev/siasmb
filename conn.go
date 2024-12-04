@@ -783,21 +783,39 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		req.SetOpenID(id)
 
-		if op.grantedAccess&smb2.FILE_READ_DATA == 0 {
+		if op.grantedAccess&(smb2.FILE_READ_DATA|smb2.GENERIC_READ) == 0 {
 			resp := smb2.NewErrorResponse(rr, smb2.STATUS_ACCESS_DENIED, nil)
 			return resp, ss, nil
 		}
 
 		if strings.ToLower(op.fileName) == "srvsvc" {
-			if op.srvsrcData != nil {
+			if op.srvsvcData != nil {
 				ip := rpc.InboundPacket{}
-				ip.Read(bytes.NewBuffer(op.srvsrcData))
+				ip.Read(bytes.NewBuffer(op.srvsvcData))
 
 				var packet *rpc.OutboundPacket
 				switch ip.Header.PacketType {
 				case rpc.PACKET_TYPE_BIND:
 					body := ip.Body.(*rpc.Bind)
 					packet = rpc.NewBindAck(ip.Header.CallID, "\\pipe\\srvsvc", body.ContextList)
+
+				case rpc.PACKET_TYPE_REQUEST:
+					body := ip.Body.(*rpc.Request)
+					switch body.OpNum {
+					case rpc.NET_SHARE_ENUM_ALL:
+						var request rpc.NetShareEnumAllRequest
+						request.Unmarshal(ip.Payload)
+						if request.Level == 1 {
+							packet = rpc.NewNetShareEnumAllResponse(
+								ip.Header.CallID,
+								c.server.enumShares(),
+								smb2.STATUS_OK,
+							)
+						}
+
+					default:
+					}
+
 				default:
 				}
 
@@ -806,7 +824,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				resp := &smb2.ReadResponse{}
 				resp.FromRequest(rr)
 				resp.Generate(buf.Bytes(), rr.Padding())
-				op.srvsrcData = nil
+				op.srvsvcData = nil
 				return resp, ss, nil
 			}
 		}
@@ -921,7 +939,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		if (length <= op.size && op.grantedAccess&smb2.FILE_WRITE_DATA == 0) || op.grantedAccess&smb2.FILE_APPEND_DATA == 0 {
+		if (length <= op.size && op.grantedAccess&(smb2.FILE_WRITE_DATA|smb2.GENERIC_WRITE) == 0) || op.grantedAccess&(smb2.FILE_APPEND_DATA|smb2.GENERIC_WRITE) == 0 {
 			resp := smb2.NewErrorResponse(wr, smb2.STATUS_ACCESS_DENIED, nil)
 			return resp, ss, nil
 		}
@@ -930,7 +948,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			buf := make([]byte, len(wr.Buffer()))
 			copy(buf, wr.Buffer())
 			op.mu.Lock()
-			op.srvsrcData = buf
+			op.srvsvcData = buf
 			op.mu.Unlock()
 			resp := &smb2.WriteResponse{}
 			resp.FromRequest(wr)

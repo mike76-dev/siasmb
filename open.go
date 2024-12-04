@@ -68,7 +68,7 @@ type open struct {
 	pendingUpload *upload
 
 	lsaFrames  map[uint32]*rpc.Frame
-	srvsrcData []byte
+	srvsvcData []byte
 	mu         sync.Mutex
 }
 
