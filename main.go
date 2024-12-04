@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"log"
 	"net"
@@ -12,8 +13,11 @@ import (
 	"time"
 
 	"github.com/mike76-dev/siasmb/ntlm"
+	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/stores"
 )
+
+const connectionLimit = 30 // 30 connections from a single host within 10 minutes
 
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
 
@@ -46,7 +50,7 @@ func main() {
 	log.Printf("Listening at %s ...\n", l.Addr())
 	defer l.Close()
 
-	server := newServer(l)
+	server := newServer(l, bs)
 	for _, sh := range ss.Shares {
 		cs := make(map[string]struct{})
 		fs := make(map[string]uint32)
@@ -61,9 +65,32 @@ func main() {
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-	connections := make(map[string]int)
 	go func() {
-		<-c
+		func() {
+			for {
+				select {
+				case <-c:
+					return
+				case <-time.After(10 * time.Minute):
+					server.mu.Lock()
+					server.connectionCount = make(map[string]int)
+					server.mu.Unlock()
+
+					server.bs.Mu.Lock()
+					if err := server.bs.Save(); err != nil {
+						log.Println("Couldn't save state:", err)
+					}
+					server.bs.Mu.Unlock()
+
+					for _, cn := range server.connectionList {
+						if cn.isStale() {
+							server.closeConnection(cn)
+						}
+					}
+				}
+			}
+		}()
+
 		log.Println("Received interrupt signal, shutting down...")
 		server.mu.Lock()
 		defer server.mu.Unlock()
@@ -72,10 +99,14 @@ func main() {
 			log.Printf("Closing connection from client %s\n", addr)
 			connection.conn.Close()
 		}
-		l.Close()
-		for host, num := range connections {
-			log.Printf("Host %s: %d connections\n", host, num)
+
+		server.bs.Mu.Lock()
+		if err := server.bs.Save(); err != nil {
+			log.Println("Couldn't save state:", err)
 		}
+		server.bs.Mu.Unlock()
+
+		l.Close()
 		os.Exit(0)
 	}()
 
@@ -84,13 +115,20 @@ func main() {
 			log.Println(err)
 		} else {
 			host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
-			if _, banned := bs.Bans[host]; banned {
+			if _, banned := server.bs.Bans[host]; banned {
 				conn.Close()
 				continue
 			}
 
-			num := connections[host]
-			connections[host] = num + 1
+			server.mu.Lock()
+			num := server.connectionCount[host]
+			server.connectionCount[host] = num + 1
+			server.mu.Unlock()
+			if num >= connectionLimit {
+				server.blockHost(host, "too many connections")
+				log.Printf("Blocked host %s for too many connections (%d)\n", host, num)
+			}
+
 			go func() {
 				if !server.enabled {
 					return
@@ -119,6 +157,10 @@ func main() {
 					if err := c.acceptRequest(msg); err != nil {
 						log.Println("couldn't accept request:", err)
 						server.closeConnection(c)
+						if errors.Is(err, smb2.ErrWrongProtocol) {
+							server.blockHost(host, "old protocol")
+							log.Printf("Blocked host %s for using old protocol\n", host)
+						}
 						return
 					}
 				}
