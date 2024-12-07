@@ -746,15 +746,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
-		ss.mu.Lock()
-		tc, found := ss.treeConnectTable[rr.Header().TreeID()]
-		ss.mu.Unlock()
-
-		if !found {
-			resp := smb2.NewErrorResponse(rr, smb2.STATUS_INVALID_PARAMETER, nil)
-			return resp, ss, nil
-		}
-
 		ss.idleTime = time.Now()
 		if rr.Length() > uint32(c.maxReadSize) {
 			resp := smb2.NewErrorResponse(rr, smb2.STATUS_INVALID_PARAMETER, nil)
@@ -855,16 +846,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 			var resp smb2.GenericResponse
-			var data bytes.Buffer
-			if err := tc.share.client.ReadObject(op.ctx, tc.share.bucket, op.pathName, rr.Offset(), length, &data); err != nil {
-				log.Println("Error reading object:", err)
-				resp = smb2.NewErrorResponse(rr, smb2.STATUS_DATA_ERROR, nil)
-			} else if data.Len() < int(rr.MinimumCount()) {
+			data := op.read(rr.Offset(), uint64(rr.Length()))
+			if len(data) < int(rr.MinimumCount()) {
 				resp = smb2.NewErrorResponse(rr, smb2.STATUS_END_OF_FILE, nil)
 			} else {
 				resp = &smb2.ReadResponse{}
 				resp.FromRequest(rr)
-				resp.(*smb2.ReadResponse).Generate(data.Bytes(), rr.Padding())
+				resp.(*smb2.ReadResponse).Generate(data, rr.Padding())
 				resp.Header().SetAsyncID(asyncID)
 				resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
 			}
@@ -1296,6 +1284,60 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			resp.Generate(ir.CtlCode(), id, 0, buf.Bytes())
 			return resp, ss, nil
 
+		case smb2.FSCTL_SRV_REQUEST_RESUME_KEY:
+			var op *open
+			id := ir.FileID()
+			fid := binary.LittleEndian.Uint64(id[:8])
+			dfid := binary.LittleEndian.Uint64(id[8:16])
+			ss.mu.Lock()
+			op, found = ss.openTable[fid]
+			ss.mu.Unlock()
+			if !found || op.durableFileID != dfid {
+				if req.GroupID() > 0 {
+					op = c.findOpen(req.GroupID())
+				}
+
+				if op == nil {
+					resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
+					return resp, ss, nil
+				}
+
+				id = op.id()
+			}
+
+			req.SetOpenID(id)
+			resp := &smb2.IoctlResponse{}
+			resp.FromRequest(ir)
+			resp.Generate(ir.CtlCode(), id, 0, op.getResumeKey())
+			return resp, ss, nil
+
+		case smb2.FSCTL_CREATE_OR_GET_OBJECT_ID:
+			var op *open
+			id := ir.FileID()
+			fid := binary.LittleEndian.Uint64(id[:8])
+			dfid := binary.LittleEndian.Uint64(id[8:16])
+			ss.mu.Lock()
+			op, found = ss.openTable[fid]
+			ss.mu.Unlock()
+			if !found || op.durableFileID != dfid {
+				if req.GroupID() > 0 {
+					op = c.findOpen(req.GroupID())
+				}
+
+				if op == nil {
+					resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
+					return resp, ss, nil
+				}
+
+				id = op.id()
+			}
+
+			req.SetOpenID(id)
+			resp := &smb2.IoctlResponse{}
+			resp.FromRequest(ir)
+			resp.Generate(ir.CtlCode(), id, 0, op.getObjectID())
+			return resp, ss, nil
+
 		default:
 			resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
 			return resp, ss, nil
@@ -1596,6 +1638,8 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				info = op.fileStandardInformation()
 			case smb2.FileNetworkOpenInformation:
 				info = op.fileNetworkOpenInformation()
+			case smb2.FileStreamInformation:
+				info = op.fileStreamInformation()
 			default:
 				resp := smb2.NewErrorResponse(qir, smb2.STATUS_NOT_SUPPORTED, nil)
 				return resp, ss, nil
@@ -1642,6 +1686,8 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				}
 			case smb2.FileFsDeviceInformation:
 				info = smb2.FileFsDeviceInfo()
+			case smb2.FileFsObjectIdInformation:
+				info = smb2.FileFSObjectIDInfo(tc.share.volumeID)
 			default:
 				resp := smb2.NewErrorResponse(qir, smb2.STATUS_NOT_SUPPORTED, nil)
 				return resp, ss, nil

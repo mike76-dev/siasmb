@@ -826,6 +826,12 @@ func FileFsDeviceInfo() []byte {
 	return buf
 }
 
+func FileFSObjectIDInfo(volumeID uint64) []byte {
+	id := make([]byte, 64)
+	binary.LittleEndian.PutUint64(id[:8], volumeID)
+	return id
+}
+
 type FileBasicInfo struct {
 	CreationTime   time.Time
 	LastAccessTime time.Time
@@ -1193,4 +1199,20 @@ func NewSecInfo(ctx ntlm.SecurityContext, info uint32, access uint32) []byte {
 	}
 
 	return si.Encode()
+}
+
+type FileStreamInfo struct {
+	StreamName           string
+	StreamSize           uint64
+	StreamAllocationSize uint64
+}
+
+func (fsi FileStreamInfo) Encode() []byte {
+	name := utils.EncodeStringToBytes(fsi.StreamName)
+	buf := make([]byte, 24)
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(len(name)))
+	binary.LittleEndian.PutUint64(buf[8:16], fsi.StreamSize)
+	binary.LittleEndian.PutUint64(buf[16:24], fsi.StreamAllocationSize)
+	buf = append(buf, name...)
+	return buf
 }

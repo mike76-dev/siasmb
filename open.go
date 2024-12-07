@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"log"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -66,6 +67,10 @@ type open struct {
 	lastSearch    string
 	searchResults []api.ObjectMetadata
 	pendingUpload *upload
+	buffer        map[uint64][]byte
+	cacheOrder    []uint64
+	chunkSize     uint64
+	maxCacheSize  int
 
 	lsaFrames  map[uint32]*rpc.Frame
 	srvsvcData []byte
@@ -140,6 +145,7 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		currentQuotaIndex: 1,
 		fileName:          filename,
 		pathName:          filepath,
+		resumeKey:         id[:24],
 		createOptions:     cr.CreateOptions(),
 		fileAttributes:    smb2.FILE_ATTRIBUTE_NORMAL,
 		lastModified:      time.Time(info.ModTime),
@@ -148,6 +154,9 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		ctx:               ctx,
 		cancel:            cancel,
 		lsaFrames:         make(map[uint32]*rpc.Frame),
+		buffer:            make(map[uint64][]byte),
+		chunkSize:         smb2.BytesPerSector * 4,
+		maxCacheSize:      4,
 	}
 
 	if isDir {
@@ -321,6 +330,15 @@ func (op *open) fileNetworkOpenInformation() []byte {
 	return fnoi.Encode()
 }
 
+func (op *open) fileStreamInformation() []byte {
+	fsi := smb2.FileStreamInfo{
+		StreamName:           "::$DATA",
+		StreamSize:           op.size,
+		StreamAllocationSize: op.allocated,
+	}
+	return fsi.Encode()
+}
+
 func (op *open) newLSAFrame(ctx ntlm.SecurityContext) *rpc.Frame {
 	op.mu.Lock()
 	defer op.mu.Unlock()
@@ -387,4 +405,80 @@ func makeSnapshot(entries []api.ObjectMetadata) []byte {
 	}
 
 	return h.Sum(nil)
+}
+
+func (op *open) getResumeKey() []byte {
+	key := make([]byte, 32)
+	copy(key[:24], op.resumeKey)
+	return key
+}
+
+func (op *open) getObjectID() []byte {
+	id := make([]byte, 64)
+	copy(id[:16], op.resumeKey[:16])
+	binary.LittleEndian.PutUint64(id[16:24], op.treeConnect.share.volumeID)
+	copy(id[32:48], op.resumeKey[:16])
+	return id
+}
+
+func (op *open) read(offset, length uint64) []byte {
+	readData := func(o, l uint64) ([]byte, error) {
+		var buf bytes.Buffer
+		err := op.treeConnect.share.client.ReadObject(op.ctx, op.treeConnect.share.bucket, op.pathName, o, l, &buf)
+		if err != nil {
+			return nil, err
+		}
+		return buf.Bytes(), nil
+	}
+
+	if offset >= op.size {
+		return nil
+	}
+
+	if offset+length >= op.size {
+		length = op.size - offset
+	}
+
+	var result []byte
+	remaining := int64(length)
+
+	for remaining > 0 {
+		chunkOffset := (offset / op.chunkSize) * op.chunkSize
+		chunkStart := offset % op.chunkSize
+		chunkEnd := chunkStart + uint64(remaining)
+
+		if chunkEnd > op.chunkSize {
+			chunkEnd = op.chunkSize
+		}
+
+		if data, ok := op.buffer[chunkOffset]; ok {
+			result = append(result, data[chunkStart:chunkEnd]...)
+		} else {
+			toRead := op.chunkSize
+			if chunkOffset+toRead > op.size {
+				toRead = op.size - chunkOffset
+			}
+
+			data, err := readData(chunkOffset, toRead)
+			if err != nil {
+				log.Println("Error reading object:", err)
+				return nil
+			}
+
+			op.buffer[chunkOffset] = data
+			op.cacheOrder = append(op.cacheOrder, chunkOffset)
+			result = append(result, data[chunkStart:chunkEnd]...)
+		}
+
+		if len(op.buffer) > op.maxCacheSize {
+			oldest := op.cacheOrder[0]
+			delete(op.buffer, oldest)
+			op.cacheOrder = op.cacheOrder[1:]
+		}
+
+		remaining -= int64(chunkEnd - chunkStart)
+		offset += (chunkEnd - chunkStart)
+	}
+
+	return result
 }
