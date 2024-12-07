@@ -675,6 +675,23 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		req.SetOpenID(id)
+		if op.pendingUpload != nil {
+			_, err := op.treeConnect.share.client.FinishUpload(
+				op.ctx,
+				op.treeConnect.share.bucket,
+				op.pathName,
+				op.pendingUpload.uploadID,
+				op.pendingUpload.parts,
+			)
+			if err != nil {
+				log.Println("Error completing write:", err)
+			} else {
+				op.size = op.pendingUpload.totalSize
+				op.allocated = op.pendingUpload.totalSize
+				op.pendingUpload = nil
+			}
+		}
+
 		if op.createOptions&smb2.FILE_DELETE_ON_CLOSE > 0 {
 			if err := tc.share.client.DeleteObject(op.ctx, tc.share.bucket, op.pathName, op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0); err != nil {
 				log.Println("Error deleting object:", err)
@@ -1019,7 +1036,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 							}
 						} else {
 							go func(size uint64) {
-								<-time.After(30 * time.Second)
+								<-time.After(10 * time.Minute)
 								if op != nil && op.pendingUpload != nil && op.pendingUpload.totalSize == size {
 									eTag, err = op.treeConnect.share.client.FinishUpload(
 										op.ctx,
