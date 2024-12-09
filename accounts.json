@@ -1,0 +1,8 @@
+{
+    "accounts": [
+        {
+            "username": "<USER_NAME>",
+            "password": "<PASSWORD>"
+        }
+    ]
+}
