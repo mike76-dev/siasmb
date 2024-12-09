@@ -17,9 +17,8 @@ import (
 	"github.com/mike76-dev/siasmb/stores"
 )
 
-const connectionLimit = 30 // 30 connections from a single host within 10 minutes
-
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
+var connectionLimit = flag.Int("maxConnections", 30, "maximal number of connections from a single host within 10 minutes")
 
 func main() {
 	flag.Parse()
@@ -124,7 +123,7 @@ func main() {
 			num := server.connectionCount[host]
 			server.connectionCount[host] = num + 1
 			server.mu.Unlock()
-			if num >= connectionLimit {
+			if num >= *connectionLimit {
 				server.blockHost(host, "too many connections")
 				log.Printf("Blocked host %s for too many connections (%d)\n", host, num)
 			}
