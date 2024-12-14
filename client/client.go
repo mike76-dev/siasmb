@@ -16,39 +16,44 @@ import (
 
 	"github.com/mike76-dev/siasmb/smb2"
 	"go.sia.tech/core/types"
-	"go.sia.tech/jape"
 	"go.sia.tech/renterd/api"
 	"golang.org/x/crypto/blake2b"
 )
 
+// Client implements a http.Client for interacting with renterd.
 type Client struct {
-	c jape.Client
+	BaseURL  string
+	Password string
 }
 
+// New returns an initialized Client.
 func New(addr, password string) *Client {
-	return &Client{jape.Client{
+	return &Client{
 		BaseURL:  addr,
 		Password: password,
-	}}
+	}
 }
 
+// GetBucket retrieves the information about a bucket.
 func (c *Client) GetBucket(ctx context.Context, name string) (bucket api.Bucket, err error) {
-	err = c.c.WithContext(ctx).GET(fmt.Sprintf("/api/bus/bucket/%s", name), &bucket)
+	err = c.doRequest(ctx, "GET", fmt.Sprintf("/api/bus/bucket/%s", name), nil, &bucket)
 	return
 }
 
+// GetObject retrieves the information about a file or lists the contents of a directory.
 func (c *Client) GetObject(ctx context.Context, bucket, path string) (obj api.ObjectsResponse, err error) {
-	path = strings.ReplaceAll(path, "\\", "/")
+	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	path = api.ObjectPathEscape(path)
 	path += "?bucket=" + bucket
-	err = c.c.WithContext(ctx).GET(fmt.Sprintf("/api/bus/objects/%s", path), &obj)
+	err = c.doRequest(ctx, "GET", fmt.Sprintf("/api/bus/objects/%s", path), nil, &obj)
 	return
 }
 
+// GetObjectInfo retrieves the information about a file or a directory.
 func (c *Client) GetObjectInfo(ctx context.Context, bucket, path string) (info api.ObjectMetadata, err error) {
-	path = strings.ReplaceAll(path, "\\", "/")
+	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	var resp api.ObjectsResponse
-	if path == "" {
+	if path == "" { // The root path: calculate the total size of the objects
 		var b api.Bucket
 		b, err = c.GetBucket(ctx, bucket)
 		if err != nil {
@@ -98,6 +103,7 @@ func (c *Client) GetObjectInfo(ctx context.Context, bucket, path string) (info a
 	return api.ObjectMetadata{}, api.ErrObjectNotFound
 }
 
+// GetParentInfo retrieves the information about the current and the parent directories where the file is located.
 func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (dir, parentDir smb2.FileInfo, err error) {
 	var parent, grandParent, name, parentName string
 	if path != "" {
@@ -189,21 +195,25 @@ func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (dir, p
 	return
 }
 
+// Redundancy retrieves the renterd redundancy settings.
 func (c *Client) Redundancy(ctx context.Context) (resp api.RedundancySettings, err error) {
-	err = c.c.WithContext(ctx).GET("/api/bus/setting/redundancy", &resp)
+	err = c.doRequest(ctx, "GET", "/api/bus/setting/redundancy", nil, &resp)
 	return
 }
 
+// contracts retrieves the renterd contracts.
 func (c *Client) contracts(ctx context.Context) (contracts []api.ContractMetadata, err error) {
-	err = c.c.WithContext(ctx).GET("/api/bus/contracts", &contracts)
+	err = c.doRequest(ctx, "GET", "/api/bus/contracts", nil, &contracts)
 	return
 }
 
+// host retrieves the information about a particular host by its public key.
 func (c *Client) host(ctx context.Context, pk types.PublicKey) (h api.Host, err error) {
-	err = c.c.WithContext(ctx).GET(fmt.Sprintf("/api/bus/host/%s", pk), &h)
+	err = c.doRequest(ctx, "GET", fmt.Sprintf("/api/bus/host/%s", pk), nil, &h)
 	return
 }
 
+// RemainingStorage calculates the total remaining storage of all hosts that renterd has active contracts with.
 func (c *Client) RemainingStorage(ctx context.Context) (rs uint64, err error) {
 	var contracts []api.ContractMetadata
 	contracts, err = c.contracts(ctx)
@@ -224,33 +234,36 @@ func (c *Client) RemainingStorage(ctx context.Context) (rs uint64, err error) {
 	return rs, nil
 }
 
+// UsedStorage retrieves the "used" storage, meaning the total size of uploaded sectors including redundancy.
 func (c *Client) UsedStorage(ctx context.Context, bucket string) (us uint64, err error) {
 	values := url.Values{}
 	values.Set("bucket", bucket)
 	var osr api.ObjectsStatsResponse
-	err = c.c.WithContext(ctx).GET("/api/bus/stats/objects?"+values.Encode(), &osr)
+	err = c.doRequest(ctx, "GET", "/api/bus/stats/objects?"+values.Encode(), nil, &osr)
 	if err != nil {
 		return
 	}
 	return osr.TotalUploadedSize, nil
 }
 
+// ReadObject downloads a file from the Sia network.
 func (c *Client) ReadObject(ctx context.Context, bucket, path string, offset, length uint64, buf io.Writer) (err error) {
 	values := url.Values{}
 	values.Set("bucket", bucket)
 
+	// url.PathEscape does the full escape, so we need to convert any escaped forward slashes back.
 	path = strings.ReplaceAll(url.PathEscape(path), "%2F", "/")
 	path = fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%v%v", c.c.BaseURL, path), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%v%v", c.BaseURL, path), nil)
 	if err != nil {
 		return
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", offset, offset+length-1))
-	if c.c.Password != "" {
-		req.SetBasicAuth("", c.c.Password)
+	if c.Password != "" {
+		req.SetBasicAuth("", c.Password)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -273,10 +286,11 @@ func (c *Client) ReadObject(ctx context.Context, bucket, path string, offset, le
 	return
 }
 
+// StartUpload initiates a multipart upload.
 func (c *Client) StartUpload(ctx context.Context, bucket, path string) (uploadID string, err error) {
-	path = strings.ReplaceAll(path, "\\", "/")
+	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	var resp api.MultipartCreateResponse
-	if err = c.c.WithContext(ctx).POST("/api/bus/multipart/create", api.MultipartCreateRequest{
+	if err = c.doRequest(ctx, "POST", "/api/bus/multipart/create", api.MultipartCreateRequest{
 		Bucket: bucket,
 		Path:   "/" + path,
 	}, &resp); err != nil {
@@ -285,9 +299,10 @@ func (c *Client) StartUpload(ctx context.Context, bucket, path string) (uploadID
 	return resp.UploadID, nil
 }
 
+// AbortUpload aborts an initiated multipart upload.
 func (c *Client) AbortUpload(ctx context.Context, bucket, path string, uploadID string) (err error) {
-	path = strings.ReplaceAll(path, "\\", "/")
-	err = c.c.WithContext(ctx).POST("/api/bus/multipart/abort", api.MultipartAbortRequest{
+	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
+	err = c.doRequest(ctx, "POST", "/api/bus/multipart/abort", api.MultipartAbortRequest{
 		Bucket:   bucket,
 		Path:     "/" + path,
 		UploadID: uploadID,
@@ -295,11 +310,14 @@ func (c *Client) AbortUpload(ctx context.Context, bucket, path string, uploadID 
 	return
 }
 
+// FinishUpload completes a multipart upload.
 func (c *Client) FinishUpload(ctx context.Context, bucket, path string, uploadID string, parts []api.MultipartCompletedPart) (eTag string, err error) {
-	path = strings.ReplaceAll(path, "\\", "/")
+	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
+
+	// The parts may come out of order, but renterd will error back, so we need to sort them.
 	slices.SortFunc(parts, func(a, b api.MultipartCompletedPart) int { return a.PartNumber - b.PartNumber })
 	var resp api.MultipartCompleteResponse
-	if err = c.c.WithContext(ctx).POST("/api/bus/multipart/complete", api.MultipartCompleteRequest{
+	if err = c.doRequest(ctx, "POST", "/api/bus/multipart/complete", api.MultipartCompleteRequest{
 		Bucket:   bucket,
 		Path:     "/" + path,
 		UploadID: uploadID,
@@ -310,44 +328,60 @@ func (c *Client) FinishUpload(ctx context.Context, bucket, path string, uploadID
 	return resp.ETag, nil
 }
 
+// UploadPart uploads the provided chunk of data to the Sia network.
 func (c *Client) UploadPart(ctx context.Context, r io.Reader, bucket, path, uploadID string, partNumber int, offset, length uint64) (eTag string, err error) {
-	path = strings.ReplaceAll(path, "\\", "/")
+	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	path = api.ObjectPathEscape(path)
 	values := make(url.Values)
 	values.Set("bucket", bucket)
 	values.Set("uploadid", uploadID)
 	values.Set("partnumber", fmt.Sprint(partNumber))
+
 	off := int(offset)
 	opts := api.UploadMultipartUploadPartOptions{
 		EncryptionOffset: &off,
 		ContentLength:    int64(length),
 	}
-
 	opts.Apply(values)
-	u, err := url.Parse(fmt.Sprintf("%v/api/worker/multipart/%v", c.c.BaseURL, path))
+
+	u, err := url.Parse(fmt.Sprintf("%v/api/worker/multipart/%v", c.BaseURL, path))
 	if err != nil {
 		return
 	}
 	u.RawQuery = values.Encode()
+
 	req, err := http.NewRequestWithContext(ctx, "PUT", u.String(), r)
 	if err != nil {
 		return
 	}
-	req.SetBasicAuth("", c.c.WithContext(ctx).Password)
+
+	req.SetBasicAuth("", c.Password)
 	if length != 0 {
 		req.ContentLength = int64(length)
 	} else if req.ContentLength, err = sizeFromSeeker(r); err != nil {
 		return "", fmt.Errorf("failed to get content length from seeker: %v", err)
 	}
-	header, _, err := doRequest(req, nil)
+
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return
 	}
-	return header.Get("ETag"), nil
+
+	defer resp.Body.Close()
+	defer io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		lr := io.LimitReader(resp.Body, 1<<20) // 1MiB limit
+		errMsg, _ := io.ReadAll(lr)
+		return "", fmt.Errorf("HTTP error: %s (status: %d)", string(errMsg), resp.StatusCode)
+	}
+
+	return resp.Header.Get("ETag"), nil
 }
 
+// DeleteObject deletes a file or a directory.
 func (c *Client) DeleteObject(ctx context.Context, bucket, path string, batch bool) (err error) {
-	path = strings.ReplaceAll(path, "\\", "/")
+	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	path = api.ObjectPathEscape(path)
 	if batch {
 		path += "/"
@@ -356,19 +390,22 @@ func (c *Client) DeleteObject(ctx context.Context, bucket, path string, batch bo
 	values.Set("bucket", bucket)
 	opts := api.DeleteObjectOptions{Batch: batch}
 	opts.Apply(values)
-	err = c.c.WithContext(ctx).DELETE(fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path))
+	err = c.doRequest(ctx, "DELETE", fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path), nil, nil)
 	return
 }
 
+// MakeDirectory creates a new directory in the specified path.
 func (c *Client) MakeDirectory(ctx context.Context, bucket, path string) (err error) {
-	path = strings.ReplaceAll(path, "\\", "/")
+	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	path = api.ObjectPathEscape(path)
 	path += "/"
 	values := make(url.Values)
 	values.Set("bucket", bucket)
+	err = c.doRequest(ctx, "PUT", fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path), nil, nil)
 	return
 }
 
+// RenameObject renames a file or a directory.
 func (c *Client) RenameObject(ctx context.Context, bucket, oldName, newName string, isDir, force bool) (err error) {
 	mode := api.ObjectsRenameModeSingle
 	if isDir {
@@ -376,7 +413,7 @@ func (c *Client) RenameObject(ctx context.Context, bucket, oldName, newName stri
 		newName += "/"
 		mode = api.ObjectsRenameModeMulti
 	}
-	err = c.c.WithContext(ctx).POST("/api/bus/objects/rename", api.ObjectsRenameRequest{
+	err = c.doRequest(ctx, "POST", "/api/bus/objects/rename", api.ObjectsRenameRequest{
 		Bucket: bucket,
 		Force:  force,
 		From:   "/" + oldName,
@@ -386,6 +423,7 @@ func (c *Client) RenameObject(ctx context.Context, bucket, oldName, newName stri
 	return
 }
 
+// sizeFromSeeker tries to find out the size of a file.
 func sizeFromSeeker(r io.Reader) (int64, error) {
 	s, ok := r.(io.Seeker)
 	if !ok {
@@ -402,21 +440,41 @@ func sizeFromSeeker(r io.Reader) (int64, error) {
 	return size, nil
 }
 
-func doRequest(req *http.Request, resp interface{}) (http.Header, int, error) {
+// doRequest does everything needed to send an HTTP request and receive a response.
+func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}, resp interface{}) error {
+	var reqBody io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reqBody = strings.NewReader(string(data))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, reqBody)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if c.Password != "" {
+		req.SetBasicAuth("", c.Password)
+	}
+
 	r, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return err
 	}
 	defer r.Body.Close()
-	defer io.Copy(io.Discard, r.Body)
 
 	if r.StatusCode < 200 || r.StatusCode >= 300 {
-		lr := io.LimitReader(r.Body, 1<<20) // 1MiB
-		errMsg, _ := io.ReadAll(lr)
-		return r.Header, r.StatusCode, fmt.Errorf("HTTP error: %s (status: %d)", string(errMsg), r.StatusCode)
-	} else if resp != nil {
-		return r.Header, r.StatusCode, json.NewDecoder(r.Body).Decode(resp)
+		errMsg, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MiB limit
+		return fmt.Errorf("HTTP error: %s (status: %d)", string(errMsg), r.StatusCode)
 	}
 
-	return r.Header, r.StatusCode, nil
+	if resp != nil {
+		return json.NewDecoder(r.Body).Decode(resp)
+	}
+
+	return nil
 }
