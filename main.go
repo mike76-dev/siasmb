@@ -17,10 +17,14 @@ import (
 	"github.com/mike76-dev/siasmb/stores"
 )
 
+const version = "1.0.0"
+
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
 var connectionLimit = flag.Int("maxConnections", 30, "maximal number of connections from a single host within 10 minutes")
 
 func main() {
+	log.Printf("Starting SiaSMB v%s...\n", version)
+
 	flag.Parse()
 	dir, err := filepath.Abs(*storesDir)
 	if err != nil {
