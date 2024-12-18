@@ -17,17 +17,24 @@ var (
 	errAccessDenied  = errors.New("access denied")
 )
 
+// treeConnect represents a TreeConnect object.
 type treeConnect struct {
-	treeID         uint32
-	session        *session
-	share          *share
-	openCount      uint64
-	creationTime   time.Time
-	maximalAccess  uint32
+	treeID        uint32
+	session       *session
+	share         *share
+	openCount     uint64
+	creationTime  time.Time
+	maximalAccess uint32
+
+	// When a request to create a file comes in, the client assumes that the file exists from then on.
+	// However, it's not possible to upload empty files to the Sia network, so we have to work around that.
+	// The workaround is to remember the names of the files that were created (for the lifetime
+	// of the TreeConnect or until the files are deleted).
 	persistedOpens map[string]*open
 	mu             sync.Mutex
 }
 
+// extractShareName extracts the share name from the provided string of the format \\SERVER\SHARE.
 func extractShareName(path string) string {
 	var ok bool
 	path, ok = strings.CutPrefix(path, "\\\\")
@@ -47,6 +54,7 @@ func extractShareName(path string) string {
 	return strings.ToLower(path[pos+1:])
 }
 
+// newTreeConnect creates a new TreeConnect object and attaches it to the session.
 func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, error) {
 	name := extractShareName(path)
 	if name == "" {
@@ -55,7 +63,7 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 
 	var sh *share
 	var access uint32
-	if name == "ipc$" {
+	if name == "ipc$" { // A special case of the IPC (Inter-Protocol Communication) share
 		sh = &share{
 			name:            name,
 			shareType:       smb2.SHARE_TYPE_PIPE,
@@ -110,6 +118,7 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 	return tc, nil
 }
 
+// closeTreeConnect destroys the TreeConnect object by removing any references to it.
 func (ss *session) closeTreeConnect(tid uint32) error {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()

@@ -1,4 +1,4 @@
-// A minimal implementation of MS-RPC protocol
+// A minimal implementation of MS-RPC protocol.
 package rpc
 
 import (
@@ -15,27 +15,33 @@ import (
 )
 
 const (
+	// LSARPC calls.
 	LSA_CLOSE         = 0x0000
 	LSA_LOOKUP_NAMES  = 0x000e
 	LSA_OPEN_POLICY_2 = 0x002c
 	LSA_GET_USER_NAME = 0x002d
 
+	// SRVSVC calls.
 	NET_SHARE_GET_INFO = 0x0010
 	NET_SHARE_ENUM_ALL = 0x000f
 
+	// MDSSVC calls.
 	MDS_OPEN = 0x0000
 )
 
 const (
+	// Share types.
 	STYPE_DISKTREE   = 0x00000000
 	STYPE_IPC_HIDDEN = 0x80000003
 )
 
+// ResponseBody represents the body of an MS-RPC Response packet.
 type ResponseBody struct {
 	Header  Response
 	Payload ndr.Marshaler
 }
 
+// Encode implements Encoder interface.
 func (rb *ResponseBody) Encode(w io.Writer) {
 	payload, err := ndr.Marshal(rb.Payload)
 	if err != nil {
@@ -48,6 +54,7 @@ func (rb *ResponseBody) Encode(w io.Writer) {
 	w.Write(payload)
 }
 
+// NewBindAck generates an MS-RPC Bind_ack packet.
 func NewBindAck(callID uint32, addr string, contexts []*Context) *OutboundPacket {
 	var results []*Result
 	for _, ctx := range contexts {
@@ -93,6 +100,7 @@ func NewBindAck(callID uint32, addr string, contexts []*Context) *OutboundPacket
 	return packet
 }
 
+// NewGetUserNameResponse generates a response to the LSA_GetUserName request.
 func NewGetUserNameResponse(callID uint32, accountName, authorityName string, status uint32) *OutboundPacket {
 	packet := &OutboundPacket{
 		Header: NewHeader(PACKET_TYPE_RESPONSE, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),
@@ -116,6 +124,7 @@ func NewGetUserNameResponse(callID uint32, accountName, authorityName string, st
 	return packet
 }
 
+// NewOpenPolicy2Response generates a response to the LSA_OpenPolicy2 request.
 func NewOpenPolicy2Response(callID uint32, frame *Frame, status uint32) *OutboundPacket {
 	packet := &OutboundPacket{
 		Header: NewHeader(PACKET_TYPE_RESPONSE, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),
@@ -130,6 +139,7 @@ func NewOpenPolicy2Response(callID uint32, frame *Frame, status uint32) *Outboun
 	return packet
 }
 
+// NewLookupNamesResponse generates a response to the LSA_LookupNames request.
 func NewLookupNamesResponse(callID uint32, ctx ntlm.SecurityContext, status uint32) *OutboundPacket {
 	packet := &OutboundPacket{
 		Header: NewHeader(PACKET_TYPE_RESPONSE, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),
@@ -168,6 +178,7 @@ func NewLookupNamesResponse(callID uint32, ctx ntlm.SecurityContext, status uint
 	return packet
 }
 
+// NewCloseResponse generates a response to the LSA_Close request.
 func NewCloseResponse(callID uint32, status uint32) *OutboundPacket {
 	packet := &OutboundPacket{
 		Header: NewHeader(PACKET_TYPE_RESPONSE, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),
@@ -181,6 +192,7 @@ func NewCloseResponse(callID uint32, status uint32) *OutboundPacket {
 	return packet
 }
 
+// NewNetShareGetInfo1Response generates a response to the NetShareGetInfo Type 1 request.
 func NewNetShareGetInfo1Response(callID uint32, share, remark string, status uint32) *OutboundPacket {
 	packet := &OutboundPacket{
 		Header: NewHeader(PACKET_TYPE_RESPONSE, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),
@@ -198,6 +210,7 @@ func NewNetShareGetInfo1Response(callID uint32, share, remark string, status uin
 	return packet
 }
 
+// NewMdsOpenResponse generates a response to the MdsOpen request.
 func NewMdsOpenResponse(callID uint32, req MdsOpenRequest, path string, status uint32) *OutboundPacket {
 	packet := &OutboundPacket{
 		Header: NewHeader(PACKET_TYPE_RESPONSE, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),
@@ -215,6 +228,7 @@ func NewMdsOpenResponse(callID uint32, req MdsOpenRequest, path string, status u
 	return packet
 }
 
+// NewNetShareEnumAllResponse generates a response to the NetShareEnumAll request.
 func NewNetShareEnumAllResponse(callID uint32, shares []NetShareInfo1, status uint32) *OutboundPacket {
 	packet := &OutboundPacket{
 		Header: NewHeader(PACKET_TYPE_RESPONSE, PFC_FIRST_FRAG|PFC_LAST_FRAG, callID),

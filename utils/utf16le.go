@@ -5,6 +5,7 @@ import (
 	"unicode/utf16"
 )
 
+// EncodedStringLen returns the length of an UTF-16-encoded string in bytes.
 func EncodedStringLen(s string) int {
 	l := 0
 	for _, r := range s {
@@ -17,6 +18,7 @@ func EncodedStringLen(s string) int {
 	return l
 }
 
+// EncodeString encodes a string in the UTF-16LE format.
 func EncodeString(dst []byte, src string) int {
 	ws := utf16.Encode([]rune(src))
 	for i, w := range ws {
@@ -25,6 +27,7 @@ func EncodeString(dst []byte, src string) int {
 	return len(ws) * 2
 }
 
+// EncodeStringToBytes encodes a string in the UTF-16LE format; the result is returned.
 func EncodeStringToBytes(s string) []byte {
 	if len(s) == 0 {
 		return nil
@@ -37,6 +40,7 @@ func EncodeStringToBytes(s string) []byte {
 	return bs
 }
 
+// DecodeToString decodes an UTF-16LE-encoded string.
 func DecodeToString(bs []byte) string {
 	if len(bs) == 0 {
 		return ""
@@ -51,6 +55,7 @@ func DecodeToString(bs []byte) string {
 	return string(utf16.Decode(ws))
 }
 
+// NullTerminatedToStrings converts a sequence of null-terminated Unicode strings to a slice of Golang strings.
 func NullTerminatedToStrings(b []byte) []string {
 	var result []string
 	for len(b) > 0 {

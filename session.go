@@ -24,6 +24,7 @@ var (
 	errSessionNotFound = errors.New("session not found")
 )
 
+// session represents a Session object.
 type session struct {
 	sessionID        uint64
 	state            int
@@ -43,10 +44,11 @@ type session struct {
 	mu sync.Mutex
 }
 
+// registerSession creates a new Session object and registers it with the SMB server.
 func (s *server) registerSession(connection *connection, req smb2.SessionSetupRequest) (*session, bool, error) {
 	var ss *session
 	var found bool
-	if req.Header().SessionID() == 0 {
+	if req.Header().SessionID() == 0 { // A new session
 		sid := make([]byte, 8)
 		rand.Read(sid)
 		ss = &session{
@@ -65,7 +67,7 @@ func (s *server) registerSession(connection *connection, req smb2.SessionSetupRe
 		s.globalSessionTable[ss.sessionID] = ss
 		s.stats.sOpens++
 		s.mu.Unlock()
-	} else {
+	} else { // There is already a session with this ID, reactivate it
 		connection.mu.Lock()
 		ss, found = connection.sessionTable[req.Header().SessionID()]
 		connection.mu.Unlock()
@@ -80,6 +82,7 @@ func (s *server) registerSession(connection *connection, req smb2.SessionSetupRe
 	return ss, found, nil
 }
 
+// deregisterSession destroys the Session object and closes all associated tree connections.
 func (s *server) deregisterSession(connection *connection, sid uint64) (*session, error) {
 	ss, found := connection.sessionTable[sid]
 	if !found {
@@ -118,7 +121,8 @@ func (s *server) deregisterSession(connection *connection, sid uint64) (*session
 	return ss, nil
 }
 
-func (ss *session) validate(req smb2.SessionSetupRequest) {
+// finalize finalizes the session after successfully authenticating the user.
+func (ss *session) finalize(req smb2.SessionSetupRequest) {
 	ss.securityContext = ss.connection.ntlmServer.Session().GetSecurityContext()
 	ss.userName = ss.connection.ntlmServer.Session().User()
 	if ss.userName == "" {
@@ -133,7 +137,7 @@ func (ss *session) validate(req smb2.SessionSetupRequest) {
 	ss.connection.mu.Lock()
 	defer ss.connection.mu.Unlock()
 
-	if req.PreviousSessionID() != 0 {
+	if req.PreviousSessionID() != 0 { // This session replaces another one; delete the previous one
 		pss, found := ss.connection.sessionTable[req.PreviousSessionID()]
 		if found && ss.securityContext.UserRID == pss.securityContext.UserRID && ss.sessionID != req.PreviousSessionID() {
 			delete(ss.connection.sessionTable, req.PreviousSessionID())
@@ -144,9 +148,10 @@ func (ss *session) validate(req smb2.SessionSetupRequest) {
 	}
 
 	ss.state = sessionValid
-	ss.expirationTime = time.Now().Add(100 * 365 * 24 * time.Hour)
+	ss.expirationTime = time.Now().Add(100 * 365 * 24 * time.Hour) // Impossibly long
 }
 
+// sign uses the session key to sign each response in the message.
 func (ss *session) sign(buf []byte) {
 	var off uint32
 	var zero [16]byte
@@ -157,7 +162,7 @@ func (ss *session) sign(buf []byte) {
 		binary.LittleEndian.PutUint32(buf[off+16:off+20], flags|smb2.FLAGS_SIGNED)
 		copy(buf[off+48:off+64], zero[:])
 		h.Reset()
-		if next == 0 {
+		if next == 0 { // Last response in the chain
 			h.Write(buf[off:])
 		} else {
 			h.Write(buf[off : off+next])
@@ -170,6 +175,7 @@ func (ss *session) sign(buf []byte) {
 	}
 }
 
+// validateRequest returns true if the request is correctly signed by the client.
 func (ss *session) validateRequest(req *smb2.Request) bool {
 	if !req.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
 		return true

@@ -169,4 +169,5 @@ func DecodeNegTokenResp(bs []byte) (*NegTokenResp, error) {
 	return &resp, nil
 }
 
+// To be returned in a SMB2_SESSION_SETUP response Part 2.
 var FinalNegTokenResp = []byte{0xa1, 0x07, 0x30, 0x05, 0xa0, 0x03, 0x0a, 0x01, 0x00}

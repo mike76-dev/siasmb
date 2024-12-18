@@ -10,10 +10,12 @@ const (
 	SMB2ReadResponseStructureSize = 17
 )
 
+// ReadRequest represents an SMB2_READ request.
 type ReadRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (rr ReadRequest) Validate() error {
 	if err := Header(rr.data).Validate(); err != nil {
 		return err
@@ -30,40 +32,49 @@ func (rr ReadRequest) Validate() error {
 	return nil
 }
 
+// Padding returns the Padding field of the SMB2_READ request.
 func (rr ReadRequest) Padding() uint8 {
 	return rr.data[SMB2HeaderSize+2]
 }
 
+// Flags returns the Flags field of the SMB2_READ request.
 func (rr ReadRequest) Flags() uint8 {
 	return rr.data[SMB2HeaderSize+3]
 }
 
+// Length returns the Length field of the SMB2_READ request.
 func (rr ReadRequest) Length() uint32 {
 	return binary.LittleEndian.Uint32(rr.data[SMB2HeaderSize+4 : SMB2HeaderSize+8])
 }
 
+// Offset returns the Offset field of the SMB2_READ request.
 func (rr ReadRequest) Offset() uint64 {
 	return binary.LittleEndian.Uint64(rr.data[SMB2HeaderSize+8 : SMB2HeaderSize+16])
 }
 
+// FileID returns the FileID field of the SMB2_READ request.
 func (rr ReadRequest) FileID() []byte {
 	fid := make([]byte, 16)
 	copy(fid, rr.data[SMB2HeaderSize+16:SMB2HeaderSize+32])
 	return fid
 }
 
+// MinimumCount returns the MinimumCount field of the SMB2_READ request.
 func (rr ReadRequest) MinimumCount() uint32 {
 	return binary.LittleEndian.Uint32(rr.data[SMB2HeaderSize+32 : SMB2HeaderSize+36])
 }
 
+// ReadResponse represents an SMB2_READ response.
 type ReadResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_READ response.
 func (rr *ReadResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(rr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2ReadResponseStructureSize)
 }
 
+// SetData sets the Buffer field of the SMB2_READ response.
 func (rr *ReadResponse) SetData(buf []byte, padding uint8) {
 	if padding == 0 { // Edge case on Nautilus (Ubuntu)
 		padding = SMB2HeaderSize + SMB2ReadResponseMinSize
@@ -78,6 +89,7 @@ func (rr *ReadResponse) SetData(buf []byte, padding uint8) {
 	rr.data = append(rr.data, buf...)
 }
 
+// FromRequest implements GenericResponse interface.
 func (rr *ReadResponse) FromRequest(req GenericRequest) {
 	rr.Response.FromRequest(req)
 
@@ -92,6 +104,7 @@ func (rr *ReadResponse) FromRequest(req GenericRequest) {
 	}
 }
 
+// Generate populates the fields of the SMB2_READ response.
 func (rr *ReadResponse) Generate(buf []byte, padding uint8) {
 	rr.SetData(buf, padding)
 }

@@ -13,14 +13,17 @@ const (
 )
 
 const (
+	// Session flags.
 	SESSION_FLAG_IS_GUEST = 0x0001
 	SESSION_FLAG_IS_NULL  = 0x0002
 )
 
+// SessionSetupRequest represents an SMB2_SESSION_SETUP request.
 type SessionSetupRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (ssr SessionSetupRequest) Validate() error {
 	if err := Header(ssr.data).Validate(); err != nil {
 		return err
@@ -37,18 +40,22 @@ func (ssr SessionSetupRequest) Validate() error {
 	return nil
 }
 
+// SecurityMode returns the SecurityMode field of the SMB2_SESSION_SETUP request.
 func (ssr SessionSetupRequest) SecurityMode() uint16 {
 	return uint16(ssr.data[SMB2HeaderSize+3])
 }
 
+// Capabilities returns the Capabilities field of the SMB2_SESSION_SETUP request.
 func (ssr SessionSetupRequest) Capabilities() uint32 {
 	return binary.LittleEndian.Uint32(ssr.data[SMB2HeaderSize+4 : SMB2HeaderSize+8])
 }
 
+// PreviousSessionID returns the PreviousSessionID field of the SMB2_SESSION_SETUP request.
 func (ssr SessionSetupRequest) PreviousSessionID() uint64 {
 	return binary.LittleEndian.Uint64(ssr.data[SMB2HeaderSize+16 : SMB2HeaderSize+24])
 }
 
+// SecurityBuffer returns the Buffer field of the SMB2_SESSION_SETUP request.
 func (ssr SessionSetupRequest) SecurityBuffer() []byte {
 	off := binary.LittleEndian.Uint16(ssr.data[SMB2HeaderSize+12 : SMB2HeaderSize+14])
 	length := binary.LittleEndian.Uint16(ssr.data[SMB2HeaderSize+14 : SMB2HeaderSize+16])
@@ -58,18 +65,22 @@ func (ssr SessionSetupRequest) SecurityBuffer() []byte {
 	return ssr.data[off : off+length]
 }
 
+// SessionSetupResponse represents an SMB2_SESSION_SETUP response.
 type SessionSetupResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_SESSION_SETUP response.
 func (ssr *SessionSetupResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(ssr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2SessionSetupResponseStructureSize)
 }
 
+// SetSessionFlags sets the SessionFlags field of the SMB2_SESSION_SETUP response.
 func (ssr *SessionSetupResponse) SetSessionFlags(flags uint16) {
 	binary.LittleEndian.PutUint16(ssr.data[SMB2HeaderSize+2:SMB2HeaderSize+4], flags)
 }
 
+// SetSecurityBuffer sets the Buffer field of the SMB2_SESSION_SETUP response.
 func (ssr *SessionSetupResponse) SetSecurityBuffer(buf []byte) {
 	binary.LittleEndian.PutUint16(ssr.data[SMB2HeaderSize+4:SMB2HeaderSize+6], SMB2HeaderSize+SMB2SessionSetupResponseMinSize)
 	binary.LittleEndian.PutUint16(ssr.data[SMB2HeaderSize+6:SMB2HeaderSize+8], uint16(len(buf)))
@@ -77,6 +88,7 @@ func (ssr *SessionSetupResponse) SetSecurityBuffer(buf []byte) {
 	ssr.data = append(ssr.data, buf...)
 }
 
+// FromRequest implements GenericResponse interface.
 func (ssr *SessionSetupResponse) FromRequest(req GenericRequest) {
 	ssr.Response.FromRequest(req)
 
@@ -92,10 +104,11 @@ func (ssr *SessionSetupResponse) FromRequest(req GenericRequest) {
 	}
 }
 
+// Generate populates the fields of the SMB2_SESSION_SETUP response.
 func (ssr *SessionSetupResponse) Generate(sid uint64, flags uint16, token []byte, done bool) {
 	Header(ssr.data).SetSessionID(sid)
 	Header(ssr.data).SetStatus(STATUS_OK)
-	if !done {
+	if !done { // Another step is required
 		Header(ssr.data).SetStatus(STATUS_MORE_PROCESSING_REQUIRED)
 	}
 

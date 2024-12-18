@@ -7,11 +7,11 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"golang.org/x/crypto/blake2b"
 )
 
+// Session represents an NTLM authentication session.
 type Session struct {
 	isClientSide bool
 
@@ -29,6 +29,7 @@ type Session struct {
 	infoMap map[uint16][]byte
 }
 
+// SecurityContext represents the context of the user authenticated by the server.
 type SecurityContext struct {
 	User       string
 	Domain     string
@@ -37,6 +38,7 @@ type SecurityContext struct {
 	SessionKey []byte
 }
 
+// GetSecurityContext generates a security context from the session data.
 func (s *Session) GetSecurityContext() (sc SecurityContext) {
 	if s.user == "" {
 		return
@@ -84,46 +86,22 @@ func (s *Session) GetSecurityContext() (sc SecurityContext) {
 	}
 }
 
+// User returns the session's username.
 func (s *Session) User() string {
 	return s.user
 }
 
+// Domain returns the session's domain name.
 func (s *Session) Domain() string {
 	return s.domain
 }
 
+// SessionKey returns the session's signing key.
 func (s *Session) SessionKey() []byte {
 	return s.exportedSessionKey
 }
 
-type InfoMap struct {
-	NbComputerName  string
-	NbDomainName    string
-	DnsComputerName string
-	DnsDomainName   string
-	DnsTreeName     string
-	// Flags           uint32
-	// Timestamp       time.Time
-	// SingleHost
-	// TargetName string
-	// ChannelBindings
-}
-
-func (s *Session) InfoMap() *InfoMap {
-	return &InfoMap{
-		NbComputerName:  utils.DecodeToString(s.infoMap[MsvAvNbComputerName]),
-		NbDomainName:    utils.DecodeToString(s.infoMap[MsvAvNbDomainName]),
-		DnsComputerName: utils.DecodeToString(s.infoMap[MsvAvDnsComputerName]),
-		DnsDomainName:   utils.DecodeToString(s.infoMap[MsvAvDnsDomainName]),
-		DnsTreeName:     utils.DecodeToString(s.infoMap[MsvAvDnsTreeName]),
-		// Flags:        binary.LittleEndian.Uint32(s.infoMap[MsvAvFlags]),
-	}
-}
-
-func (s *Session) Overhead() int {
-	return 16
-}
-
+// Sum generates a checksum of the provided message.
 func (s *Session) Sum(plaintext []byte, seqNum uint32) ([]byte, uint32) {
 	if s.negotiateFlags&NTLMSSP_NEGOTIATE_SIGN == 0 {
 		return nil, 0
@@ -135,6 +113,7 @@ func (s *Session) Sum(plaintext []byte, seqNum uint32) ([]byte, uint32) {
 	return mac(nil, s.negotiateFlags, s.serverHandle, s.serverSigningKey, seqNum, plaintext)
 }
 
+// CheckSum verifies the checksum provided by the client.
 func (s *Session) CheckSum(sum, plaintext []byte, seqNum uint32) (bool, uint32) {
 	if s.negotiateFlags&NTLMSSP_NEGOTIATE_SIGN == 0 {
 		if sum == nil {
@@ -157,6 +136,7 @@ func (s *Session) CheckSum(sum, plaintext []byte, seqNum uint32) (bool, uint32) 
 	return true, seqNum
 }
 
+// Seal encrypts a message.
 func (s *Session) Seal(dst, plaintext []byte, seqNum uint32) ([]byte, uint32) {
 	ret, ciphertext := sliceForAppend(dst, len(plaintext)+16)
 
@@ -182,6 +162,7 @@ func (s *Session) Seal(dst, plaintext []byte, seqNum uint32) ([]byte, uint32) {
 	return ret, seqNum
 }
 
+// Unseal decrypts a message.
 func (s *Session) Unseal(dst, ciphertext []byte, seqNum uint32) ([]byte, uint32, error) {
 	ret, plaintext := sliceForAppend(dst, len(ciphertext)-16)
 

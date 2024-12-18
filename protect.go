@@ -4,6 +4,7 @@ import (
 	"net"
 )
 
+// blockHost adds a remote host to the bans store together with the provided reason.
 func (s *server) blockHost(host, reason string) {
 	s.bs.Mu.Lock()
 	s.bs.Bans[host] = reason

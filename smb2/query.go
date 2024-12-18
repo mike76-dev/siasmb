@@ -28,6 +28,7 @@ const (
 )
 
 const (
+	// File information classes for SMB2_QUERY_DIRECTORY.
 	FILE_DIRECTORY_INFORMATION                  = 0x01
 	FILE_FULL_DIRECTORY_INFORMATION             = 0x02
 	FILE_ID_FULL_DIRECTORY_INFORMATION          = 0x26
@@ -43,6 +44,7 @@ const (
 )
 
 const (
+	// Query flags for SMB2_QUERY_DIRECTORY.
 	RESTART_SCANS       = 0x01
 	RETURN_SINGLE_ENTRY = 0x02
 	INDEX_SPECIFIED     = 0x04
@@ -50,6 +52,7 @@ const (
 )
 
 const (
+	// Information types.
 	INFO_FILE       = 0x01
 	INFO_FILESYSTEM = 0x02
 	INFO_SECURITY   = 0x03
@@ -57,6 +60,7 @@ const (
 )
 
 const (
+	// File information classes for SMB2_QUERY_INFO.
 	FileAccessInformation          = 0x08
 	FileAlignmentInformation       = 0x11
 	FileAllInformation             = 0x12
@@ -86,6 +90,7 @@ const (
 	FileValidDataLengthInformation = 0x27
 	FileInfoClass_Reserved         = 0x64
 
+	// File system information classes for SMB2_QUERY_INFO.
 	FileFsAttributeInformation  = 0x05
 	FileFsControlInformation    = 0x06
 	FileFsDeviceInformation     = 0x04
@@ -97,6 +102,7 @@ const (
 )
 
 const (
+	// Security information flags.
 	OWNER_SECURITY_INFORMATION     = 0x00000001
 	GROUP_SECURITY_INFORMATION     = 0x00000002
 	DACL_SECURITY_INFORMATION      = 0x00000004
@@ -108,15 +114,18 @@ const (
 )
 
 const (
+	// Query flags for SMB2_QUERY_INFO.
 	SL_RESTART_SCAN        = 0x00000001
 	SL_RETURN_SINGLE_ENTRY = 0x00000002
 	SL_INDEX_SPECIFIED     = 0x00000004
 )
 
+// QueryDirectoryRequest represents an SMB2_QUERY_DIRECTORY request.
 type QueryDirectoryRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (qdr QueryDirectoryRequest) Validate() error {
 	if err := Header(qdr.data).Validate(); err != nil {
 		return err
@@ -139,28 +148,34 @@ func (qdr QueryDirectoryRequest) Validate() error {
 	return nil
 }
 
+// FileInformationClass returns the FileInformationClass field of the SMB2_QUERY_DIRECTORY request.
 func (qdr QueryDirectoryRequest) FileInformationClass() uint8 {
 	return qdr.data[SMB2HeaderSize+2]
 }
 
+// Flags returns the Flags field of the SMB2_QUERY_DIRECTORY request.
 func (qdr QueryDirectoryRequest) Flags() uint8 {
 	return qdr.data[SMB2HeaderSize+3]
 }
 
+// FileIndex returns the FileIndex field of the SMB2_QUERY_DIRECTORY request.
 func (qdr QueryDirectoryRequest) FileIndex() uint32 {
 	return binary.LittleEndian.Uint32(qdr.data[SMB2HeaderSize+4 : SMB2HeaderSize+8])
 }
 
+// FileID returns the FileID field of the SMB2_QUERY_DIRECTORY request.
 func (qdr QueryDirectoryRequest) FileID() []byte {
 	fid := make([]byte, 16)
 	copy(fid, qdr.data[SMB2HeaderSize+8:SMB2HeaderSize+24])
 	return fid
 }
 
+// OutputBufferLength returns the OutputBufferLength field of the SMB2_QUERY_DIRECTORY request.
 func (qdr QueryDirectoryRequest) OutputBufferLength() uint32 {
 	return binary.LittleEndian.Uint32(qdr.data[SMB2HeaderSize+28 : SMB2HeaderSize+32])
 }
 
+// FileName returns the filename referenced by the Buffer field of the SMB2_QUERY_DIRECTORY request.
 func (qdr QueryDirectoryRequest) FileName() string {
 	off := binary.LittleEndian.Uint16(qdr.data[SMB2HeaderSize+24 : SMB2HeaderSize+26])
 	length := binary.LittleEndian.Uint16(qdr.data[SMB2HeaderSize+26 : SMB2HeaderSize+28])
@@ -545,20 +560,22 @@ func (info fileIDAllExtdBothDirInfo) encode() []byte {
 	return buf
 }
 
+// FileInfo is a helper structure that combines the 64-bit and the 128-bit file IDs and the file creation time.
 type FileInfo struct {
 	ID64      uint64
 	ID        []byte
 	CreatedAt time.Time
 }
 
+// QueryDirectoryBuffer generates the query result depending on the provided parameters.
 func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uint32, single, root bool, dir, parent FileInfo) (buf []byte, num int) {
 	var info []dirInfo
-	size := uint32(224)
+	size := uint32(224) // The minimal size of the buffer for safety
 	if bufSize < size {
 		return nil, 0
 	}
 
-	if root {
+	if root { // "." and ".." directories need to be included in the response
 		info = append(info,
 			dirInfo{
 				CreationTime:   dir.CreatedAt,
@@ -586,6 +603,8 @@ func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uin
 	for i, entry := range entries {
 		_, name, isDir := utils.ExtractFilename(entry.Name)
 		length := 104 + uint32(len(name))*2
+
+		// Check if the buffer length exceeds bufSize after adding the new record.
 		if size+length > bufSize {
 			break
 		}
@@ -615,7 +634,7 @@ func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uin
 		num++
 		if !single && i < len(entries)-1 && size+uint32(utils.Roundup(104+len(name)*2, 8)) <= bufSize {
 			size += uint32(utils.Roundup(104+len(name)*2, 8))
-		} else {
+		} else { // Either single entry requested or the buffer length exceeds bufSize
 			break
 		}
 	}
@@ -644,20 +663,24 @@ func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uin
 	}
 }
 
+// QueryDirectoryResponse represents an SMB2_QUERY_DIRECTORY response.
 type QueryDirectoryResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_QUERY_DIRECTORY response.
 func (qdr *QueryDirectoryResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(qdr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2QueryDirectoryResponseStructureSize)
 }
 
+// SetOutputBuffer sets the Buffer field of the SMB2_QUERY_DIRECTORY response.
 func (qdr *QueryDirectoryResponse) SetOutputBuffer(buf []byte) {
 	binary.LittleEndian.PutUint16(qdr.data[SMB2HeaderSize+2:SMB2HeaderSize+4], uint16(len(qdr.data)))
 	binary.LittleEndian.PutUint32(qdr.data[SMB2HeaderSize+4:SMB2HeaderSize+8], uint32(len(buf)))
 	qdr.data = append(qdr.data, buf...)
 }
 
+// FromRequest implements GenericResponse interface.
 func (qdr *QueryDirectoryResponse) FromRequest(req GenericRequest) {
 	qdr.Response.FromRequest(req)
 
@@ -672,14 +695,17 @@ func (qdr *QueryDirectoryResponse) FromRequest(req GenericRequest) {
 	}
 }
 
+// Generate populates the fields of the SMB2_QUERY_DIRECTORY response.
 func (qdr *QueryDirectoryResponse) Generate(buf []byte) {
 	qdr.SetOutputBuffer(buf)
 }
 
+// QueryInfoRequest represents an SMB2_QUERY_INFO request.
 type QueryInfoRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (qir QueryInfoRequest) Validate() error {
 	if err := Header(qir.data).Validate(); err != nil {
 		return err
@@ -702,52 +728,63 @@ func (qir QueryInfoRequest) Validate() error {
 	return nil
 }
 
+// InfoType returns the InfoType field of the SMB2_QUERY_INFO request.
 func (qir QueryInfoRequest) InfoType() uint8 {
 	return qir.data[SMB2HeaderSize+2]
 }
 
+// FileInfoClass returns the FileInfoClass field of the SMB2_QUERY_INFO request.
 func (qir QueryInfoRequest) FileInfoClass() uint8 {
 	return qir.data[SMB2HeaderSize+3]
 }
 
+// OutputBufferLength returns the OutputBufferLength field of the SMB2_QUERY_INFO request.
 func (qir QueryInfoRequest) OutputBufferLength() uint32 {
 	return binary.LittleEndian.Uint32(qir.data[SMB2HeaderSize+4 : SMB2HeaderSize+8])
 }
 
+// InputBuffer returns the Buffer field of the SMB2_QUERY_INFO request.
 func (qir QueryInfoRequest) InputBuffer() []byte {
 	off := binary.LittleEndian.Uint16(qir.data[SMB2HeaderSize+8 : SMB2HeaderSize+10])
 	length := binary.LittleEndian.Uint32(qir.data[SMB2HeaderSize+12 : SMB2HeaderSize+16])
 	return qir.data[off : uint32(off)+length]
 }
 
+// AdditionalInformation returns the AdditionalInformation field of the SMB2_QUERY_INFO request.
 func (qir QueryInfoRequest) AdditionalInformation() uint32 {
 	return binary.LittleEndian.Uint32(qir.data[SMB2HeaderSize+16 : SMB2HeaderSize+20])
 }
 
+// Flags returns the Flags field of the SMB2_QUERY_INFO request.
 func (qir QueryInfoRequest) Flags() uint32 {
 	return binary.LittleEndian.Uint32(qir.data[SMB2HeaderSize+20 : SMB2HeaderSize+24])
 }
 
+// FileID returns the FileID field of the SMB2_QUERY_INFO request.
 func (qir QueryInfoRequest) FileID() []byte {
 	fid := make([]byte, 16)
 	copy(fid, qir.data[SMB2HeaderSize+24:SMB2HeaderSize+40])
 	return fid
 }
 
+// QueryInfoResponse represents an SMB2_QUERY_INFO response.
 type QueryInfoResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_QUERY_INFO response.
 func (qir *QueryInfoResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(qir.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2QueryInfoResponseStructureSize)
 }
 
+// SetOutputBuffer sets the Buffer field of the SMB2_QUERY_INFO response.
 func (qir *QueryInfoResponse) SetOutputBuffer(buf []byte) {
 	binary.LittleEndian.PutUint16(qir.data[SMB2HeaderSize+2:SMB2HeaderSize+4], uint16(len(qir.data)))
 	binary.LittleEndian.PutUint32(qir.data[SMB2HeaderSize+4:SMB2HeaderSize+8], uint32(len(buf)))
 	qir.data = append(qir.data, buf...)
 }
 
+// FromRequest implements GenericResponse interface.
 func (qir *QueryInfoResponse) FromRequest(req GenericRequest) {
 	qir.Response.FromRequest(req)
 
@@ -762,10 +799,12 @@ func (qir *QueryInfoResponse) FromRequest(req GenericRequest) {
 	}
 }
 
+// Generate populates the fields of the SMB2_QUERY_INFO response.
 func (qir *QueryInfoResponse) Generate(buf []byte) {
 	qir.SetOutputBuffer(buf)
 }
 
+// FileFsVolumeInfo generates the output buffer for the FileFsVolumeInformation info class.
 func FileFsVolumeInfo(createdAt time.Time, serialNo uint32, label string) []byte {
 	vl := utils.EncodeStringToBytes(label)
 	if len(vl) > 32 {
@@ -781,6 +820,7 @@ func FileFsVolumeInfo(createdAt time.Time, serialNo uint32, label string) []byte
 	return info
 }
 
+// FileFsAttributeInfo generates the output buffer for the FileFsAttributeInformation info class.
 func FileFsAttributeInfo() []byte {
 	name := utils.EncodeStringToBytes("renterd")
 	info := make([]byte, 12+len(name))
@@ -791,6 +831,7 @@ func FileFsAttributeInfo() []byte {
 	return info
 }
 
+// FileFsSizeInfo generates the output buffer for the FileFsSizeInformation info class.
 func FileFsSizeInfo(total, used uint64, redundancy api.RedundancySettings) []byte {
 	spu := uint32(1)
 	if redundancy.MinShards != 0 {
@@ -805,6 +846,7 @@ func FileFsSizeInfo(total, used uint64, redundancy api.RedundancySettings) []byt
 	return info
 }
 
+// FileFsFullSizeInfo generates the output buffer for the FileFsFullSizeInformation info class.
 func FileFsFullSizeInfo(total, used uint64, redundancy api.RedundancySettings) []byte {
 	spu := uint32(1)
 	if redundancy.MinShards != 0 {
@@ -820,18 +862,21 @@ func FileFsFullSizeInfo(total, used uint64, redundancy api.RedundancySettings) [
 	return info
 }
 
+// FileFsDeviceInfo generates the output buffer for the FileFsDeviceInformation info class.
 func FileFsDeviceInfo() []byte {
 	buf := binary.LittleEndian.AppendUint32(nil, 0x00000007)
 	buf = binary.LittleEndian.AppendUint32(buf, 0x00000030)
 	return buf
 }
 
-func FileFSObjectIDInfo(volumeID uint64) []byte {
+// FileFsObjectIDInfo generates the output buffer for the FileFsObjectIDInformation info class.
+func FileFsObjectIDInfo(volumeID uint64) []byte {
 	id := make([]byte, 64)
 	binary.LittleEndian.PutUint64(id[:8], volumeID)
 	return id
 }
 
+// FileBasicInfo is the output buffer structure for the FileBasicInformation info class.
 type FileBasicInfo struct {
 	CreationTime   time.Time
 	LastAccessTime time.Time
@@ -840,6 +885,7 @@ type FileBasicInfo struct {
 	FileAttributes uint32
 }
 
+// Encode marshals the FileBasicInfo structure into a byte sequence.
 func (fbi FileBasicInfo) Encode() []byte {
 	buf := make([]byte, 40)
 	binary.LittleEndian.PutUint64(buf[:8], utils.UnixToFiletime(fbi.CreationTime))
@@ -850,6 +896,7 @@ func (fbi FileBasicInfo) Encode() []byte {
 	return buf
 }
 
+// Decode unmarshals the buffer into a FileBasicInfo structure.
 func (fbi *FileBasicInfo) Decode(buf []byte) error {
 	if len(buf) < 40 {
 		return ErrInvalidParameter
@@ -864,6 +911,7 @@ func (fbi *FileBasicInfo) Decode(buf []byte) error {
 	return nil
 }
 
+// FileStandardInfo is the output buffer structure for the FileStandardInformation info class.
 type FileStandardInfo struct {
 	AllocationSize uint64
 	EndOfFile      uint64
@@ -872,6 +920,7 @@ type FileStandardInfo struct {
 	Directory      bool
 }
 
+// Encode marshals the FileStandardInfo structure into a byte sequence.
 func (fsi FileStandardInfo) Encode() []byte {
 	buf := make([]byte, 24)
 	binary.LittleEndian.PutUint64(buf[:8], fsi.AllocationSize)
@@ -886,70 +935,84 @@ func (fsi FileStandardInfo) Encode() []byte {
 	return buf
 }
 
+// FileInternalInfo is the output buffer structure for the FileInternalInformation info class.
 type FileInternalInfo struct {
 	IndexNumber uint64
 }
 
+// Encode marshals the FileInternalInfo structure into a byte sequence.
 func (fii FileInternalInfo) Encode() []byte {
 	buf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(buf, fii.IndexNumber)
 	return buf
 }
 
+// FileEaInfo is the output buffer structure for the FileEaInformation info class.
 type FileEaInfo struct {
 	EaSize uint32
 }
 
+// Encode marshals the FileEaInfo structure into a byte sequence.
 func (fei FileEaInfo) Encode() []byte {
 	buf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(buf, fei.EaSize)
 	return buf
 }
 
+// FileAccessInfo is the output buffer structure for the FileAccessInformation info class.
 type FileAccessInfo struct {
 	AccessFlags uint32
 }
 
+// Encode marshals the FileAccessInfo structure into a byte sequence.
 func (fai FileAccessInfo) Encode() []byte {
 	buf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(buf, fai.AccessFlags)
 	return buf
 }
 
+// FilePositionInfo is the output buffer structure for the FilePositionInformation info class.
 type FilePositionInfo struct {
 	CurrentByteOffset uint64
 }
 
+// Encode marshals the FilePositionInfo structure into a byte sequence.
 func (fpi FilePositionInfo) Encode() []byte {
 	buf := make([]byte, 8)
 	binary.LittleEndian.PutUint64(buf, fpi.CurrentByteOffset)
 	return buf
 }
 
+// FileModeInfo is the output buffer structure for the FileModeInformation info class.
 type FileModeInfo struct {
 	Mode uint32
 }
 
+// Encode marshals the FileModeInfo structure into a byte sequence.
 func (fmi FileModeInfo) Encode() []byte {
 	buf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(buf, fmi.Mode)
 	return buf
 }
 
+// FileAlignmentInfo is the output buffer structure for the FileAlignmentInformation info class.
 type FileAlignmentInfo struct {
 	AlignmentRequirement uint32
 }
 
+// Encode marshals the FileAlignmentInfo structure into a byte sequence.
 func (fai FileAlignmentInfo) Encode() []byte {
 	buf := make([]byte, 4)
 	binary.LittleEndian.PutUint32(buf, fai.AlignmentRequirement)
 	return buf
 }
 
+// FileNameInfo is the output buffer structure for the FileNameInformation info class.
 type FileNameInfo struct {
 	FileName string
 }
 
+// Encode marshals the FileNameInfo structure into a byte sequence.
 func (fni FileNameInfo) Encode() []byte {
 	name := utils.EncodeStringToBytes(fni.FileName)
 	buf := make([]byte, len(name)+6)
@@ -961,6 +1024,7 @@ func (fni FileNameInfo) Encode() []byte {
 	return buf
 }
 
+// FileAllInfo is the output buffer structure for the FileAllInformation info class.
 type FileAllInfo struct {
 	BasicInfo     FileBasicInfo
 	StandardInfo  FileStandardInfo
@@ -973,6 +1037,7 @@ type FileAllInfo struct {
 	NameInfo      FileNameInfo
 }
 
+// Encode marshals the FileAllInfo structure into a byte sequence.
 func (fai FileAllInfo) Encode() []byte {
 	return append(
 		append(
@@ -1001,6 +1066,7 @@ func (fai FileAllInfo) Encode() []byte {
 	)
 }
 
+// FileNetworkOpenInfo is the output buffer structure for the FileNetworkOpenInformation info class.
 type FileNetworkOpenInfo struct {
 	CreationTime   time.Time
 	LastAccessTime time.Time
@@ -1011,6 +1077,7 @@ type FileNetworkOpenInfo struct {
 	FileAttributes uint32
 }
 
+// Encode marshals the FileNetworkOpenInfo structure into a byte sequence.
 func (fnoi FileNetworkOpenInfo) Encode() []byte {
 	buf := make([]byte, 56)
 	binary.LittleEndian.PutUint64(buf[:8], utils.UnixToFiletime(fnoi.CreationTime))
@@ -1023,6 +1090,25 @@ func (fnoi FileNetworkOpenInfo) Encode() []byte {
 	return buf
 }
 
+// FileStreamInfo is the output buffer structure for the FileStreamInformation info class.
+type FileStreamInfo struct {
+	StreamName           string
+	StreamSize           uint64
+	StreamAllocationSize uint64
+}
+
+// Encode marshals the FileStreamInfo structure into a byte sequence.
+func (fsi FileStreamInfo) Encode() []byte {
+	name := utils.EncodeStringToBytes(fsi.StreamName)
+	buf := make([]byte, 24)
+	binary.LittleEndian.PutUint32(buf[4:8], uint32(len(name)))
+	binary.LittleEndian.PutUint64(buf[8:16], fsi.StreamSize)
+	binary.LittleEndian.PutUint64(buf[16:24], fsi.StreamAllocationSize)
+	buf = append(buf, name...)
+	return buf
+}
+
+// ACE defines an Access Control Entry.
 type ACE struct {
 	Type   uint8
 	Flags  uint8
@@ -1030,6 +1116,7 @@ type ACE struct {
 	SID    dtyp.SID
 }
 
+// Encode marshals the ACE into a byte sequence.
 func (ace *ACE) Encode() []byte {
 	var buf []byte
 	buf = append(buf, ace.Type)
@@ -1047,11 +1134,13 @@ func (ace *ACE) Encode() []byte {
 	return buf
 }
 
+// ACL defines an Access Control List consisting of one or more ACEs.
 type ACL struct {
 	Revision uint16
 	ACEs     []ACE
 }
 
+// Encode marshals the ACL into a byte sequence.
 func (acl *ACL) Encode() []byte {
 	var buf []byte
 	buf = binary.LittleEndian.AppendUint16(buf, acl.Revision)
@@ -1071,6 +1160,7 @@ func (acl *ACL) Encode() []byte {
 	return buf
 }
 
+// SecInfo is a data structure for the SMB2_0_INFO_SECURITY info type.
 type SecInfo struct {
 	Revision uint16
 	Type     uint16
@@ -1080,6 +1170,7 @@ type SecInfo struct {
 	DACL     ACL
 }
 
+// Encode marshals the SecInfo structure into a byte sequence.
 func (si *SecInfo) Encode() []byte {
 	var buf []byte
 	buf = binary.LittleEndian.AppendUint16(buf, si.Revision)
@@ -1134,6 +1225,7 @@ func (si *SecInfo) Encode() []byte {
 	return buf
 }
 
+// NewSecInfo generates the output buffer for the SMB2_0_INFO_SECURITY info type request.
 func NewSecInfo(ctx ntlm.SecurityContext, info uint32, access uint32) []byte {
 	si := SecInfo{
 		Revision: 1,
@@ -1199,20 +1291,4 @@ func NewSecInfo(ctx ntlm.SecurityContext, info uint32, access uint32) []byte {
 	}
 
 	return si.Encode()
-}
-
-type FileStreamInfo struct {
-	StreamName           string
-	StreamSize           uint64
-	StreamAllocationSize uint64
-}
-
-func (fsi FileStreamInfo) Encode() []byte {
-	name := utils.EncodeStringToBytes(fsi.StreamName)
-	buf := make([]byte, 24)
-	binary.LittleEndian.PutUint32(buf[4:8], uint32(len(name)))
-	binary.LittleEndian.PutUint64(buf[8:16], fsi.StreamSize)
-	binary.LittleEndian.PutUint64(buf[16:24], fsi.StreamAllocationSize)
-	buf = append(buf, name...)
-	return buf
 }

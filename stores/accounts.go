@@ -15,10 +15,12 @@ type persistData struct {
 	Accounts []account `json:"accounts"`
 }
 
+// AccountStore represents a username-password database.
 type AccountStore struct {
 	Accounts map[string]string
 }
 
+// NewJSONAccountStore returns an initialized AccountStore.
 func NewJSONAccountStore(dir string) (*AccountStore, error) {
 	as := &AccountStore{
 		Accounts: make(map[string]string),

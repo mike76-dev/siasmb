@@ -28,6 +28,7 @@ var (
 )
 
 const (
+	// MS-RPC packet types.
 	PACKET_TYPE_REQUEST                = 0x00
 	PACKET_TYPE_RESPONSE               = 0x02
 	PACKET_TYPE_FAULT                  = 0x03
@@ -43,6 +44,7 @@ const (
 )
 
 const (
+	// MS-RPC packet flags.
 	PFC_FIRST_FRAG          = 0x01
 	PFC_LAST_FRAG           = 0x02
 	PFC_PENDING_CANCEL      = 0x04
@@ -53,6 +55,7 @@ const (
 	PFC_OBJECT_UUID         = 0x80
 )
 
+// Header represents the header of an MS-RPC packet.
 type Header struct {
 	RPCVersionMajor    uint8
 	RPCVersionMinor    uint8
@@ -64,6 +67,7 @@ type Header struct {
 	CallID             uint32
 }
 
+// Encode implements Encoder interface.
 func (h *Header) Encode(w io.Writer) {
 	buf := make([]byte, 16)
 	buf[0] = h.RPCVersionMajor
@@ -77,6 +81,7 @@ func (h *Header) Encode(w io.Writer) {
 	w.Write(buf)
 }
 
+// Decode implements Decoder interface.
 func (h *Header) Decode(r io.Reader) {
 	buf := make([]byte, 16)
 	_, err := r.Read(buf)
@@ -94,23 +99,26 @@ func (h *Header) Decode(r io.Reader) {
 	h.CallID = binary.LittleEndian.Uint32(buf[12:])
 }
 
+// NewHeader returns a standard MS-RPC packet header.
 func NewHeader(pt uint8, pf uint8, callID uint32) *Header {
 	return &Header{
 		RPCVersionMajor:    5,
 		RPCVersionMinor:    0,
 		PacketType:         pt,
 		PacketFlags:        pf,
-		DataRepresentation: 0x00000010,
+		DataRepresentation: 0x00000010, // LE byte order, ASCII character format, IEEE float format
 		CallID:             callID,
 	}
 }
 
+// InboundPacket represents an MS-RPC request.
 type InboundPacket struct {
 	Header  *Header
 	Body    Decoder
 	Payload []byte
 }
 
+// Read reads and decodes an MS-RPC request.
 func (ip *InboundPacket) Read(r io.Reader) {
 	ip.Header = &Header{}
 	ip.Header.Decode(r)
@@ -135,11 +143,13 @@ func (ip *InboundPacket) Read(r io.Reader) {
 	}
 }
 
+// OutboundPacket represents an MS-RPC response.
 type OutboundPacket struct {
 	Header *Header
 	Body   Encoder
 }
 
+// Write encodes an MS-RPC response and writes it to the provided stream.
 func (op *OutboundPacket) Write(w io.Writer) {
 	if op == nil || op.Header == nil || op.Body == nil {
 		return
