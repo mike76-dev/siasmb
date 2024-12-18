@@ -12,10 +12,12 @@ const (
 	SMB2LogoffResponseStructureSize = 4
 )
 
+// LogoffRequest represents an SMB2_LOGOFF request.
 type LogoffRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (lr LogoffRequest) Validate() error {
 	if err := Header(lr.data).Validate(); err != nil {
 		return err
@@ -32,14 +34,17 @@ func (lr LogoffRequest) Validate() error {
 	return nil
 }
 
+// LogoffResponse represents an SMB2_LOGOFF response.
 type LogoffResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_LOGOFF response.
 func (lr *LogoffResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(lr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2LogoffResponseStructureSize)
 }
 
+// FromRequest implements GenericResponse interface.
 func (lr *LogoffResponse) FromRequest(req GenericRequest) {
 	lr.Response.FromRequest(req)
 

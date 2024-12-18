@@ -11,6 +11,7 @@ const (
 )
 
 const (
+	// FSCTL control codes.
 	FSCTL_DFS_GET_REFERRALS            = 0x00060194
 	FSCTL_PIPE_PEEK                    = 0x0011400c
 	FSCTL_PIPE_WAIT                    = 0x00110018
@@ -30,6 +31,7 @@ const (
 )
 
 const (
+	// IOCTL flags.
 	IOCTL_IS_FSCTL = 0x00000001
 )
 
@@ -37,10 +39,12 @@ var (
 	DummyFileID = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
 )
 
+// IoctlRequest represents an SMB2_IOCTL request.
 type IoctlRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (ir IoctlRequest) Validate() error {
 	if err := Header(ir.data).Validate(); err != nil {
 		return err
@@ -63,16 +67,19 @@ func (ir IoctlRequest) Validate() error {
 	return nil
 }
 
+// CtlCode returns the CtlCode field of the SMB2_IOCTL request.
 func (ir IoctlRequest) CtlCode() uint32 {
 	return binary.LittleEndian.Uint32(ir.data[SMB2HeaderSize+4 : SMB2HeaderSize+8])
 }
 
+// FileID returns the FileID field of the SMB2_IOCTL request.
 func (ir IoctlRequest) FileID() []byte {
 	fid := make([]byte, 16)
 	copy(fid, ir.data[SMB2HeaderSize+8:SMB2HeaderSize+24])
 	return fid
 }
 
+// InputBuffer returns the Buffer field of the SMB2_IOCTL request.
 func (ir IoctlRequest) InputBuffer() []byte {
 	off := binary.LittleEndian.Uint32(ir.data[SMB2HeaderSize+24 : SMB2HeaderSize+28])
 	length := binary.LittleEndian.Uint32(ir.data[SMB2HeaderSize+28 : SMB2HeaderSize+32])
@@ -82,38 +89,47 @@ func (ir IoctlRequest) InputBuffer() []byte {
 	return ir.data[off : off+length]
 }
 
+// MaxInputResponse returns the MaxInputResponse field of the SMB2_IOCTL request.
 func (ir IoctlRequest) MaxInputResponse() uint32 {
 	return binary.LittleEndian.Uint32(ir.data[SMB2HeaderSize+32 : SMB2HeaderSize+36])
 }
 
+// MaxOutputResponse returns the MaxOutputResponse field of the SMB2_IOCTL request.
 func (ir IoctlRequest) MaxOutputResponse() uint32 {
 	return binary.LittleEndian.Uint32(ir.data[SMB2HeaderSize+44 : SMB2HeaderSize+48])
 }
 
+// Flags returns the Flags field of the SMB2_IOCTL request.
 func (ir IoctlRequest) Flags() uint32 {
 	return binary.LittleEndian.Uint32(ir.data[SMB2HeaderSize+48 : SMB2HeaderSize+52])
 }
 
+// IoctlResponse represents an SMB2_IOCTL response.
 type IoctlResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_IOCTL response.
 func (ir *IoctlResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(ir.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2IoctlResponseStructureSize)
 }
 
+// SetCtlCode sets the CtlCode field of the SMB2_IOCTL response.
 func (ir *IoctlResponse) SetCtlCode(code uint32) {
 	binary.LittleEndian.PutUint32(ir.data[SMB2HeaderSize+4:SMB2HeaderSize+8], code)
 }
 
+// SetFileID sets the FileID field of the SMB2_IOCTL response.
 func (ir *IoctlResponse) SetFileID(fid []byte) {
 	copy(ir.data[SMB2HeaderSize+8:SMB2HeaderSize+24], fid)
 }
 
+// SetFlags sets the Flags field of the SMB2_IOCTL response.
 func (ir *IoctlResponse) SetFlags(flags uint32) {
 	binary.LittleEndian.PutUint32(ir.data[SMB2HeaderSize+40:SMB2HeaderSize+44], flags)
 }
 
+// SetOutputBuffer sets the Buffer field of the SMB2_IOCTL response.
 func (ir *IoctlResponse) SetOutputBuffer(buf []byte) {
 	binary.LittleEndian.PutUint32(ir.data[SMB2HeaderSize+24:SMB2HeaderSize+28], SMB2HeaderSize+SMB2IoctlResponseMinSize)
 	binary.LittleEndian.PutUint32(ir.data[SMB2HeaderSize+28:SMB2HeaderSize+32], 0)
@@ -127,6 +143,7 @@ func (ir *IoctlResponse) SetOutputBuffer(buf []byte) {
 	ir.data = append(ir.data, buf...)
 }
 
+// FromRequest implements GenericResponse interface.
 func (ir *IoctlResponse) FromRequest(req GenericRequest) {
 	ir.Response.FromRequest(req)
 
@@ -141,6 +158,7 @@ func (ir *IoctlResponse) FromRequest(req GenericRequest) {
 	}
 }
 
+// Generate populates the fields of the SMB2_IOCTL response.
 func (ir *IoctlResponse) Generate(code uint32, fid []byte, flags uint32, output []byte) {
 	ir.SetCtlCode(code)
 	ir.SetFileID(fid)

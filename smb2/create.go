@@ -21,7 +21,7 @@ const (
 )
 
 const (
-	// Oplock level
+	// Oplock level.
 	OPLOCK_LEVEL_NONE      = 0x00
 	OPLOCK_LEVEL_II        = 0x01
 	OPLOCK_LEVEL_EXCLUSIVE = 0x08
@@ -30,7 +30,7 @@ const (
 )
 
 const (
-	// Impersonation level
+	// Impersonation level.
 	IMPERSONATION_ANONYMOUS      = 0x00000000
 	IMPERSONATION_IDENTIFICATION = 0x00000001
 	IMPERSONATION_IMPERSONATION  = 0x00000002
@@ -38,14 +38,14 @@ const (
 )
 
 const (
-	// Share access
+	// Share access.
 	FILE_SHARE_READ   = 0x00000001
 	FILE_SHARE_WRITE  = 0x00000002
 	FILE_SHARE_DELETE = 0x00000004
 )
 
 const (
-	// Create disposition
+	// Create disposition.
 	FILE_SUPERSEDE    = 0x00000000
 	FILE_OPEN         = 0x00000001
 	FILE_CREATE       = 0x00000002
@@ -55,7 +55,7 @@ const (
 )
 
 const (
-	// Create options
+	// Create options.
 	FILE_DIRECTORY_FILE            = 0x00000001
 	FILE_WRITE_THROUGH             = 0x00000002
 	FILE_SEQUENTIAL_ONLY           = 0x00000004
@@ -80,7 +80,7 @@ const (
 )
 
 const (
-	// File attributes
+	// File attributes.
 	FILE_ATTRIBUTE_READONLY              = 0x00000001
 	FILE_ATTRIBUTE_HIDDEN                = 0x00000002
 	FILE_ATTRIBUTE_SYSTEM                = 0x00000004
@@ -103,7 +103,7 @@ const (
 )
 
 const (
-	// Create context
+	// Create context.
 	CREATE_EA_BUFFER                    = 0x45787441
 	CREATE_SD_BUFFER                    = 0x53656344
 	CREATE_DURABLE_HANDLE_REQUEST       = 0x44486e51
@@ -116,13 +116,14 @@ const (
 )
 
 const (
+	// Oplock status.
 	OplockNone int = iota
 	OplockHeld
 	OplockBreaking
 )
 
 const (
-	// Create action
+	// Create action.
 	FILE_SUPERSEDED  = 0x00000000
 	FILE_OPENED      = 0x00000001
 	FILE_CREATED     = 0x00000002
@@ -130,13 +131,15 @@ const (
 )
 
 const (
-	BytesPerSector = 4 * 1024 * 1024
+	BytesPerSector = 4 * 1024 * 1024 // 4MiB
 )
 
+// CreateRequest represents an SMB2_CREATE request.
 type CreateRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (cr CreateRequest) Validate() error {
 	if err := Header(cr.data).Validate(); err != nil {
 		return err
@@ -177,52 +180,64 @@ func (cr CreateRequest) Validate() error {
 	return nil
 }
 
+// RequestedOplockLevel returns the RequestedOplockLevel field of the SMB2_CREATE request.
 func (cr CreateRequest) RequestedOplockLevel() uint8 {
 	return cr.data[SMB2HeaderSize+3]
 }
 
+// ImpersonationLevel returns the ImpersonationLevel field of the SMB2_CREATE request.
 func (cr CreateRequest) ImpersonationLevel() uint32 {
 	return binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+4 : SMB2HeaderSize+8])
 }
 
+// DesiredAccess returns the DesiredAccess field of the SMB2_CREATE request.
 func (cr CreateRequest) DesiredAccess() uint32 {
 	return binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+24 : SMB2HeaderSize+28])
 }
 
+// SetDesiredAccess sets the DesiredAccess field of the SMB2_CREATE request.
 func (cr *CreateRequest) SetDesiredAccess(da uint32) {
 	binary.LittleEndian.PutUint32(cr.data[SMB2HeaderSize+24:SMB2HeaderSize+28], da)
 }
 
+// FileAttributes returns the FileAttributes field of the SMB2_CREATE request.
 func (cr CreateRequest) FileAttributes() uint32 {
 	return binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+28 : SMB2HeaderSize+32])
 }
 
+// ShareAccess returns the ShareAccess field of the SMB2_CREATE request.
 func (cr CreateRequest) ShareAccess() uint32 {
 	return binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+32 : SMB2HeaderSize+36])
 }
 
+// CreateDisposition returns the CreateDisposition field of the SMB2_CREATE request.
 func (cr CreateRequest) CreateDisposition() uint32 {
 	return binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+36 : SMB2HeaderSize+40])
 }
 
+// CreateOptions returns the CreateOptions field of the SMB2_CREATE request.
 func (cr CreateRequest) CreateOptions() uint32 {
 	return binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+40 : SMB2HeaderSize+44])
 }
 
+// SetCreateOptions sets the CreateOptions field of the SMB2_CREATE request.
 func (cr *CreateRequest) SetCreateOptions(options uint32) {
 	binary.LittleEndian.PutUint32(cr.data[SMB2HeaderSize+40:SMB2HeaderSize+44], options)
 }
 
+// CreateOptionSelected returns true if the given bit(s) is (are) set in the CreateOptions field.
 func (cr CreateRequest) CreateOptionSelected(option uint32) bool {
 	return cr.CreateOptions()&option > 0
 }
 
+// Filename returns the filename referenced by the Buffer field of the SMB2_CREATE request.
 func (cr CreateRequest) Filename() string {
 	off := binary.LittleEndian.Uint16(cr.data[SMB2HeaderSize+44 : SMB2HeaderSize+46])
 	length := binary.LittleEndian.Uint16(cr.data[SMB2HeaderSize+46 : SMB2HeaderSize+48])
 	return utils.DecodeToString(cr.data[off : off+length])
 }
 
+// CreateContexts returns the create contexts referenced by the Buffer field of the SMB2_CREATE request.
 func (cr CreateRequest) CreateContexts() (map[uint32][]byte, error) {
 	off := binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+48 : SMB2HeaderSize+52])
 	length := binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+52 : SMB2HeaderSize+56])
@@ -262,22 +277,27 @@ func (cr CreateRequest) CreateContexts() (map[uint32][]byte, error) {
 	return contexts, nil
 }
 
+// CreateResponse represents an SMB2_CREATE response.
 type CreateResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_CREATE response.
 func (cr *CreateResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(cr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2CreateResponseStructureSize)
 }
 
+// SetOplockLevel sets the OplockLevel field of the SMB2_CREATE response.
 func (cr *CreateResponse) SetOplockLevel(ol uint8) {
 	cr.data[SMB2HeaderSize+2] = ol
 }
 
+// SetCreateAction sets the CreateAction field of the SMB2_CREATE response.
 func (cr *CreateResponse) SetCreateAction(ca uint32) {
 	binary.LittleEndian.PutUint32(cr.data[SMB2HeaderSize+4:SMB2HeaderSize+8], ca)
 }
 
+// SetFileTime sets the CreationTime, LastAccessTime, LastWriteTime, and ChangeTime fields of the SMB2_CREATE response.
 func (cr *CreateResponse) SetFileTime(creation, lastAccess, lastWrite, change time.Time) {
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+8:SMB2HeaderSize+16], utils.UnixToFiletime(creation))
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+16:SMB2HeaderSize+24], utils.UnixToFiletime(lastAccess))
@@ -285,19 +305,23 @@ func (cr *CreateResponse) SetFileTime(creation, lastAccess, lastWrite, change ti
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+32:SMB2HeaderSize+40], utils.UnixToFiletime(change))
 }
 
+// SetFilesize sets the AllocationSize and EndOfFile fields of the SMB2_CREATE response.
 func (cr *CreateResponse) SetFilesize(size, allocated uint64) {
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+40:SMB2HeaderSize+48], size)
 	binary.LittleEndian.PutUint64(cr.data[SMB2HeaderSize+48:SMB2HeaderSize+56], allocated)
 }
 
+// SetFileAttributes sets the FileAttributes field of the SMB2_CREATE response.
 func (cr *CreateResponse) SetFileAttributes(fa uint32) {
 	binary.LittleEndian.PutUint32(cr.data[SMB2HeaderSize+56:SMB2HeaderSize+60], fa)
 }
 
+// SetFileID sets the FileID field of the SMB2_CREATE response.
 func (cr *CreateResponse) SetFileID(fid []byte) {
 	copy(cr.data[SMB2HeaderSize+64:SMB2HeaderSize+80], fid)
 }
 
+// SetCreateContexts places the create contexts in the Buffer field of the SMB2_CREATE response.
 func (cr *CreateResponse) SetCreateContexts(contexts map[uint32][]byte) {
 	length := len(contexts)
 	if length == 0 {
@@ -334,6 +358,7 @@ func (cr *CreateResponse) SetCreateContexts(contexts map[uint32][]byte) {
 	cr.data = append(cr.data, buf...)
 }
 
+// FromRequest implements GenericResponse interface.
 func (cr *CreateResponse) FromRequest(req GenericRequest) {
 	cr.Response.FromRequest(req)
 
@@ -348,6 +373,7 @@ func (cr *CreateResponse) FromRequest(req GenericRequest) {
 	}
 }
 
+// Generate populates the fields of the SMB2_CREATE response.
 func (cr *CreateResponse) Generate(
 	oplockLevel uint8,
 	createAction uint32,
@@ -399,6 +425,7 @@ func (cr *CreateResponse) Generate(
 	cr.SetCreateContexts(createContexts)
 }
 
+// HandleCreateQueryMaximalAccessRequest generates an SMB2_CREATE_QUERY_MAXIMAL_ACCESS_REQUEST context.
 func HandleCreateQueryMaximalAccessRequest(ctx []byte, modTime time.Time, maxAccess uint32) []byte {
 	resp := make([]byte, 8)
 	if len(ctx) != 8 {
@@ -416,6 +443,7 @@ func HandleCreateQueryMaximalAccessRequest(ctx []byte, modTime time.Time, maxAcc
 	return resp
 }
 
+// HandleCreateQueryOnDiskID generates an SMB2_CREATE_QUERY_ON_DISK_ID context.
 func HandleCreateQueryOnDiskID(fid, vid uint64) []byte {
 	resp := make([]byte, 32)
 	binary.LittleEndian.PutUint64(resp[:8], fid)
@@ -423,6 +451,7 @@ func HandleCreateQueryOnDiskID(fid, vid uint64) []byte {
 	return resp
 }
 
+// HandleCreateDurableHandleRequest generates an SMB2_CREATE_DURABLE_HANDLE_REQUEST context.
 func HandleCreateDurableHandleRequest() []byte {
 	resp := make([]byte, 8)
 	return resp

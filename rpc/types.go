@@ -11,20 +11,24 @@ import (
 	"github.com/oiweiwei/go-msrpc/ndr"
 )
 
+// Encoder is an interface for encoding outbound MS-RPC packets.
 type Encoder interface {
 	Encode(w io.Writer)
 }
 
+// Decoder is an interface for decoding inbound MS-RPC packets.
 type Decoder interface {
 	Decode(r io.Reader)
 }
 
+// SyntaxID represents an LSARPC syntax.
 type SyntaxID struct {
 	IfUUID         [16]byte
 	IfVersionMajor uint16
 	IfVersionMinor uint16
 }
 
+// Encode implements Encoder interface.
 func (sid *SyntaxID) Encode(w io.Writer) {
 	buf := make([]byte, 16)
 	copy(buf, sid.IfUUID[:])
@@ -33,6 +37,7 @@ func (sid *SyntaxID) Encode(w io.Writer) {
 	w.Write(buf)
 }
 
+// Decoder is an interface for decoding inbound MS-RPC packets.
 func (sid *SyntaxID) Decode(r io.Reader) {
 	buf := make([]byte, 20)
 	_, err := r.Read(buf)
@@ -45,12 +50,14 @@ func (sid *SyntaxID) Decode(r io.Reader) {
 	sid.IfVersionMinor = binary.LittleEndian.Uint16(buf[18:20])
 }
 
+// Context represents an LSARPC context.
 type Context struct {
 	ContextID        uint16
 	AbstractSyntax   *SyntaxID
 	TransferSyntaxes []*SyntaxID
 }
 
+// Encode implements Encoder interface.
 func (c *Context) Encode(w io.Writer) {
 	var buf []byte
 	buf = binary.LittleEndian.AppendUint16(buf, c.ContextID)
@@ -62,6 +69,7 @@ func (c *Context) Encode(w io.Writer) {
 	}
 }
 
+// Decoder is an interface for decoding inbound MS-RPC packets.
 func (c *Context) Decode(r io.Reader) {
 	buf := make([]byte, 4)
 	_, err := r.Read(buf)
@@ -79,6 +87,7 @@ func (c *Context) Decode(r io.Reader) {
 	}
 }
 
+// Bind represents an MS-RPC Bind call.
 type Bind struct {
 	MaxXmitFrag  uint16
 	MaxRecvFrag  uint16
@@ -86,6 +95,7 @@ type Bind struct {
 	ContextList  []*Context
 }
 
+// Encode implements Encoder interface.
 func (b *Bind) Encode(w io.Writer) {
 	var buf []byte
 	buf = binary.LittleEndian.AppendUint16(buf, b.MaxXmitFrag)
@@ -98,6 +108,7 @@ func (b *Bind) Encode(w io.Writer) {
 	}
 }
 
+// Decoder is an interface for decoding inbound MS-RPC packets.
 func (b *Bind) Decode(r io.Reader) {
 	buf := make([]byte, 12)
 	_, err := r.Read(buf)
@@ -115,12 +126,14 @@ func (b *Bind) Decode(r io.Reader) {
 	}
 }
 
+// Result represents an MS-RPC bind result.
 type Result struct {
 	DefResult      uint16
 	ProviderReason uint16
 	TransferSyntax *SyntaxID
 }
 
+// Encode implements Encoder interface.
 func (res *Result) Encode(w io.Writer) {
 	var buf []byte
 	buf = binary.LittleEndian.AppendUint16(buf, res.DefResult)
@@ -129,6 +142,7 @@ func (res *Result) Encode(w io.Writer) {
 	res.TransferSyntax.Encode(w)
 }
 
+// Decoder is an interface for decoding inbound MS-RPC packets.
 func (res *Result) Decode(r io.Reader) {
 	buf := make([]byte, 4)
 	_, err := r.Read(buf)
@@ -142,6 +156,7 @@ func (res *Result) Decode(r io.Reader) {
 	res.TransferSyntax.Decode(r)
 }
 
+// BindAck represents an MS-RPC Bind_ack call.
 type BindAck struct {
 	MaxXmitFrag  uint16
 	MaxRecvFrag  uint16
@@ -150,6 +165,7 @@ type BindAck struct {
 	ResultList   []*Result
 }
 
+// Encode implements Encoder interface.
 func (ba *BindAck) Encode(w io.Writer) {
 	var buf []byte
 	buf = binary.LittleEndian.AppendUint16(buf, ba.MaxXmitFrag)
@@ -168,6 +184,7 @@ func (ba *BindAck) Encode(w io.Writer) {
 	}
 }
 
+// Decoder is an interface for decoding inbound MS-RPC packets.
 func (ba *BindAck) Decode(r io.Reader) {
 	buf := make([]byte, 10)
 	_, err := r.Read(buf)
@@ -206,6 +223,7 @@ func (ba *BindAck) Decode(r io.Reader) {
 	}
 }
 
+// Request represents an MS-RPC Request call.
 type Request struct {
 	AllocHint  uint32
 	ContextID  uint16
@@ -213,6 +231,7 @@ type Request struct {
 	ObjectUUID []byte
 }
 
+// Encode implements Encoder interface.
 func (req *Request) Encode(w io.Writer) {
 	var buf []byte
 	buf = binary.LittleEndian.AppendUint32(buf, req.AllocHint)
@@ -224,6 +243,7 @@ func (req *Request) Encode(w io.Writer) {
 	w.Write(buf)
 }
 
+// Decoder is an interface for decoding inbound MS-RPC packets.
 func (req *Request) Decode(r io.Reader) {
 	buf := make([]byte, 8)
 	_, err := r.Read(buf)
@@ -245,12 +265,14 @@ func (req *Request) Decode(r io.Reader) {
 	}
 }
 
+// Response represents an MS-RPC Response call.
 type Response struct {
 	AllocHint   uint32
 	ContextID   uint16
 	CancelCount uint16
 }
 
+// Encode implements Encoder interface.
 func (resp *Response) Encode(w io.Writer) {
 	var buf []byte
 	buf = binary.LittleEndian.AppendUint32(buf, resp.AllocHint)
@@ -259,6 +281,7 @@ func (resp *Response) Encode(w io.Writer) {
 	w.Write(buf)
 }
 
+// Decoder is an interface for decoding inbound MS-RPC packets.
 func (resp *Response) Decode(r io.Reader) {
 	buf := make([]byte, 8)
 	_, err := r.Read(buf)
@@ -271,17 +294,20 @@ func (resp *Response) Decode(r io.Reader) {
 	resp.CancelCount = binary.LittleEndian.Uint16(buf[6:8])
 }
 
+// Frame combines an LSARPC frame handle and an NTLM security context.
 type Frame struct {
 	Handle          lsarpc.Handle
 	SecurityContext ntlm.SecurityContext
 }
 
+// NetShareGetInfoRequest represents an MS-RPC NetShareGetInfo request.
 type NetShareGetInfoRequest struct {
 	Server string
 	Share  string
 	Level  uint32
 }
 
+// Unmarshal decodes the NetShareGetInfo request.
 func (req *NetShareGetInfoRequest) Unmarshal(buf []byte) {
 	var off uint32
 	ptr := binary.LittleEndian.Uint32(buf[:4])
@@ -306,17 +332,20 @@ func (req *NetShareGetInfoRequest) Unmarshal(buf []byte) {
 	req.Level = binary.LittleEndian.Uint32(buf[off : off+4])
 }
 
+// NetShareInfo1 represents an MS-RPC NetShareInfo Type 1 structure.
 type NetShareInfo1 struct {
 	Share   string
 	Type    uint32
 	Comment string
 }
 
+// NetShareInfo1Response represents an MS-RPC NetShareInfo Type 1 response.
 type NetShareInfo1Response struct {
 	NetShareInfo1
 	Result uint32
 }
 
+// MarshalNDR implements ndr.Marshaller interface.
 func (resp *NetShareInfo1Response) MarshalNDR(ctx context.Context, w ndr.Writer) error {
 	var buf []byte
 	buf = binary.LittleEndian.AppendUint32(buf, 1)
@@ -345,6 +374,7 @@ func (resp *NetShareInfo1Response) MarshalNDR(ctx context.Context, w ndr.Writer)
 	return err
 }
 
+// MdsOpenRequest represents an MS-RPC MdsOpen request.
 type MdsOpenRequest struct {
 	DeviceID       uint32
 	Unkn2          uint32
@@ -354,6 +384,7 @@ type MdsOpenRequest struct {
 	MaxCount       uint32
 }
 
+// Unmarshal decodes the MdsOpen request.
 func (req *MdsOpenRequest) Unmarshal(buf []byte) {
 	req.DeviceID = binary.LittleEndian.Uint32(buf[:4])
 	req.Unkn2 = binary.LittleEndian.Uint32(buf[4:8])
@@ -367,6 +398,7 @@ func (req *MdsOpenRequest) Unmarshal(buf []byte) {
 	req.ShareName = string(buf[off+12 : off+12+snLen-1])
 }
 
+// MdsOpenResponse represents an MS-RPC MdsOpen response.
 type MdsOpenResponse struct {
 	DeviceID     uint32
 	Unkn2        uint32
@@ -376,6 +408,7 @@ type MdsOpenResponse struct {
 	MaxCount     uint32
 }
 
+// MarshalNDR implements ndr.Marshaller interface.
 func (resp *MdsOpenResponse) MarshalNDR(ctx context.Context, w ndr.Writer) error {
 	var buf []byte
 	buf = binary.LittleEndian.AppendUint32(buf, resp.DeviceID)
@@ -394,12 +427,14 @@ func (resp *MdsOpenResponse) MarshalNDR(ctx context.Context, w ndr.Writer) error
 	return err
 }
 
+// NetShareEnumAllRequest represents an MS-RPC NetShareEnumAll request.
 type NetShareEnumAllRequest struct {
 	Server    string
 	Level     uint32
 	MaxBuffer uint32
 }
 
+// Unmarshal decodes the NetShareEnumAll request.
 func (req *NetShareEnumAllRequest) Unmarshal(buf []byte) {
 	srvLength := binary.LittleEndian.Uint32(buf[12:16])
 	req.Server = utils.DecodeToString(buf[16 : 16+srvLength*2-2])
@@ -410,11 +445,13 @@ func (req *NetShareEnumAllRequest) Unmarshal(buf []byte) {
 	req.MaxBuffer = binary.LittleEndian.Uint32(buf[off : off+4])
 }
 
+// NetShareEnumAllResponse represents an MS-RPC NetShareEnumAll response.
 type NetShareEnumAllResponse struct {
 	Shares []NetShareInfo1
 	Result uint32
 }
 
+// MarshalNDR implements ndr.Marshaller interface.
 func (resp *NetShareEnumAllResponse) MarshalNDR(ctx context.Context, w ndr.Writer) error {
 	var buf []byte
 	buf = binary.LittleEndian.AppendUint32(buf, 1)

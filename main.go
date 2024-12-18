@@ -25,12 +25,14 @@ var connectionLimit = flag.Int("maxConnections", 30, "maximal number of connecti
 func main() {
 	log.Printf("Starting SiaSMB v%s...\n", version)
 
+	// Parse command-line args.
 	flag.Parse()
 	dir, err := filepath.Abs(*storesDir)
 	if err != nil {
 		panic(err)
 	}
 
+	// Initialize stores.
 	bs, err := stores.NewJSONBansStore(dir)
 	if err != nil {
 		panic(err)
@@ -46,6 +48,7 @@ func main() {
 		panic(err)
 	}
 
+	// Start listening on the SMB port 445.
 	l, err := net.Listen("tcp", ":445")
 	if err != nil {
 		log.Fatal(err)
@@ -53,6 +56,7 @@ func main() {
 	log.Printf("Listening at %s ...\n", l.Addr())
 	defer l.Close()
 
+	// Start the SMB server.
 	server := newServer(l, bs)
 	for _, sh := range ss.Shares {
 		cs := make(map[string]struct{})
@@ -66,6 +70,7 @@ func main() {
 		}
 	}
 
+	// Start a thread to watch for the stop signal.
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -75,16 +80,19 @@ func main() {
 				case <-c:
 					return
 				case <-time.After(10 * time.Minute):
+					// Reset the abuse protection.
 					server.mu.Lock()
 					server.connectionCount = make(map[string]int)
 					server.mu.Unlock()
 
+					// Save the ban list.
 					server.bs.Mu.Lock()
 					if err := server.bs.Save(); err != nil {
 						log.Println("Couldn't save state:", err)
 					}
 					server.bs.Mu.Unlock()
 
+					// Drop unused connections.
 					for _, cn := range server.connectionList {
 						if cn.isStale() {
 							server.closeConnection(cn)
@@ -117,12 +125,14 @@ func main() {
 		if conn, err := l.Accept(); err != nil {
 			log.Println(err)
 		} else {
+			// Check if the remote host is on the ban list.
 			host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 			if _, banned := server.bs.Bans[host]; banned {
 				conn.Close()
 				continue
 			}
 
+			// Ban the remote host if it forms too many connections.
 			server.mu.Lock()
 			num := server.connectionCount[host]
 			server.connectionCount[host] = num + 1
@@ -132,6 +142,7 @@ func main() {
 				log.Printf("Blocked host %s for too many connections (%d)\n", host, num)
 			}
 
+			// Start serving the connection.
 			go func() {
 				if !server.enabled {
 					return
@@ -161,6 +172,8 @@ func main() {
 						log.Println("couldn't accept request:", err)
 						server.closeConnection(c)
 						if errors.Is(err, smb2.ErrWrongProtocol) {
+							// Ban the remote host if it keeps sending SMB requests after receiving
+							// an SMB2_NEGOTIATE response.
 							server.blockHost(host, "old protocol")
 							log.Printf("Blocked host %s for using old protocol\n", host)
 						}

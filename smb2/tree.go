@@ -21,12 +21,14 @@ const (
 )
 
 const (
+	// Share types.
 	SHARE_TYPE_DISK  = 0x01
 	SHARE_TYPE_PIPE  = 0x02
 	SHARE_TYPE_PRINT = 0x03
 )
 
 const (
+	// Share flags.
 	SHAREFLAG_MANUAL_CACHING              = 0x00000000
 	SHAREFLAG_AUTO_CACHING                = 0x00000010
 	SHAREFLAG_VDO_CACHING                 = 0x00000020
@@ -47,6 +49,7 @@ const (
 )
 
 const (
+	// Share capabilities.
 	SHARE_CAP_DFS                     = 0x00000008
 	SHARE_CAP_CONTINUOUS_AVAILABILITY = 0x00000010
 	SMB2_SHARE_CAP_SCALEOUT           = 0x00000020
@@ -56,7 +59,7 @@ const (
 )
 
 const (
-	// File access
+	// File access flags.
 	FILE_READ_DATA         = 0x00000001
 	FILE_WRITE_DATA        = 0x00000002
 	FILE_APPEND_DATA       = 0x00000004
@@ -80,17 +83,19 @@ const (
 )
 
 const (
-	// Directory access
+	// Directory access flags.
 	FILE_LIST_DIRECTORY   = 0x00000001
 	FILE_ADD_FILE         = 0x00000002
 	FILE_ADD_SUBDIRECTORY = 0x00000004
 	FILE_TRAVERSE         = 0x00000020
 )
 
+// TreeConnectRequest represents an SMB2_TREE_CONNECT request.
 type TreeConnectRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (tcr TreeConnectRequest) Validate() error {
 	if err := Header(tcr.data).Validate(); err != nil {
 		return err
@@ -107,6 +112,7 @@ func (tcr TreeConnectRequest) Validate() error {
 	return nil
 }
 
+// PathName returns the share path referenced by the Buffer field of the SMB2_CREATE request.
 func (tcr TreeConnectRequest) PathName() string {
 	off := binary.LittleEndian.Uint16(tcr.data[SMB2HeaderSize+4 : SMB2HeaderSize+6])
 	length := binary.LittleEndian.Uint16(tcr.data[SMB2HeaderSize+6 : SMB2HeaderSize+8])
@@ -117,30 +123,37 @@ func (tcr TreeConnectRequest) PathName() string {
 	return utils.DecodeToString(tcr.data[off : off+length])
 }
 
+// TreeConnectResponse represents an SMB2_TREE_CONNECT response.
 type TreeConnectResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_TREE_CONNECT response.
 func (tcr *TreeConnectResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(tcr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2TreeConnectResponseStructureSize)
 }
 
+// SetShareType sets the ShareType field of the SMB2_TREE_CONNECT response.
 func (tcr *TreeConnectResponse) SetShareType(st uint8) {
 	tcr.data[SMB2HeaderSize+2] = st
 }
 
+// SetShareFlags sets the ShareFlags field of the SMB2_TREE_CONNECT response.
 func (tcr *TreeConnectResponse) SetShareFlags(flags uint32) {
 	binary.LittleEndian.PutUint32(tcr.data[SMB2HeaderSize+4:SMB2HeaderSize+8], flags)
 }
 
+// SetCapabilities sets the Capabilities field of the SMB2_TREE_CONNECT response.
 func (tcr *TreeConnectResponse) SetCapabilities(cap uint32) {
 	binary.LittleEndian.PutUint32(tcr.data[SMB2HeaderSize+8:SMB2HeaderSize+12], cap)
 }
 
+// SetMaximalAccess sets the MaximalAccess field of the SMB2_TREE_CONNECT response.
 func (tcr *TreeConnectResponse) SetMaximalAccess(ma uint32) {
 	binary.LittleEndian.PutUint32(tcr.data[SMB2HeaderSize+12:SMB2HeaderSize+16], ma)
 }
 
+// FromRequest implements GenericResponse interface.
 func (tcr *TreeConnectResponse) FromRequest(req GenericRequest) {
 	tcr.Response.FromRequest(req)
 
@@ -154,6 +167,7 @@ func (tcr *TreeConnectResponse) FromRequest(req GenericRequest) {
 	}
 }
 
+// Generate populates the fields of the SMB2_TREE_CONNECT response.
 func (tcr *TreeConnectResponse) Generate(tid uint32, st uint8, access uint32) {
 	Header(tcr.data).SetStatus(STATUS_OK)
 	Header(tcr.data).SetTreeID(tid)
@@ -161,10 +175,12 @@ func (tcr *TreeConnectResponse) Generate(tid uint32, st uint8, access uint32) {
 	tcr.SetMaximalAccess(access)
 }
 
+// TreeDisconnectRequest represents an SMB2_TREE_DISCONNECT request.
 type TreeDisconnectRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (tdr TreeDisconnectRequest) Validate() error {
 	if err := Header(tdr.data).Validate(); err != nil {
 		return err
@@ -181,14 +197,17 @@ func (tdr TreeDisconnectRequest) Validate() error {
 	return nil
 }
 
+// TreeDisconnectResponse represents an SMB2_TREE_DISCONNECT response.
 type TreeDisconnectResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_TREE_DISCONNECT response.
 func (tdr *TreeDisconnectResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(tdr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2TreeDisconnectResponseStructureSize)
 }
 
+// FromRequest implements GenericResponse interface.
 func (tdr *TreeDisconnectResponse) FromRequest(req GenericRequest) {
 	tdr.Response.FromRequest(req)
 

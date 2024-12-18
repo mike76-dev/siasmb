@@ -7,6 +7,7 @@ import (
 	"sync"
 )
 
+// BansStore connects the remote IP addresses with the reasons why they are banned.
 type BansStore struct {
 	Bans map[string]string
 	Mu   sync.Mutex
@@ -18,6 +19,7 @@ type ban struct {
 	Reason string `json:"reason"`
 }
 
+// NewJSONBansStore returns an initialized BansStore.
 func NewJSONBansStore(dir string) (*BansStore, error) {
 	bs := &BansStore{
 		Bans: make(map[string]string),
@@ -45,6 +47,7 @@ func (bs *BansStore) load() error {
 	return nil
 }
 
+// Save saves the bans store to disk.
 func (bs *BansStore) Save() error {
 	var bans []ban
 	for host, reason := range bs.Bans {

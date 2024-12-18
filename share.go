@@ -13,13 +13,14 @@ import (
 )
 
 const (
-	maxShareUses = 256
+	maxShareUses = 256 // Not sure if this is a sensible number, real-life testing will show
 )
 
 var (
 	errShareUnavailable = errors.New("share currently unavailable")
 )
 
+// share represents a Share object.
 type share struct {
 	name                              string
 	serverName                        string
@@ -37,8 +38,8 @@ type share struct {
 	currentUses                       int
 	forceLevel2Oplock                 bool
 	hashEnabled                       bool
-	// snapshotList
 
+	// Auxiliary fields.
 	client    *client.Client
 	bucket    string
 	createdAt time.Time
@@ -46,6 +47,7 @@ type share struct {
 	mu        sync.Mutex
 }
 
+// registerShare adds a new share to the SMB server.
 func (s *server) registerShare(name, serverName, apiPassword, bucketName string, connectSecurity map[string]struct{}, fileSecurity map[string]uint32, remark string) error {
 	sh := &share{
 		name:            name,
@@ -61,6 +63,7 @@ func (s *server) registerShare(name, serverName, apiPassword, bucketName string,
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	// Get the bucket information and test the share at the same time.
 	bucket, err := sh.client.GetBucket(ctx, bucketName)
 	if err != nil {
 		return errShareUnavailable
@@ -78,6 +81,7 @@ func (s *server) registerShare(name, serverName, apiPassword, bucketName string,
 	return nil
 }
 
+// serialNo is a helper function that derives the share's "serial number" from its "volume ID".
 func (sh *share) serialNo() uint32 {
 	return uint32(sh.volumeID)
 }

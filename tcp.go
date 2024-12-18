@@ -9,6 +9,8 @@ import (
 	"net"
 )
 
+// readMessage reads a new SMB message from the TCP connection.
+// An SMB message is prepended with a 4-byte header, which encodes the length of the message.
 func readMessage(conn net.Conn) ([]byte, error) {
 	buf := make([]byte, 4)
 	n, err := io.ReadFull(conn, buf)
@@ -36,6 +38,8 @@ func readMessage(conn net.Conn) ([]byte, error) {
 	return msg, nil
 }
 
+// writeMessage writes the SMB message to the underlying TCP connection.
+// An SMB message is prepended with a 4-byte header, which encodes the length of the message.
 func writeMessage(conn net.Conn, msg []byte) error {
 	length := uint32(len(msg))
 	if length >= uint32(math.Pow(2, 24)) {

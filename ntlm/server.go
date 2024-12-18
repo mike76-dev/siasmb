@@ -18,6 +18,7 @@ import (
 	"github.com/mike76-dev/siasmb/utils"
 )
 
+// Server is an NTLMv2 authentication server.
 type Server struct {
 	targetName   string
 	targetDomain string
@@ -31,6 +32,7 @@ type Server struct {
 	mechTypes []asn1.ObjectIdentifier
 }
 
+// NewServer returns an initialized NTLMv2 server.
 func NewServer(targetName, targetDomain string, store *stores.AccountStore) *Server {
 	mechTypes := make([]asn1.ObjectIdentifier, 1)
 	mechTypes[0] = spnego.NlmpOid
@@ -48,14 +50,17 @@ func NewServer(targetName, targetDomain string, store *stores.AccountStore) *Ser
 	return s
 }
 
+// AddAccount adds a new user-password pair to the server's database.
 func (s *Server) AddAccount(user, password string) {
 	s.accounts[user] = password
 }
 
+// Negotiate generates an NTLM NEGOTIATE message to be put in SMB2_NEGOTIATE response.
 func (s *Server) Negotiate() ([]byte, error) {
 	return spnego.EncodeNegTokenInit2(s.mechTypes)
 }
 
+// Challenge generates an NTLM CHALLENGE message to be put in SMB2_SESSION_SETUP response Part 1.
 func (s *Server) Challenge(nmsg []byte) (cmsg []byte, err error) {
 	//        NegotiateMessage
 	//   0-8: Signature
@@ -182,6 +187,7 @@ func (s *Server) Challenge(nmsg []byte) (cmsg []byte, err error) {
 	return cmsg, nil
 }
 
+// Authenticate processes the client's challenge received in the SMB2_SESSION_SETUP request Part 2.
 func (s *Server) Authenticate(amsg []byte) (err error) {
 	//        AuthenticateMessage
 	//   0-8: Signature
@@ -347,6 +353,7 @@ func (s *Server) Authenticate(amsg []byte) (err error) {
 	return errors.New("credential is empty")
 }
 
+// Signature generates a signature of an NTLM AUTHENTICATE message.
 func (s *Server) Signature() []byte {
 	h := hmac.New(md5.New, s.session.SessionKey())
 	h.Reset()
@@ -366,6 +373,7 @@ func (s *Server) Signature() []byte {
 	return h.Sum(nil)
 }
 
+// Session returns the NTLM server's authentication session.
 func (s *Server) Session() *Session {
 	return s.session
 }

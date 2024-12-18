@@ -10,6 +10,7 @@ const (
 )
 
 const (
+	// NT status codes.
 	STATUS_OK                       = 0x00000000
 	STATUS_PENDING                  = 0x00000103
 	STATUS_NOTIFY_CLEANUP           = 0x0000010b
@@ -40,14 +41,17 @@ const (
 	STATUS_DUPLICATE_OBJECTID       = 0xc000022a
 )
 
+// ErrorResponse represents an SMB2_ERROR response.
 type ErrorResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_ERROR response.
 func (er *ErrorResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(er.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2ErrorResponseStructureSize)
 }
 
+// SetErrorData sets the ErrorData field of the SMB2_ERROR response.
 func (er *ErrorResponse) SetErrorData(data []byte) {
 	binary.LittleEndian.PutUint32(er.data[SMB2HeaderSize+4:SMB2HeaderSize+8], uint32(len(data)))
 	er.data = er.data[:SMB2HeaderSize+SMB2ErrorResponseMinSize]
@@ -58,6 +62,7 @@ func (er *ErrorResponse) SetErrorData(data []byte) {
 	}
 }
 
+// NegotiateErrorResponse generates an SMB2_ERROR response to an SMB_COM_NEGOTIATE request.
 func NegotiateErrorResponse(status uint32) *ErrorResponse {
 	er := &ErrorResponse{}
 	er.data = make([]byte, SMB2HeaderSize+SMB2ErrorResponseMinSize)
@@ -66,6 +71,7 @@ func NegotiateErrorResponse(status uint32) *ErrorResponse {
 	return er
 }
 
+// FromRequest implements GenericResponse interface.
 func (er *ErrorResponse) FromRequest(req GenericRequest) {
 	er.Response.FromRequest(req)
 
@@ -80,6 +86,7 @@ func (er *ErrorResponse) FromRequest(req GenericRequest) {
 	er.setStructureSize()
 }
 
+// NewErrorResponse generates an SMB2_ERROR response with the specified parameters.
 func NewErrorResponse(req GenericRequest, status uint32, data []byte) *ErrorResponse {
 	er := &ErrorResponse{}
 	er.FromRequest(req)

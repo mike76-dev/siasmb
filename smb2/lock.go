@@ -11,22 +11,26 @@ const (
 )
 
 const (
+	// Lock flags.
 	LOCKFLAG_SHARED_LOCK      = 0x00000001
 	LOCKFLAG_EXCLUSIVE_LOCK   = 0x00000002
 	LOCKFLAG_UNLOCK           = 0x00000004
 	LOCKFLAG_FAIL_IMMEDIATELY = 0x00000010
 )
 
+// LockRequest represents an SMB2_LOCK request.
 type LockRequest struct {
 	Request
 }
 
+// Lock represents an SMB2_LOCK_ELEMENT structure.
 type Lock struct {
 	Offset uint64
 	Length uint64
 	Flags  uint32
 }
 
+// Validate implements GenericRequest interface.
 func (lr LockRequest) Validate() error {
 	if err := Header(lr.data).Validate(); err != nil {
 		return err
@@ -52,12 +56,14 @@ func (lr LockRequest) Validate() error {
 	return nil
 }
 
+// FileID returns the FileID field of the SMB2_LOCK request.
 func (lr LockRequest) FileID() []byte {
 	fid := make([]byte, 16)
 	copy(fid, lr.data[SMB2HeaderSize+8:SMB2HeaderSize+24])
 	return fid
 }
 
+// Locks returns a slice of SMB2_LOCK_ELEMENT structures of the SMB2_LOCK request.
 func (lr LockRequest) Locks() []Lock {
 	lockCount := binary.LittleEndian.Uint16(lr.data[SMB2HeaderSize+2 : SMB2HeaderSize+4])
 	off := SMB2HeaderSize + SMB2LockRequestMinSize
@@ -75,14 +81,17 @@ func (lr LockRequest) Locks() []Lock {
 	return locks
 }
 
+// LockResponse represents an SMB2_LOCK response.
 type LockResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_LOCK response.
 func (lr *LockResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(lr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2LockResponseStructureSize)
 }
 
+// FromRequest implements GenericResponse interface.
 func (lr *LockResponse) FromRequest(req GenericRequest) {
 	lr.Response.FromRequest(req)
 

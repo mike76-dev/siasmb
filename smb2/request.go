@@ -25,6 +25,7 @@ const (
 	SMB2EchoResponseStructureSize = 4
 )
 
+// GenericRequest implements a few common methods of SMB2 requests.
 type GenericRequest interface {
 	Validate() error
 	Header() Header
@@ -33,6 +34,7 @@ type GenericRequest interface {
 	OpenID() []byte
 }
 
+// Request is the representation of an SMB2 request.
 type Request struct {
 	cancelRequestID uint64
 	groupID         uint64
@@ -40,6 +42,7 @@ type Request struct {
 	openID          []byte
 }
 
+// structureSize returns the StructureSize field of an SMB2 request.
 func (req Request) structureSize() uint16 {
 	if Header(req.data).IsSmb() {
 		return 0
@@ -48,6 +51,7 @@ func (req Request) structureSize() uint16 {
 	return binary.LittleEndian.Uint16(req.data[SMB2HeaderSize : SMB2HeaderSize+2])
 }
 
+// GetRequests parses the message body for SMB/SMB2 requests.
 func GetRequests(data []byte, cid uint64) (reqs []*Request, err error) {
 	req := &Request{
 		cancelRequestID: cid,
@@ -59,14 +63,14 @@ func GetRequests(data []byte, cid uint64) (reqs []*Request, err error) {
 	}
 
 	next := req.Header().NextCommand()
-	if next == 0 {
+	if next == 0 { // A single request
 		return []*Request{req}, nil
 	}
 
 	var off uint32
 	var related bool
 	for {
-		if next&7 > 0 {
+		if next&7 > 0 { // Chained requests must be aligned to a 8-byte boundary
 			return nil, ErrUnalignedRequests
 		}
 
@@ -78,7 +82,7 @@ func GetRequests(data []byte, cid uint64) (reqs []*Request, err error) {
 			return nil, ErrMixedRequests
 		}
 
-		if req.Header().IsFlagSet(FLAGS_RELATED_OPERATIONS) {
+		if req.Header().IsFlagSet(FLAGS_RELATED_OPERATIONS) { // Related requests
 			related = true
 		}
 
@@ -104,6 +108,7 @@ func GetRequests(data []byte, cid uint64) (reqs []*Request, err error) {
 		next = req.Header().NextCommand()
 	}
 
+	// Assign a group ID to all related requests.
 	if related {
 		gid := make([]byte, 8)
 		rand.Read(gid)
@@ -116,31 +121,38 @@ func GetRequests(data []byte, cid uint64) (reqs []*Request, err error) {
 	return
 }
 
+// Validate returns an error if the request is malformed, nil otherwise.
 func (req Request) Validate() error {
 	return req.Header().Validate()
 }
 
+// Header casts the request to the Header type.
 func (req Request) Header() Header {
 	return Header(req.data)
 }
 
+// CancelRequestID returns the cancel ID of the request.
 func (req Request) CancelRequestID() uint64 {
 	return req.cancelRequestID
 }
 
+// GroupID returns the group ID of the request.
 func (req Request) GroupID() uint64 {
 	return req.groupID
 }
 
+// OpenID returns the ID of the open associated with the request.
 func (req Request) OpenID() []byte {
 	return req.openID
 }
 
+// SetOpenID associates the request with an open.
 func (req *Request) SetOpenID(id []byte) {
 	req.openID = make([]byte, 16)
 	copy(req.openID, id)
 }
 
+// GenericResponse implements a few common methods of SMB2 responses.
 type GenericResponse interface {
 	FromRequest(req GenericRequest)
 	EncodedLength() int
@@ -156,6 +168,7 @@ type GenericResponse interface {
 	Append(newResp GenericResponse)
 }
 
+// Response is the representation of an SMB2 response.
 type Response struct {
 	data      []byte
 	groupID   uint64
@@ -164,47 +177,58 @@ type Response struct {
 	openID    []byte
 }
 
+// EncodedLength returns the length of the response body.
 func (resp Response) EncodedLength() int {
 	return len(resp.data)
 }
 
+// Encode returns the body of the response.
 func (resp Response) Encode() []byte {
 	return resp.data
 }
 
+// Header casts the response to the Header type.
 func (resp Response) Header() Header {
 	return Header(resp.data)
 }
 
+// GroupID returns the group ID of the response.
 func (resp Response) GroupID() uint64 {
 	return resp.groupID
 }
 
+// SessionID returns the ID of the session associated with the response.
 func (resp Response) SessionID() uint64 {
 	return resp.sessionID
 }
 
+// SetSessionID assigns the response to a session.
 func (resp *Response) SetSessionID(id uint64) {
 	resp.sessionID = id
 }
 
+// TreeID returns the ID of the tree associated with the response.
 func (resp Response) TreeID() uint32 {
 	return resp.treeID
 }
 
+// SetTreeID associates the response with a tree.
 func (resp *Response) SetTreeID(id uint32) {
 	resp.treeID = id
 }
 
+// OpenID returns the ID of the open associated with the response.
 func (resp Response) OpenID() []byte {
 	return resp.openID
 }
 
+// SetOpenID associates the response with an open.
 func (resp *Response) SetOpenID(id []byte) {
 	resp.openID = make([]byte, 16)
 	copy(resp.openID, id)
 }
 
+// FromRequest copies the request header into the response and sets the required flags.
 func (resp *Response) FromRequest(req GenericRequest) {
 	resp.data = make([]byte, SMB2HeaderSize)
 	Header(resp.data).CopyFrom(req.Header())
@@ -216,6 +240,7 @@ func (resp *Response) FromRequest(req GenericRequest) {
 	resp.groupID = req.GroupID()
 }
 
+// Append adds a new response to the chain.
 func (resp *Response) Append(newResp GenericResponse) {
 	var off uint32
 	for {
@@ -237,10 +262,12 @@ func (resp *Response) Append(newResp GenericResponse) {
 	resp.data = append(resp.data, newResp.Encode()...)
 }
 
+// CancelRequest represents an SMB2_CANCEL request.
 type CancelRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (cr CancelRequest) Validate() error {
 	if err := Header(cr.data).Validate(); err != nil {
 		return err
@@ -257,10 +284,12 @@ func (cr CancelRequest) Validate() error {
 	return nil
 }
 
+// EchoRequest represents an SMB2_ECHO request.
 type EchoRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (er EchoRequest) Validate() error {
 	if err := Header(er.data).Validate(); err != nil {
 		return err
@@ -277,14 +306,17 @@ func (er EchoRequest) Validate() error {
 	return nil
 }
 
+// EchoResponse represents an SMB2_ECHO response.
 type EchoResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_ECHO response.
 func (er *EchoResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(er.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2EchoResponseStructureSize)
 }
 
+// FromRequest implements GenericResponse interface.
 func (er *EchoResponse) FromRequest(req GenericRequest) {
 	er.Response.FromRequest(req)
 

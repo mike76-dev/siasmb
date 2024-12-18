@@ -12,6 +12,7 @@ import (
 	"github.com/mike76-dev/siasmb/stores"
 )
 
+// serverStats keeps track of the server statistics.
 type serverStats struct {
 	start  time.Time
 	fOpens uint32
@@ -30,6 +31,7 @@ type serverStats struct {
 	// bigBufNeed uint32
 }
 
+// server is the implementation of an SMB server.
 type server struct {
 	enabled                         bool
 	stats                           serverStats
@@ -43,12 +45,14 @@ type server struct {
 	serverSideCopyMaxChunkSize      uint64
 	serverSideCopyMaxDataSize       uint64
 
+	// Auxiliary fields.
 	listener        net.Listener
 	bs              *stores.BansStore
 	mu              sync.Mutex
 	connectionCount map[string]int
 }
 
+// newServer returns an initialized SMB server.
 func newServer(l net.Listener, bs *stores.BansStore) *server {
 	s := &server{
 		enabled:                         true,
@@ -68,6 +72,7 @@ func newServer(l net.Listener, bs *stores.BansStore) *server {
 	return s
 }
 
+// newConnection creates a new Connection object.
 func (s *server) newConnection(conn net.Conn) *connection {
 	c := &connection{
 		commandSequenceWindow: make(map[uint64]struct{}),
@@ -103,6 +108,7 @@ func (s *server) newConnection(conn net.Conn) *connection {
 	return c
 }
 
+// closeConnection destroys the Connection object.
 func (s *server) closeConnection(c *connection) {
 	s.mu.Lock()
 	delete(s.connectionList, c.clientName)
@@ -111,13 +117,14 @@ func (s *server) closeConnection(c *connection) {
 	c.once.Do(func() { close(c.closeChan) })
 }
 
+// writeResponse encodes the response and adds it to the sending queue.
 func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResponse) {
 	buf := resp.Encode()
 
-	if ss != nil && ss.state == sessionValid {
+	if ss != nil && ss.state == sessionValid { // A session exists, sign if required
 		if resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) || resp.Header().Command() == smb2.SMB2_SESSION_SETUP {
 			ss.sign(buf)
-		} else {
+		} else { // Otherwise, wipe the signature(s)
 			var off uint32
 			var zero [16]byte
 			for {
@@ -138,6 +145,7 @@ func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResp
 	s.mu.Unlock()
 }
 
+// enumShares generates a NetShareInfo Type 1 structure for each available share.
 func (s *server) enumShares() []rpc.NetShareInfo1 {
 	var shares []rpc.NetShareInfo1
 	for _, sh := range s.shareList {
@@ -150,6 +158,7 @@ func (s *server) enumShares() []rpc.NetShareInfo1 {
 		shares = append(shares, share)
 	}
 
+	// Add the "imaginary" IPC (Inter-Protocol Communication) share.
 	shares = append(shares, rpc.NetShareInfo1{
 		Share:   "IPC$",
 		Type:    rpc.STYPE_IPC_HIDDEN,

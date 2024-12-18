@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	SMBNegotiateRequestMinSize = 5
+	SMBNegotiateRequestMinSize = 5 // Enough to validate a SMB_COM_NEGOTIATE request
 
 	SMB2NegotiateRequestMinSize       = 36
 	SMB2NegotiateRequestStructureSize = 36
@@ -20,16 +20,18 @@ const (
 )
 
 const (
-	MaxTransactSize = 1048576 * 4
-	MaxReadSize     = 1048576 * 4
-	MaxWriteSize    = 1048576 * 4
+	MaxTransactSize = 1048576 * 4 // 4MiB
+	MaxReadSize     = 1048576 * 4 // 4MiB
+	MaxWriteSize    = 1048576 * 4 // 4MiB
 )
 
 const (
+	// SMB dialects.
 	SMB_DIALECT_1     = "NT LM 0.12"
 	SMB_DIALECT_2     = "SMB 2.002"
 	SMB_DIALECT_MULTI = "SMB 2.???"
 
+	// SMB2 dialects.
 	SMB_DIALECT_202         = 0x0202
 	SMB_DIALECT_21          = 0x0210
 	SMB_DIALECT_30          = 0x0300
@@ -40,11 +42,13 @@ const (
 )
 
 const (
+	// Security modes.
 	NEGOTIATE_SIGNING_ENABLED  = 0x0001
 	NEGOTIATE_SIGNING_REQUIRED = 0x0002
 )
 
 const (
+	// Capabilities.
 	GLOBAL_CAP_DFS                = 0x00000001
 	GLOBAL_CAP_LEASING            = 0x00000002
 	GLOBAL_CAP_LARGE_MTU          = 0x00000004
@@ -60,16 +64,18 @@ var (
 	ErrInvalidParameter    = errors.New("wrong parameter supplied")
 )
 
+// NegotiateRequest represents an SMB2_NEGOTIATE request.
 type NegotiateRequest struct {
 	Request
 }
 
+// Validate implements GenericRequest interface.
 func (nr NegotiateRequest) Validate() error {
 	if err := Header(nr.data).Validate(); err != nil {
 		return err
 	}
 
-	if Header(nr.data).IsSmb() {
+	if Header(nr.data).IsSmb() { // SMB_COM_NEGOTIATE
 		if len(nr.data) < SMBHeaderSize+SMBNegotiateRequestMinSize {
 			return ErrWrongLength
 		}
@@ -139,60 +145,74 @@ func (nr NegotiateRequest) Validate() error {
 	return nil
 }
 
+// SecurityMode returns the SecurityMode field of the SMB2_NEGOTIATE request.
 func (nr NegotiateRequest) SecurityMode() uint16 {
 	return binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+4 : SMB2HeaderSize+6])
 }
 
+// Capabilities returns the Capabilities field of the SMB2_NEGOTIATE request.
 func (nr NegotiateRequest) Capabilities() uint32 {
 	return binary.LittleEndian.Uint32(nr.data[SMB2HeaderSize+8 : SMB2HeaderSize+12])
 }
 
+// ClientGuid returns the ClientGuid field of the SMB2_NEGOTIATE request.
 func (nr NegotiateRequest) ClientGuid() []byte {
 	guid := make([]byte, 16)
 	copy(guid, nr.data[SMB2HeaderSize+12:SMB2HeaderSize+28])
 	return guid
 }
 
+// NegotiateResponse represents an SMB2_NEGOTIATE response.
 type NegotiateResponse struct {
 	Response
 }
 
+// setStructureSize sets the StructureSize field of the SMB2_NEGOTIATE response.
 func (nr *NegotiateResponse) setStructureSize() {
 	binary.LittleEndian.PutUint16(nr.data[SMB2HeaderSize:SMB2HeaderSize+2], SMB2NegotiateResponseStructureSize)
 }
 
+// SetSecurityMode sets the SecurityMode field of the SMB2_NEGOTIATE response.
 func (nr *NegotiateResponse) SetSecurityMode(sm uint16) {
 	binary.LittleEndian.PutUint16(nr.data[SMB2HeaderSize+2:SMB2HeaderSize+4], sm)
 }
 
+// SetDialectRevision sets the DialectRevision field of the SMB2_NEGOTIATE response.
 func (nr *NegotiateResponse) SetDialectRevision(dialect uint16) {
 	binary.LittleEndian.PutUint16(nr.data[SMB2HeaderSize+4:SMB2HeaderSize+6], dialect)
 }
 
+// SetServerGuid sets the ServerGuid field of the SMB2_NEGOTIATE response.
 func (nr *NegotiateResponse) SetServerGuid(guid []byte) {
 	copy(nr.data[SMB2HeaderSize+8:SMB2HeaderSize+24], guid)
 }
 
+// SetCapabilities sets the Capabilities field of the SMB2_NEGOTIATE response.
 func (nr *NegotiateResponse) SetCapabilities(cap uint32) {
 	binary.LittleEndian.PutUint32(nr.data[SMB2HeaderSize+24:SMB2HeaderSize+28], cap)
 }
 
+// SetMaxTransactSize sets the MaxTransactSize field of the SMB2_NEGOTIATE response.
 func (nr *NegotiateResponse) SetMaxTransactSize(size uint32) {
 	binary.LittleEndian.PutUint32(nr.data[SMB2HeaderSize+28:SMB2HeaderSize+32], size)
 }
 
+// SetMaxReadSize sets the MaxReadSize field of the SMB2_NEGOTIATE response.
 func (nr *NegotiateResponse) SetMaxReadSize(size uint32) {
 	binary.LittleEndian.PutUint32(nr.data[SMB2HeaderSize+32:SMB2HeaderSize+36], size)
 }
 
+// SetMaxWriteSize sets the M<axWriteSize field of the SMB2_NEGOTIATE response.
 func (nr *NegotiateResponse) SetMaxWriteSize(size uint32) {
 	binary.LittleEndian.PutUint32(nr.data[SMB2HeaderSize+36:SMB2HeaderSize+40], size)
 }
 
+// SetSystemTime sets the SystemTime field of the SMB2_NEGOTIATE response.
 func (nr *NegotiateResponse) SetSystemTime(t time.Time) {
 	binary.LittleEndian.PutUint64(nr.data[SMB2HeaderSize+40:SMB2HeaderSize+48], utils.UnixToFiletime(t))
 }
 
+// SetSecurityBuffer sets the Buffer field of the SMB2_NEGOTIATE response.
 func (nr *NegotiateResponse) SetSecurityBuffer(buf []byte) {
 	binary.LittleEndian.PutUint16(nr.data[SMB2HeaderSize+56:SMB2HeaderSize+58], SMB2HeaderSize+SMB2NegotiateResponseMinSize)
 	binary.LittleEndian.PutUint16(nr.data[SMB2HeaderSize+58:SMB2HeaderSize+60], uint16(len(buf)))
@@ -200,6 +220,7 @@ func (nr *NegotiateResponse) SetSecurityBuffer(buf []byte) {
 	nr.data = append(nr.data, buf...)
 }
 
+// NewNegotiateResponse generates an SMB2_NEGOTIATE response to an SMB_COM_NEGOTIATE request.
 func NewNegotiateResponse(serverGuid []byte, ns *ntlm.Server) *NegotiateResponse {
 	nr := &NegotiateResponse{}
 	nr.data = make([]byte, SMB2HeaderSize+SMB2NegotiateResponseMinSize)
@@ -211,6 +232,7 @@ func NewNegotiateResponse(serverGuid []byte, ns *ntlm.Server) *NegotiateResponse
 	return nr
 }
 
+// FromRequest implements GenericResponse interface.
 func (nr *NegotiateResponse) FromRequest(req GenericRequest) {
 	nr.Response.FromRequest(req)
 
@@ -228,6 +250,7 @@ func (nr *NegotiateResponse) FromRequest(req GenericRequest) {
 	}
 }
 
+// Generate populates the fields of the SMB2_NEGOTIATE response.
 func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server) {
 	token, err := ns.Negotiate()
 	if err != nil {
