@@ -522,6 +522,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
 						info.Name += "/"
 						if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
+							cancel()
 							resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
 							return resp, ss, nil
 						}
@@ -542,6 +543,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
 							info.Name += "/"
 							if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
+								cancel()
 								resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
 								return resp, ss, nil
 							}
@@ -578,6 +580,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
 							info.Name += "/"
 							if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
+								cancel()
 								resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
 								return resp, ss, nil
 							}
@@ -592,6 +595,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		if restored { // This file has already been "created", "restore" it
+			cancel()
 			c.server.restoreOpen(op)
 		} else {
 			op = ss.registerOpen(cr, tc, info, ctx, cancel)
@@ -892,7 +896,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 			var resp smb2.GenericResponse
-			data := op.read(rr.Offset(), uint64(rr.Length()))
+			data := op.read(rr.Offset(), length)
 			if len(data) < int(rr.MinimumCount()) {
 				resp = smb2.NewErrorResponse(rr, smb2.STATUS_END_OF_FILE, nil)
 			} else {
@@ -2166,13 +2170,13 @@ func (c *connection) isStale() bool {
 	defer c.mu.Unlock()
 
 	// If there are no sessions on the connection, check the connection's creation time.
-	if len(c.sessionTable) == 0 && time.Now().Sub(c.creationTime) > staleThreshold {
+	if len(c.sessionTable) == 0 && time.Since(c.creationTime) > staleThreshold {
 		return true
 	}
 
 	// Check each individual session: if at least one session is being used, the connection is alive.
 	for _, ss := range c.sessionTable {
-		if time.Now().Sub(ss.idleTime) <= staleThreshold {
+		if time.Since(ss.idleTime) <= staleThreshold {
 			return false
 		}
 	}
