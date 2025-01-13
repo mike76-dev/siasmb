@@ -48,6 +48,7 @@ type connection struct {
 	dialect               string
 	shouldSign            bool
 	clientName            string
+	clientGuid            []byte
 	maxTransactSize       uint64
 	maxWriteSize          uint64
 	maxReadSize           uint64
@@ -185,7 +186,15 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		// Respond with an SMB2_NEGOTIATE response.
-		resp := smb2.NewNegotiateResponse(c.server.serverGuid[:], c.ntlmServer)
+		dialect := nr.MaxCommonDialect()
+		if dialect == smb2.SMB_DIALECT_202 {
+			c.negotiateDialect = dialect
+			c.dialect = "2.0.2"
+		} else if dialect == smb2.SMB_DIALECT_MULTICREDIT {
+			c.supportsMultiCredit = true
+		}
+
+		resp := smb2.NewNegotiateResponse(c.server.serverGuid[:], c.ntlmServer, dialect)
 		return resp, nil, nil
 	}
 
@@ -211,15 +220,32 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		c.clientCapabilities = nr.Capabilities()
-		c.dialect = "2.0.2"
-		c.negotiateDialect = smb2.SMB_DIALECT_202
+		c.clientGuid = nr.ClientGuid()
+		c.negotiateDialect = nr.MaxCommonDialect()
+		switch c.negotiateDialect {
+		case smb2.SMB_DIALECT_202:
+			c.dialect = "2.0.2"
+		case smb2.SMB_DIALECT_21:
+			c.dialect = "2.1"
+		case smb2.SMB_DIALECT_30:
+			c.dialect = "3.0"
+		case smb2.SMB_DIALECT_302:
+			c.dialect = "3.0.2"
+		case smb2.SMB_DIALECT_311:
+			c.dialect = "3.1.1"
+		}
+
 		if nr.SecurityMode()&smb2.NEGOTIATE_SIGNING_REQUIRED > 0 {
 			c.shouldSign = true
 		}
 
+		if c.negotiateDialect != smb2.SMB_DIALECT_202 {
+			c.supportsMultiCredit = true
+		}
+
 		resp := &smb2.NegotiateResponse{}
 		resp.FromRequest(nr)
-		resp.Generate(c.server.serverGuid[:], c.ntlmServer)
+		resp.Generate(c.server.serverGuid[:], c.ntlmServer, c.negotiateDialect)
 
 		return resp, nil, nil
 
