@@ -454,7 +454,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		if tc.share.name == "ipc$" { // A named pipe is being created
 			switch strings.ToLower(path) {
 			case "srvsvc", "lsarpc", "mdssvc":
-				info = api.ObjectMetadata{Name: path}
+				info = api.ObjectMetadata{
+					Bucket: tc.share.bucket,
+					Key:    path,
+				}
 				result = smb2.FILE_OPENED
 			default: // Other named pipes are not supported
 				cancel()
@@ -492,7 +495,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					op, restored = tc.persistedOpens[path]
 					tc.mu.Unlock()
 					if !restored {
-						info = api.ObjectMetadata{Name: "/" + path, ModTime: api.TimeRFC3339(time.Now())}
+						info = api.ObjectMetadata{
+							Bucket:  tc.share.bucket,
+							Key:     "/" + path,
+							ModTime: api.TimeRFC3339(time.Now()),
+						}
 						result = smb2.FILE_CREATED
 					} else {
 						result = smb2.FILE_SUPERSEDED
@@ -517,10 +524,14 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				}
 			case smb2.FILE_CREATE:
 				if err != nil {
-					info = api.ObjectMetadata{Name: "/" + path, ModTime: api.TimeRFC3339(time.Now())}
+					info = api.ObjectMetadata{
+						Bucket:  tc.share.bucket,
+						Key:     "/" + path,
+						ModTime: api.TimeRFC3339(time.Now()),
+					}
 					result = smb2.FILE_CREATED
 					if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
-						info.Name += "/"
+						info.Key += "/"
 						if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
 							cancel()
 							resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
@@ -538,10 +549,14 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					op, restored = tc.persistedOpens[path]
 					tc.mu.Unlock()
 					if !restored {
-						info = api.ObjectMetadata{Name: "/" + path, ModTime: api.TimeRFC3339(time.Now())}
+						info = api.ObjectMetadata{
+							Bucket:  tc.share.bucket,
+							Key:     "/" + path,
+							ModTime: api.TimeRFC3339(time.Now()),
+						}
 						result = smb2.FILE_CREATED
 						if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
-							info.Name += "/"
+							info.Key += "/"
 							if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
 								cancel()
 								resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
@@ -575,10 +590,14 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					op, restored = tc.persistedOpens[path]
 					tc.mu.Unlock()
 					if !restored {
-						info = api.ObjectMetadata{Name: "/" + path, ModTime: api.TimeRFC3339(time.Now())}
+						info = api.ObjectMetadata{
+							Bucket:  tc.share.bucket,
+							Key:     "/" + path,
+							ModTime: api.TimeRFC3339(time.Now()),
+						}
 						result = smb2.FILE_CREATED
 						if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
-							info.Name += "/"
+							info.Key += "/"
 							if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
 								cancel()
 								resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, nil)
