@@ -18,7 +18,7 @@ import (
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
-	"go.sia.tech/renterd/api"
+	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
 

@@ -21,7 +21,7 @@ import (
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
 	"github.com/oiweiwei/go-msrpc/ndr"
-	"go.sia.tech/renterd/api"
+	"go.sia.tech/renterd/v2/api"
 )
 
 const (

@@ -16,7 +16,7 @@ import (
 
 	"github.com/mike76-dev/siasmb/smb2"
 	"go.sia.tech/core/types"
-	"go.sia.tech/renterd/api"
+	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -252,7 +252,7 @@ func (c *Client) RemainingStorage(ctx context.Context) (rs uint64, err error) {
 		if err != nil {
 			return
 		}
-		rs += h.Settings.RemainingStorage
+		rs += h.V2Settings.RemainingStorage
 	}
 	return rs, nil
 }

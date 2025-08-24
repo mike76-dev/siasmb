@@ -9,7 +9,7 @@ import (
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"github.com/oiweiwei/go-msrpc/ndr"
-	"go.sia.tech/renterd/api"
+	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -601,7 +601,7 @@ func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uin
 	}
 
 	for i, entry := range entries {
-		_, name, isDir := utils.ExtractFilename(entry.Name)
+		_, name, isDir := utils.ExtractFilename(entry.Key)
 		length := 104 + uint32(len(name))*2
 
 		// Check if the buffer length exceeds bufSize after adding the new record.
@@ -625,7 +625,7 @@ func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uin
 			di.AllocationSize = uint64(entry.Size)
 		}
 
-		hash := blake2b.Sum256([]byte(entry.Name))
+		hash := blake2b.Sum256([]byte(entry.Key))
 		di.FileID64 = binary.LittleEndian.Uint64(hash[:8])
 		di.FileID128 = make([]byte, 16)
 		rand.Read(di.FileID128)
