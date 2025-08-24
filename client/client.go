@@ -219,9 +219,13 @@ func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (dir, p
 }
 
 // Redundancy retrieves the renterd redundancy settings.
-func (c *Client) Redundancy(ctx context.Context) (resp api.RedundancySettings, err error) {
-	err = c.doRequest(ctx, "GET", "/api/bus/setting/redundancy", nil, &resp)
-	return
+func (c *Client) Redundancy(ctx context.Context) (rs api.RedundancySettings, err error) {
+	var resp api.UploadSettings
+	err = c.doRequest(ctx, "GET", "/api/bus/settings/upload", nil, &resp)
+	if err != nil {
+		return
+	}
+	return resp.Redundancy, nil
 }
 
 // contracts retrieves the renterd contracts.
