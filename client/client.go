@@ -408,12 +408,13 @@ func (c *Client) UploadPart(ctx context.Context, r io.Reader, bucket, path, uplo
 
 // DeleteObject deletes a file or a directory.
 func (c *Client) DeleteObject(ctx context.Context, bucket, path string, batch bool) (err error) {
-	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
+	fmt.Printf("Deleting object, bucket: %s, path: %s, batch: %v\n", bucket, path, batch) //TODO
+	path = strings.ReplaceAll(path, "\\", "/")                                            // Replace Windows formatting with the unified one
 	path = api.ObjectKeyEscape(path)
 	if batch {
-		err = c.doRequest(ctx, "POST", "/api/worker/object/remove", api.ObjectsRemoveRequest{
+		err = c.doRequest(ctx, "POST", "/api/worker/objects/remove", api.ObjectsRemoveRequest{
 			Bucket: bucket,
-			Prefix: path,
+			Prefix: "/" + path + "/",
 		}, nil)
 	} else {
 		values := make(url.Values)
