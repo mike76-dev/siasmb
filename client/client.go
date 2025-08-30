@@ -411,14 +411,14 @@ func (c *Client) DeleteObject(ctx context.Context, bucket, path string, batch bo
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	path = api.ObjectKeyEscape(path)
 	if batch {
-		err = c.doRequest(ctx, "POST", "/api/worker/objects/remove", api.ObjectsRemoveRequest{
+		err = c.doRequest(ctx, "POST", "/api/worker/object/remove", api.ObjectsRemoveRequest{
 			Bucket: bucket,
 			Prefix: path,
 		}, nil)
 	} else {
 		values := make(url.Values)
 		values.Set("bucket", bucket)
-		err = c.doRequest(ctx, "DELETE", fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path), nil, nil)
+		err = c.doRequest(ctx, "DELETE", fmt.Sprintf("/api/worker/object/%s?"+values.Encode(), path), nil, nil)
 	}
 	return
 }
@@ -430,7 +430,7 @@ func (c *Client) MakeDirectory(ctx context.Context, bucket, path string) (err er
 	path += "/"
 	values := make(url.Values)
 	values.Set("bucket", bucket)
-	err = c.doRequest(ctx, "PUT", fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path), nil, nil)
+	err = c.doRequest(ctx, "PUT", fmt.Sprintf("/api/worker/object/%s?"+values.Encode(), path), nil, nil)
 	return
 }
 
