@@ -280,7 +280,7 @@ func (c *Client) ReadObject(ctx context.Context, bucket, path string, offset, le
 
 	// url.PathEscape does the full escape, so we need to convert any escaped forward slashes back.
 	path = strings.ReplaceAll(url.PathEscape(path), "%2F", "/")
-	path = fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path)
+	path = fmt.Sprintf("/api/worker/object/%s?"+values.Encode(), path)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%v%v", c.BaseURL, path), nil)
 	if err != nil {
