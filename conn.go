@@ -739,6 +739,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		if op.createOptions&smb2.FILE_DELETE_ON_CLOSE > 0 { // Delete the file or directory
+			tc.mu.Lock()
+			delete(tc.persistedOpens, op.pathName)
+			tc.mu.Unlock()
 			if err := tc.share.client.DeleteObject(op.ctx, tc.share.bucket, op.pathName, op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0); err != nil {
 				log.Println("Error deleting object:", err)
 			}
