@@ -15,8 +15,9 @@ import (
 	"time"
 
 	"github.com/mike76-dev/siasmb/smb2"
+	rhpv4 "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/renterd/api"
+	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -40,44 +41,68 @@ func (c *Client) GetBucket(ctx context.Context, name string) (bucket api.Bucket,
 	return
 }
 
-// GetObject retrieves the information about a file or lists the contents of a directory.
-func (c *Client) GetObject(ctx context.Context, bucket, path string) (obj api.ObjectsResponse, err error) {
+// GetObject retrieves the information about a file.
+func (c *Client) GetObject(ctx context.Context, bucket, path string) (obj api.ObjectMetadata, err error) {
+	values := url.Values{}
+	values.Set("bucket", bucket)
+	api.GetObjectOptions{OnlyMetadata: true}.Apply(values)
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
-	path = api.ObjectPathEscape(path)
-	path += "?bucket=" + bucket
-	err = c.doRequest(ctx, "GET", fmt.Sprintf("/api/bus/objects/%s", path), nil, &obj)
+	path = api.ObjectKeyEscape(path)
+	path += "?" + values.Encode()
+	var res api.Object
+	err = c.doRequest(ctx, "GET", fmt.Sprintf("/api/bus/object/%s", path), nil, &res)
+	if err != nil {
+		return
+	}
+	obj = res.ObjectMetadata
+	return
+}
+
+// GetObjects lists the contents of a directory.
+func (c *Client) GetObjects(ctx context.Context, bucket, path string) (objs []api.ObjectMetadata, err error) {
+	values := url.Values{}
+	api.ListObjectOptions{
+		Bucket:    bucket,
+		Delimiter: "/",
+		Limit:     -1,
+	}.Apply(values)
+	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
+	path = api.ObjectKeyEscape(path)
+	path += "?" + values.Encode()
+	var res api.ObjectsResponse
+	err = c.doRequest(ctx, "GET", fmt.Sprintf("/api/bus/objects/%s", path), nil, &res)
+	if err != nil {
+		return
+	}
+	objs = res.Objects
 	return
 }
 
 // GetObjectInfo retrieves the information about a file or a directory.
-func (c *Client) GetObjectInfo(ctx context.Context, bucket, path string) (info api.ObjectMetadata, err error) {
+func (c *Client) GetObjectInfo(ctx context.Context, bucket, path string) (api.ObjectMetadata, error) {
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
-	var resp api.ObjectsResponse
-	if path == "" { // The root path: calculate the total size of the objects
-		var b api.Bucket
-		b, err = c.GetBucket(ctx, bucket)
+	if path == "" {                            // The root path: calculate the total size of the objects
+		b, err := c.GetBucket(ctx, bucket)
 		if err != nil {
-			return
+			return api.ObjectMetadata{}, err
 		}
 
-		resp, err = c.GetObject(ctx, bucket, "")
+		objs, err := c.GetObjects(ctx, bucket, "")
 		if err != nil {
-			return
+			return api.ObjectMetadata{}, err
 		}
 
 		var size int64
-		for _, obj := range resp.Entries {
-			size += obj.Size
+		for _, entry := range objs {
+			size += entry.Size
 		}
 
-		info = api.ObjectMetadata{
-			ETag:    "",
+		return api.ObjectMetadata{
+			Bucket:  bucket,
 			ModTime: b.CreatedAt,
-			Name:    "/",
+			Key:     "/",
 			Size:    size,
-		}
-
-		return
+		}, nil
 	}
 
 	var parentDir string
@@ -88,15 +113,14 @@ func (c *Client) GetObjectInfo(ctx context.Context, bucket, path string) (info a
 		parentDir = path[:i+1]
 	}
 
-	resp, err = c.GetObject(ctx, bucket, parentDir)
+	objs, err := c.GetObjects(ctx, bucket, parentDir)
 	if err != nil {
-		return
+		return api.ObjectMetadata{}, err
 	}
 
-	for _, obj := range resp.Entries {
-		if obj.Name == "/"+path || obj.Name == "/"+path+"/" {
-			info = obj
-			return
+	for _, entry := range objs {
+		if entry.Key == "/"+path || entry.Key == "/"+path+"/" {
+			return entry, nil
 		}
 	}
 
@@ -137,15 +161,15 @@ func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (dir, p
 		}
 	}
 
-	var resp api.ObjectsResponse
+	var objs []api.ObjectMetadata
 	if parent != "" {
-		resp, err = c.GetObject(ctx, bucket, parent)
+		objs, err = c.GetObjects(ctx, bucket, parent)
 		if err != nil {
 			return
 		}
 
-		for _, entry := range resp.Entries {
-			if entry.Name == name {
+		for _, entry := range objs {
+			if entry.Key == name {
 				etag, _ := hex.DecodeString(entry.ETag)
 				if len(etag) >= 8 {
 					dir.ID64 = binary.LittleEndian.Uint64(etag[:8])
@@ -164,13 +188,13 @@ func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (dir, p
 	}
 
 	if grandParent != "" {
-		resp, err = c.GetObject(ctx, bucket, grandParent)
+		objs, err = c.GetObjects(ctx, bucket, grandParent)
 		if err != nil {
 			return
 		}
 
-		for _, entry := range resp.Entries {
-			if entry.Name == parentName {
+		for _, entry := range objs {
+			if entry.Key == parentName {
 				etag, _ := hex.DecodeString(entry.ETag)
 				if len(etag) >= 8 {
 					parentDir.ID64 = binary.LittleEndian.Uint64(etag[:8])
@@ -196,9 +220,13 @@ func (c *Client) GetParentInfo(ctx context.Context, bucket, path string) (dir, p
 }
 
 // Redundancy retrieves the renterd redundancy settings.
-func (c *Client) Redundancy(ctx context.Context) (resp api.RedundancySettings, err error) {
-	err = c.doRequest(ctx, "GET", "/api/bus/setting/redundancy", nil, &resp)
-	return
+func (c *Client) Redundancy(ctx context.Context) (rs api.RedundancySettings, err error) {
+	var resp api.UploadSettings
+	err = c.doRequest(ctx, "GET", "/api/bus/settings/upload", nil, &resp)
+	if err != nil {
+		return
+	}
+	return resp.Redundancy, nil
 }
 
 // contracts retrieves the renterd contracts.
@@ -229,9 +257,9 @@ func (c *Client) RemainingStorage(ctx context.Context) (rs uint64, err error) {
 		if err != nil {
 			return
 		}
-		rs += h.Settings.RemainingStorage
+		rs += h.V2Settings.RemainingStorage
 	}
-	return rs, nil
+	return rs * rhpv4.SectorSize, nil
 }
 
 // UsedStorage retrieves the "used" storage, meaning the total size of uploaded sectors including redundancy.
@@ -243,7 +271,7 @@ func (c *Client) UsedStorage(ctx context.Context, bucket string) (us uint64, err
 	if err != nil {
 		return
 	}
-	return osr.TotalUploadedSize, nil
+	return osr.TotalUploadedSize * rhpv4.SectorSize, nil
 }
 
 // ReadObject downloads a file from the Sia network.
@@ -253,7 +281,7 @@ func (c *Client) ReadObject(ctx context.Context, bucket, path string, offset, le
 
 	// url.PathEscape does the full escape, so we need to convert any escaped forward slashes back.
 	path = strings.ReplaceAll(url.PathEscape(path), "%2F", "/")
-	path = fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path)
+	path = fmt.Sprintf("/api/worker/object/%s?"+values.Encode(), path)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%v%v", c.BaseURL, path), nil)
 	if err != nil {
@@ -292,7 +320,7 @@ func (c *Client) StartUpload(ctx context.Context, bucket, path string) (uploadID
 	var resp api.MultipartCreateResponse
 	if err = c.doRequest(ctx, "POST", "/api/bus/multipart/create", api.MultipartCreateRequest{
 		Bucket: bucket,
-		Path:   "/" + path,
+		Key:    "/" + path,
 	}, &resp); err != nil {
 		return
 	}
@@ -304,7 +332,7 @@ func (c *Client) AbortUpload(ctx context.Context, bucket, path string, uploadID 
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	err = c.doRequest(ctx, "POST", "/api/bus/multipart/abort", api.MultipartAbortRequest{
 		Bucket:   bucket,
-		Path:     "/" + path,
+		Key:      "/" + path,
 		UploadID: uploadID,
 	}, nil)
 	return
@@ -319,7 +347,7 @@ func (c *Client) FinishUpload(ctx context.Context, bucket, path string, uploadID
 	var resp api.MultipartCompleteResponse
 	if err = c.doRequest(ctx, "POST", "/api/bus/multipart/complete", api.MultipartCompleteRequest{
 		Bucket:   bucket,
-		Path:     "/" + path,
+		Key:      "/" + path,
 		UploadID: uploadID,
 		Parts:    parts,
 	}, &resp); err != nil {
@@ -331,7 +359,7 @@ func (c *Client) FinishUpload(ctx context.Context, bucket, path string, uploadID
 // UploadPart uploads the provided chunk of data to the Sia network.
 func (c *Client) UploadPart(ctx context.Context, r io.Reader, bucket, path, uploadID string, partNumber int, offset, length uint64) (eTag string, err error) {
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
-	path = api.ObjectPathEscape(path)
+	path = api.ObjectKeyEscape(path)
 	values := make(url.Values)
 	values.Set("bucket", bucket)
 	values.Set("uploadid", uploadID)
@@ -382,26 +410,28 @@ func (c *Client) UploadPart(ctx context.Context, r io.Reader, bucket, path, uplo
 // DeleteObject deletes a file or a directory.
 func (c *Client) DeleteObject(ctx context.Context, bucket, path string, batch bool) (err error) {
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
-	path = api.ObjectPathEscape(path)
+	path = api.ObjectKeyEscape(path)
 	if batch {
-		path += "/"
+		err = c.doRequest(ctx, "POST", "/api/worker/objects/remove", api.ObjectsRemoveRequest{
+			Bucket: bucket,
+			Prefix: "/" + path + "/",
+		}, nil)
+	} else {
+		values := make(url.Values)
+		values.Set("bucket", bucket)
+		err = c.doRequest(ctx, "DELETE", fmt.Sprintf("/api/worker/object/%s?"+values.Encode(), path), nil, nil)
 	}
-	values := make(url.Values)
-	values.Set("bucket", bucket)
-	opts := api.DeleteObjectOptions{Batch: batch}
-	opts.Apply(values)
-	err = c.doRequest(ctx, "DELETE", fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path), nil, nil)
 	return
 }
 
 // MakeDirectory creates a new directory in the specified path.
 func (c *Client) MakeDirectory(ctx context.Context, bucket, path string) (err error) {
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
-	path = api.ObjectPathEscape(path)
+	path = api.ObjectKeyEscape(path)
 	path += "/"
 	values := make(url.Values)
 	values.Set("bucket", bucket)
-	err = c.doRequest(ctx, "PUT", fmt.Sprintf("/api/worker/objects/%s?"+values.Encode(), path), nil, nil)
+	err = c.doRequest(ctx, "PUT", fmt.Sprintf("/api/worker/object/%s?"+values.Encode(), path), nil, nil)
 	return
 }
 

@@ -18,7 +18,7 @@ import (
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
-	"go.sia.tech/renterd/api"
+	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -141,20 +141,20 @@ func grantAccess(cr smb2.CreateRequest, tc *treeConnect, ss *session) bool {
 // registerOpen creates a new Open object and registers it with the server.
 func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api.ObjectMetadata, ctx context.Context, cancel context.CancelFunc) *open {
 	h, _ := blake2b.New256(nil)
-	h.Write([]byte(info.Name))
+	h.Write([]byte(info.Key))
 	id := h.Sum(nil)
 
 	var filepath, filename string
 	var isDir bool
 	access := tc.maximalAccess
-	name := strings.ToLower(info.Name)
+	name := strings.ToLower(info.Key)
 	switch name {
 	case "lsarpc", "srvsvc", "mdssvc": // Standard named pipes on MacOS, Linux, and Windows
 		filename = name
 		filepath = name
 		access = cr.DesiredAccess()
 	default:
-		filepath, filename, isDir = utils.ExtractFilename(info.Name)
+		filepath, filename, isDir = utils.ExtractFilename(info.Key)
 	}
 
 	fid := make([]byte, 16)
@@ -250,14 +250,14 @@ func (op *open) queryDirectory(pattern string) error {
 	}
 
 	share := op.treeConnect.share
-	resp, err := share.client.GetObject(op.ctx, share.bucket, op.pathName+"/")
+	objs, err := share.client.GetObjects(op.ctx, share.bucket, op.pathName+"/")
 	if err != nil {
 		return err
 	}
 
 	var results []api.ObjectMetadata
-	for _, entry := range resp.Entries {
-		_, name, _ := utils.ExtractFilename(entry.Name)
+	for _, entry := range objs {
+		_, name, _ := utils.ExtractFilename(entry.Key)
 		match, _ := filepath.Match(pattern, name)
 		if match {
 			results = append(results, entry)
@@ -400,12 +400,12 @@ func (op *open) newLSAFrame(ctx ntlm.SecurityContext) *rpc.Frame {
 // checkForChanges monitors if any significant changes have occurred in the specified directory.
 // Significant changes include: file names, sizes, modify times, or contents.
 func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan struct{}) {
-	resp, err := op.treeConnect.share.client.GetObject(op.ctx, op.treeConnect.share.bucket, op.pathName)
+	objs, err := op.treeConnect.share.client.GetObjects(op.ctx, op.treeConnect.share.bucket, op.pathName)
 	if err != nil {
 		return
 	}
 
-	snapshot := makeSnapshot(resp.Entries)
+	snapshot := makeSnapshot(objs)
 	for {
 		select {
 		case <-stopChan: // Execution terminated
@@ -413,12 +413,12 @@ func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan stru
 		case <-time.After(15 * time.Second): // Check every 15 seconds
 		}
 
-		resp, err := op.treeConnect.share.client.GetObject(op.ctx, op.treeConnect.share.bucket, op.pathName)
+		objs, err := op.treeConnect.share.client.GetObjects(op.ctx, op.treeConnect.share.bucket, op.pathName)
 		if err != nil {
 			continue
 		}
 
-		newSnapshot := makeSnapshot(resp.Entries)
+		newSnapshot := makeSnapshot(objs)
 		if !bytes.Equal(newSnapshot, snapshot) {
 			// Normally, the server should monitor the changes according to the filter specified in each
 			// SMB2_CHANGE_NOTIFY request. If the WATCH_TREE flag is set, the server should also monitor
@@ -447,7 +447,7 @@ func makeSnapshot(entries []api.ObjectMetadata) []byte {
 	for _, entry := range entries {
 		h.Write([]byte(entry.ETag))
 		h.Write([]byte(entry.ModTime.String()))
-		h.Write([]byte(entry.Name))
+		h.Write([]byte(entry.Key))
 		h.Write(binary.LittleEndian.AppendUint64(nil, uint64(entry.Size)))
 	}
 
