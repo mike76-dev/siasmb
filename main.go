@@ -17,7 +17,7 @@ import (
 	"github.com/mike76-dev/siasmb/stores"
 )
 
-const version = "1.1.0"
+const version = "2.0.0"
 
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
 var connectionLimit = flag.Int("maxConnections", 30, "maximal number of connections from a single host within 10 minutes")
