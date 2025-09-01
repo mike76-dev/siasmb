@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mike76-dev/siasmb/smb2"
+	rhpv4 "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
@@ -258,7 +259,7 @@ func (c *Client) RemainingStorage(ctx context.Context) (rs uint64, err error) {
 		}
 		rs += h.V2Settings.RemainingStorage
 	}
-	return rs, nil
+	return rs * rhpv4.SectorSize, nil
 }
 
 // UsedStorage retrieves the "used" storage, meaning the total size of uploaded sectors including redundancy.
@@ -270,7 +271,7 @@ func (c *Client) UsedStorage(ctx context.Context, bucket string) (us uint64, err
 	if err != nil {
 		return
 	}
-	return osr.TotalUploadedSize, nil
+	return osr.TotalUploadedSize * rhpv4.SectorSize, nil
 }
 
 // ReadObject downloads a file from the Sia network.
