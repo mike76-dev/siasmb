@@ -17,10 +17,9 @@ import (
 	"github.com/mike76-dev/siasmb/stores"
 )
 
-const version = "2.0.0"
+const version = "2.1.0-alpha"
 
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
-var connectionLimit = flag.Int("maxConnections", 30, "maximal number of connections from a single host within 10 minutes")
 
 func main() {
 	log.Printf("Starting SiaSMB v%s...\n", version)
@@ -30,6 +29,22 @@ func main() {
 	dir, err := filepath.Abs(*storesDir)
 	if err != nil {
 		panic(err)
+	}
+
+	// Read the config file.
+	cfg, err := stores.ReadConfig(dir)
+	if err != nil {
+		panic(err)
+	}
+
+	if cfg.Mode == "indexd" {
+		panic("indexd mode not supported yet")
+	} else if cfg.Mode != "renterd" {
+		panic("invalid mode")
+	}
+
+	if len(cfg.Database.Password) < 4 {
+		panic("database password too short")
 	}
 
 	// Initialize stores.
@@ -137,7 +152,7 @@ func main() {
 			num := server.connectionCount[host]
 			server.connectionCount[host] = num + 1
 			server.mu.Unlock()
-			if num >= *connectionLimit {
+			if num >= cfg.MaxConnections {
 				server.blockHost(host, "too many connections")
 				log.Printf("Blocked host %s for too many connections (%d)\n", host, num)
 			}

@@ -12,7 +12,7 @@ How to set up a `renterd` node is described here: [https://github.com/SiaFoundat
 * Guest or anonymous access is not supported.
 
 ## Running the Server
-Two text files need to be created in the directory where the server will be running: `accounts.json` and `shares.yml`.
+Three text files need to be created in the directory where the server will be running: `accounts.json`, `shares.yml`, and `siasmb.yml`.
 
 `accounts.json` lists the credentials of all users that may access the server. It has the following structure:
 ```
@@ -62,6 +62,19 @@ shares:
 ```
 If your `renterd` node has several buckets, each of them may be described as a separate share with different access policies.
 
+`siasmb.yml` defines the configuration of the server. It should contain the following lines:
+```
+node: renterd          # indexd mode will be supported at a later step
+maxConnections: 30     # the maximum number of connections accepted from the same IP within 10 minutes
+apiPort: 9999          # the port number that the API is listening on; ignored for now
+database:
+  host: 127.0.0.1      # the address of the PostgreSQL server; ignored for now
+  port: 5432           # the port number of the PostgreSQL server; ignored for now
+  user: postgres       # the name of the database user; ignored for now
+  password: <PASSWORD> # the password of the database user; should be at least 4 characters long
+  database: siasmb     # the name of the PostgreSQL database; ignored for now
+  sslMode: verify-full # the SSL mode of the PostgreSQL server; ignored for now
+```
 The server can be started either as a standalone executable or as a service (the latter is preferred). For example, on Linux:
 ```
 sudo siasmb --dir=<PATH_TO_ACCOUNTS.JSON_AND_SHARES.YML>
@@ -71,7 +84,7 @@ The superuser access is required because of the port 445 that the server is list
 ## Security Considerations
 An open TCP port 445 attracts thousands of attackers and those who look for a free storage. For this reason, guest and anonymous accesses are disabled. Even when the server is running on a private LAN, it should not be a problem to create a password-protected account like described above.
 
-The server also has a built-in abuse protection. If 30 or more connections are detected from the same IP address within 10 minutes, this IP is permanently banned. This number of 30 can be configured by providing the `--maxConnections=<CONNECTION_LIMIT>` flag in the command line.
+The server also has a built-in abuse protection. If 30 or more connections are detected from the same IP address within 10 minutes, this IP is permanently banned. This number of 30 can be configured in the config file (see above).
 
 Also banned are those remote hosts, which continue sending SMB1 requests after receiving the initial SMB2 response from the server.
 
