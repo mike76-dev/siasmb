@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"log"
@@ -62,6 +63,17 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	// Create the global context.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Connect to the SQL database.
+	db, err := stores.NewStore(ctx, cfg.Database)
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
 
 	// Start listening on the SMB port 445.
 	l, err := net.Listen("tcp", ":445")
