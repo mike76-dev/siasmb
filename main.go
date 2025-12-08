@@ -54,11 +54,6 @@ func main() {
 		panic(err)
 	}
 
-	as, err := stores.NewJSONAccountStore(dir)
-	if err != nil {
-		panic(err)
-	}
-
 	ss, err := stores.NewSharesStore(dir)
 	if err != nil {
 		panic(err)
@@ -177,7 +172,7 @@ func main() {
 
 				log.Println("Incoming connection from", conn.RemoteAddr())
 				c := server.newConnection(conn)
-				c.ntlmServer = ntlm.NewServer("SERVER", "", as)
+				c.ntlmServer = ntlm.NewServer("SERVER", "", db)
 
 				for {
 					msg, err := readMessage(conn)

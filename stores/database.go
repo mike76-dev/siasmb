@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Database represents a PostgreSQL-backed store.
 type Database struct {
+	ctx  context.Context
 	pool *pgxpool.Pool
 }
 
@@ -29,5 +31,22 @@ func NewStore(ctx context.Context, dc DatabaseConfig) (*Database, error) {
 	}
 
 	log.Printf("Connected to SQL database %s, %s:%d\n", dc.Database, dc.Host, dc.Port)
-	return &Database{pool}, nil
+	return &Database{ctx, pool}, nil
+}
+
+// txn executes a statement within an SQL transaction.
+func (db *Database) txn(fn func(context.Context, pgx.Tx) error) error {
+	tx, err := db.pool.BeginTx(db.ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(db.ctx)
+
+	if err := fn(db.ctx, tx); err != nil {
+		return err
+	} else if err := tx.Commit(db.ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
 }
