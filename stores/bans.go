@@ -1,73 +1,75 @@
 package stores
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
-	"sync"
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+
+	"github.com/jackc/pgx/v5"
 )
 
-// BansStore connects the remote IP addresses with the reasons why they are banned.
-type BansStore struct {
-	Bans map[string]string
-	Mu   sync.Mutex
-	dir  string
-}
-
-type ban struct {
-	Host   string `json:"host"`
-	Reason string `json:"reason"`
-}
-
-// NewJSONBansStore returns an initialized BansStore.
-func NewJSONBansStore(dir string) (*BansStore, error) {
-	bs := &BansStore{
-		Bans: make(map[string]string),
-		dir:  dir,
-	}
-	err := bs.load()
-	if err != nil {
-		return nil, err
-	}
-	return bs, nil
-}
-
-func (bs *BansStore) load() error {
-	var bans []ban
-	if js, err := os.ReadFile(filepath.Join(bs.dir, "bans.json")); os.IsNotExist(err) {
-		return nil
+// IsBanned returns true if the remote host is banned. The ban reason is also returned.
+func (db *Database) IsBanned(host string) (bool, string, error) {
+	var reason string
+	err := db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = `
+			SELECT reason
+			FROM bans
+			WHERE host = $1
+		`
+		return tx.QueryRow(ctx, query, host).Scan(&reason)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, "", nil
 	} else if err != nil {
-		return err
-	} else if err := json.Unmarshal(js, &bans); err != nil {
-		return err
+		return false, "", fmt.Errorf("failed to retrieve ban reason: %w", err)
 	}
-	for _, ban := range bans {
-		bs.Bans[ban.Host] = ban.Reason
-	}
-	return nil
+	return true, reason, err
 }
 
-// Save saves the bans store to disk.
-func (bs *BansStore) Save() error {
-	var bans []ban
-	for host, reason := range bs.Bans {
-		bans = append(bans, ban{
-			Host:   host,
-			Reason: reason,
-		})
-	}
-	file, err := os.OpenFile(filepath.Join(bs.dir, "bans.json"), os.O_RDWR|os.O_TRUNC|os.O_CREATE, 0600)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	data, err := json.MarshalIndent(bans, "", "\t")
-	if err != nil {
-		return err
-	}
-	_, err = file.Write(data)
-	if err != nil {
-		return err
-	}
-	return file.Sync()
+// BanHost puts the host on the ban list.
+func (db *Database) BanHost(host, reason string) error {
+	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = `
+			INSERT INTO bans (host, reason)
+			VALUES ($1, $2)
+			ON CONFLICT (host) DO NOTHING
+		`
+		_, err := tx.Exec(ctx, query, host, reason)
+		if err != nil {
+			return fmt.Errorf("failed to ban host: %w", err)
+		} else {
+			return nil
+		}
+	})
+}
+
+// UnbanHost removes the host from the ban list.
+func (db *Database) UnbanHost(host string) error {
+	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = `
+			DELETE FROM bans
+			WHERE host = $1
+		`
+		_, err := tx.Exec(ctx, query, host)
+		if err != nil {
+			return fmt.Errorf("failed to unban host: %w", err)
+		} else {
+			return nil
+		}
+	})
+}
+
+// ClearBans clears the ban list.
+func (db *Database) ClearBans() error {
+	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = "DELETE FROM bans"
+		_, err := tx.Exec(ctx, query)
+		if err != nil {
+			return fmt.Errorf("failed to clear ban list: %w", err)
+		} else {
+			return nil
+		}
+	})
 }

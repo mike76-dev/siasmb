@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/mike76-dev/siasmb/rpc"
 	"github.com/mike76-dev/siasmb/smb2"
-	"github.com/mike76-dev/siasmb/stores"
 )
 
 // serverStats keeps track of the server statistics.
@@ -31,6 +30,11 @@ type serverStats struct {
 	// bigBufNeed uint32
 }
 
+// BansStore implements the minimal bans store.
+type BansStore interface {
+	BanHost(host, reason string) error
+}
+
 // server is the implementation of an SMB server.
 type server struct {
 	enabled                         bool
@@ -47,13 +51,13 @@ type server struct {
 
 	// Auxiliary fields.
 	listener        net.Listener
-	bs              *stores.BansStore
 	mu              sync.Mutex
 	connectionCount map[string]int
+	bs              BansStore
 }
 
 // newServer returns an initialized SMB server.
-func newServer(l net.Listener, bs *stores.BansStore) *server {
+func newServer(l net.Listener, bs BansStore) *server {
 	s := &server{
 		enabled:                         true,
 		serverGuid:                      uuid.New(),
@@ -65,8 +69,8 @@ func newServer(l net.Listener, bs *stores.BansStore) *server {
 		globalOpenTable:                 make(map[uint64]*open),
 		globalSessionTable:              make(map[uint64]*session),
 		listener:                        l,
-		bs:                              bs,
 		connectionCount:                 make(map[string]int),
+		bs:                              bs,
 	}
 	s.stats.start = time.Now()
 	return s

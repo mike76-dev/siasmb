@@ -49,11 +49,6 @@ func main() {
 	}
 
 	// Initialize stores.
-	bs, err := stores.NewJSONBansStore(dir)
-	if err != nil {
-		panic(err)
-	}
-
 	ss, err := stores.NewSharesStore(dir)
 	if err != nil {
 		panic(err)
@@ -79,7 +74,7 @@ func main() {
 	defer l.Close()
 
 	// Start the SMB server.
-	server := newServer(l, bs)
+	server := newServer(l, db)
 	for _, sh := range ss.Shares {
 		cs := make(map[string]struct{})
 		fs := make(map[string]uint32)
@@ -107,13 +102,6 @@ func main() {
 					server.connectionCount = make(map[string]int)
 					server.mu.Unlock()
 
-					// Save the ban list.
-					server.bs.Mu.Lock()
-					if err := server.bs.Save(); err != nil {
-						log.Println("Couldn't save state:", err)
-					}
-					server.bs.Mu.Unlock()
-
 					// Drop unused connections.
 					for _, cn := range server.connectionList {
 						if cn.isStale() {
@@ -133,12 +121,6 @@ func main() {
 			connection.conn.Close()
 		}
 
-		server.bs.Mu.Lock()
-		if err := server.bs.Save(); err != nil {
-			log.Println("Couldn't save state:", err)
-		}
-		server.bs.Mu.Unlock()
-
 		l.Close()
 		os.Exit(0)
 	}()
@@ -149,7 +131,10 @@ func main() {
 		} else {
 			// Check if the remote host is on the ban list.
 			host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
-			if _, banned := server.bs.Bans[host]; banned {
+			banned, _, err := db.IsBanned(host)
+			if err != nil {
+				panic(err)
+			} else if banned {
 				conn.Close()
 				continue
 			}
