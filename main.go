@@ -22,6 +22,8 @@ const version = "2.1.0-alpha"
 
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
 
+var isIndexd bool // true if `indexd` mode is active
+
 func main() {
 	log.Printf("Starting SiaSMB v%s...\n", version)
 
@@ -39,6 +41,7 @@ func main() {
 	}
 
 	if cfg.Mode == "indexd" {
+		isIndexd = true
 		panic("indexd mode not supported yet")
 	} else if cfg.Mode != "renterd" {
 		panic("invalid mode")
@@ -46,12 +49,6 @@ func main() {
 
 	if len(cfg.Database.Password) < 4 {
 		panic("database password too short")
-	}
-
-	// Initialize stores.
-	ss, err := stores.NewSharesStore(dir)
-	if err != nil {
-		panic(err)
 	}
 
 	// Create the global context.
@@ -75,17 +72,6 @@ func main() {
 
 	// Start the SMB server.
 	server := newServer(l, db)
-	for _, sh := range ss.Shares {
-		cs := make(map[string]struct{})
-		fs := make(map[string]uint32)
-		for _, p := range sh.Policies {
-			cs[p.Username] = struct{}{}
-			fs[p.Username] = stores.FlagsFromAccessRights(p)
-		}
-		if err := server.registerShare(sh.Name, sh.ServerName, sh.Password, sh.Bucket, cs, fs, sh.Remark); err != nil {
-			log.Printf("Error registering share %s: %v\n", sh.Name, err)
-		}
-	}
 
 	// Start a thread to watch for the stop signal.
 	c := make(chan os.Signal, 1)

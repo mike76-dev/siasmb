@@ -40,6 +40,7 @@ type session struct {
 	creationTime     time.Time
 	idleTime         time.Time
 	userName         string
+	workgroup        string
 
 	mu sync.Mutex
 }
@@ -125,6 +126,7 @@ func (s *server) deregisterSession(connection *connection, sid uint64) (*session
 func (ss *session) finalize(req smb2.SessionSetupRequest) {
 	ss.securityContext = ss.connection.ntlmServer.Session().GetSecurityContext()
 	ss.userName = ss.connection.ntlmServer.Session().User()
+	ss.workgroup = ss.connection.ntlmServer.Session().Domain()
 	if ss.userName == "" {
 		ss.isAnonymous = true
 	}

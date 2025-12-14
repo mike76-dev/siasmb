@@ -110,12 +110,12 @@ func grantAccess(cr smb2.CreateRequest, tc *treeConnect, ss *session) bool {
 		return true
 	}
 
-	_, ok := tc.share.connectSecurity[ss.userName]
+	_, ok := tc.share.connectSecurity[ss.workgroup+"/"+ss.userName]
 	if !ok {
 		return false
 	}
 
-	fs := tc.share.fileSecurity[ss.userName]
+	fs := tc.share.fileSecurity[ss.workgroup+"/"+ss.userName]
 	write := fs&(smb2.FILE_WRITE_DATA|smb2.FILE_APPEND_DATA|smb2.FILE_WRITE_EA|smb2.FILE_WRITE_ATTRIBUTES) > 0
 	del := fs&(smb2.DELETE|smb2.FILE_DELETE_CHILD) > 0
 

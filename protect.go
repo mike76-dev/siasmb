@@ -6,7 +6,7 @@ import (
 
 // blockHost adds a remote host to the bans store together with the provided reason.
 func (s *server) blockHost(host, reason string) {
-	if err := s.bs.BanHost(host, reason); err != nil {
+	if err := s.store.BanHost(host, reason); err != nil {
 		panic(err)
 	}
 
