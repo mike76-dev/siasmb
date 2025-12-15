@@ -8,6 +8,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// APIConfig lists the API-related fields.
+type APIConfig struct {
+	Port     int    `yaml:"port"`
+	Password string `yaml:"password"`
+}
+
 // DatabaseConfig lists all the fields needed to connect to a PostgreSQL database.
 type DatabaseConfig struct {
 	Host     string `yaml:"host"`
@@ -27,7 +33,7 @@ func (dc DatabaseConfig) String() string {
 type Config struct {
 	Mode           string         `yaml:"mode"`
 	MaxConnections int            `yaml:"maxConnections"`
-	APIPort        int            `yaml:"apiPort"`
+	API            APIConfig      `yaml:"api"`
 	Database       DatabaseConfig `yaml:"database"`
 }
 

@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mike76-dev/siasmb/api"
 	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/stores"
@@ -62,12 +65,24 @@ func main() {
 	}
 	defer db.Close()
 
+	// Start the API server.
+	lAPI, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.API.Port))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer lAPI.Close()
+	a := api.NewAPI(db)
+	defer a.Close()
+	apiSrv := &http.Server{Handler: api.BasicAuth(cfg.API.Password)(a)}
+	go apiSrv.Serve(lAPI)
+	log.Printf("API: listening at %s ...\n", lAPI.Addr())
+
 	// Start listening on the SMB port 445.
 	l, err := net.Listen("tcp", ":445")
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("Listening at %s ...\n", l.Addr())
+	log.Printf("SMB: listening at %s ...\n", l.Addr())
 	defer l.Close()
 
 	// Start the SMB server.
@@ -107,6 +122,8 @@ func main() {
 			connection.conn.Close()
 		}
 
+		apiSrv.Close()
+		lAPI.Close()
 		l.Close()
 		os.Exit(0)
 	}()
