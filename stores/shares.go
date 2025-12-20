@@ -1,74 +1,179 @@
 package stores
 
 import (
-	"os"
-	"path/filepath"
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/jackc/pgx/v5"
+	"go.sia.tech/core/types"
 )
-
-// AccessRights describes the access policies of a user account.
-type AccessRights struct {
-	Username      string `yaml:"username"`
-	ReadAccess    bool   `yaml:"read"`
-	WriteAccess   bool   `yaml:"write"`
-	DeleteAccess  bool   `yaml:"delete"`
-	ExecuteAccess bool   `yaml:"execute"`
-}
 
 // Share represents a renterd bucket, which is mounted as a remote share.
 type Share struct {
-	Name       string         `yaml:"name"`
-	ServerName string         `yaml:"serverName"`
-	Password   string         `yaml:"apiPassword,omitempty"`
-	Bucket     string         `yaml:"bucket,omitempty"`
-	Policies   []AccessRights `yaml:"policies,omitempty"`
-	Remark     string         `yaml:"remark,omitempty"`
+	ID         types.Hash256
+	Name       string
+	ServerName string
+	Password   string
+	Bucket     string
+	Remark     string
+	CreatedAt  time.Time
 }
 
-// SharesStore lists all available shares.
-type SharesStore struct {
-	Shares []Share `yaml:"shares,omitempty"`
+// RegisterShare registers a new share in the database.
+func (db *Database) RegisterShare(s Share) error {
+	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = `
+			INSERT INTO shares (share_id, share_name, server_name, api_password, bucket, remark, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`
+		_, err := tx.Exec(ctx, query, s.ID[:], s.Name, s.ServerName, s.Password, s.Bucket, s.Remark, time.Now())
+		if err != nil {
+			return fmt.Errorf("failed to register share: %w", err)
+		} else {
+			return nil
+		}
+	})
 }
 
-// NewSharesStore returns an initialized SharesStore.
-func NewSharesStore(dir string) (*SharesStore, error) {
-	path := filepath.Join(dir, "shares.yml")
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
+// UnregisterShare removes the share from the database.
+func (db *Database) UnregisterShare(id types.Hash256, name string) error {
+	if (id == types.Hash256{}) && name == "" {
+		return nil
 	}
-	defer f.Close()
-
-	dec := yaml.NewDecoder(f)
-	dec.KnownFields(true)
-
-	ss := &SharesStore{}
-	if err := dec.Decode(ss); err != nil {
-		return nil, err
-	}
-
-	return ss, nil
+	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = `
+			DELETE FROM shares
+			WHERE (share_id = '\x0000000000000000000000000000000000000000000000000000000000000000'
+			AND share_name = $1)
+			OR share_id = $2
+		`
+		_, err := tx.Exec(ctx, query, name, id[:])
+		if err != nil {
+			return fmt.Errorf("failed to remove share: %w", err)
+		} else {
+			return nil
+		}
+	})
 }
 
-// FlagsFromAccessRights converts an AccessRights structure into SMB2 flags.
-func FlagsFromAccessRights(ar AccessRights) uint32 {
-	var flags uint32
-	if ar.ReadAccess {
-		flags |= 0x00120089 // FILE_READ_DATA | FILE_READ_EA | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE
+// GetShare tries to retrieve the share information by its ID and/or name.
+// `renterd` doesn't support share IDs. On the other hand, `indexd` will
+// support multiple shares with the same name, so the ID will be the only way
+// to distinguish between the shares.
+func (db *Database) GetShare(id types.Hash256, name string) (s Share, err error) {
+	if (id == types.Hash256{}) && name == "" {
+		return Share{}, nil
 	}
+	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = `
+			SELECT share_name, server_name, api_password, bucket, remark, created_at
+			FROM shares
+			WHERE (share_id = '\x0000000000000000000000000000000000000000000000000000000000000000'
+			AND share_name = $1)
+			OR share_id = $2
+		`
+		var name, server, password, bucket, remark string
+		var created time.Time
+		err = tx.QueryRow(ctx, query, name, id[:]).Scan(&name, &server, &password, &bucket, &remark, &created)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("failed to retrieve share: %w", err)
+		}
+		s = Share{
+			ID:         id,
+			Name:       name,
+			ServerName: server,
+			Password:   password,
+			Bucket:     bucket,
+			Remark:     remark,
+			CreatedAt:  created,
+		}
+		return nil
+	})
+	return
+}
 
-	if ar.WriteAccess {
-		flags |= 0x000c0116 // FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | WRITE_DAC | WRITE_OWNER
+// GetShares lists all shares the specified account has access to.
+func (db *Database) GetShares(acc Account) (shares []Share, err error) {
+	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = `
+			SELECT DISTINCT s.share_id, s.share_name, s.server_name, s.api_password, s.bucket, s.remark, s.created_at
+			FROM shares AS s
+			JOIN policies AS p
+			ON ((p.share_id <> '\x0000000000000000000000000000000000000000000000000000000000000000' AND p.share_id = s.share_id)
+			OR (p.share_id = '\x0000000000000000000000000000000000000000000000000000000000000000' AND p.share_name = s.share_name))
+			WHERE p.account = $1
+			AND (p.read_access
+			OR p.write_access
+			OR p.delete_access
+			OR p.execute_access)
+		`
+		rows, err := tx.Query(ctx, query, acc.ID)
+		if err != nil {
+			return fmt.Errorf("failed to retrieve share: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			id := make([]byte, 32)
+			var name, server, password, bucket, remark string
+			var created time.Time
+			if err := rows.Scan(&id, &name, &server, &password, &bucket, &remark, &created); err != nil {
+				return fmt.Errorf("failed to retrieve share: %w", err)
+			}
+			shares = append(shares, Share{
+				ID:         types.Hash256(id),
+				Name:       name,
+				ServerName: server,
+				Password:   password,
+				Bucket:     bucket,
+				Remark:     remark,
+				CreatedAt:  created,
+			})
+		}
+		return nil
+	})
+	return
+}
+
+// GetAccounts lists all the accounts that can connect to the specified share.
+func (db *Database) GetAccounts(sh Share) (ars []AccessRights, err error) {
+	if (sh.ID == types.Hash256{}) && sh.Name == "" {
+		return nil, nil
 	}
-
-	if ar.DeleteAccess {
-		flags |= 0x00010040 // FILE_DELETE_CHILD | DELETE
-	}
-
-	if ar.ExecuteAccess {
-		flags |= 0x00000020 // FILE_EXECUTE
-	}
-
-	return flags
+	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = `
+			SELECT account, read_access, write_access, delete_access, execute_access
+			FROM policies
+			WHERE (share_id = '\x0000000000000000000000000000000000000000000000000000000000000000'
+			AND share_name = $1)
+			OR share_id = $2
+		`
+		rows, err := tx.Query(ctx, query, sh.Name, sh.ID[:])
+		if err != nil {
+			return fmt.Errorf("failed to retrieve policies: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var accountID int
+			var read, write, delete, execute bool
+			if err := rows.Scan(&accountID, &read, &write, &delete, &execute); err != nil {
+				return fmt.Errorf("failed to retrieve policies: %w", err)
+			}
+			ars = append(ars, AccessRights{
+				ShareID:       sh.ID,
+				ShareName:     sh.Name,
+				AccountID:     accountID,
+				ReadAccess:    read,
+				WriteAccess:   write,
+				DeleteAccess:  delete,
+				ExecuteAccess: execute,
+			})
+		}
+		return nil
+	})
+	return
 }

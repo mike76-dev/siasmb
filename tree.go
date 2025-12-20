@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"github.com/mike76-dev/siasmb/smb2"
+	"go.sia.tech/core/types"
 )
 
 var (
 	errNoShare       = errors.New("no share name provided")
 	errNoTreeConnect = errors.New("tree already disconnected")
 	errAccessDenied  = errors.New("access denied")
+	errTooManyUses   = errors.New("too many users connected")
 )
 
 // treeConnect represents a TreeConnect object.
@@ -71,7 +73,7 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 			connectSecurity: map[string]struct{}{},
 			fileSecurity:    make(map[string]uint32),
 		}
-		sh.connectSecurity[ss.userName] = struct{}{}
+		sh.connectSecurity[ss.workgroup+"/"+ss.userName] = struct{}{}
 		access = smb2.FILE_READ_DATA |
 			smb2.FILE_READ_EA |
 			smb2.FILE_EXECUTE |
@@ -81,16 +83,29 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 			smb2.WRITE_DAC |
 			smb2.WRITE_OWNER |
 			smb2.SYNCHRONIZE
-		sh.fileSecurity[ss.userName] = access
+		sh.fileSecurity[ss.workgroup+"/"+ss.userName] = access
 	} else {
 		var exists bool
 		c.server.mu.Lock()
 		sh, exists = c.server.shareList[name]
 		c.server.mu.Unlock()
 		if !exists {
-			return nil, errNoShare
+			s, err := c.server.store.GetShare(types.Hash256{}, name)
+			if err != nil {
+				return nil, errNoShare
+			}
+			sh, err = c.server.registerShare(s, c.server.store)
+			if err != nil {
+				return nil, err
+			}
 		}
-		access, exists = sh.fileSecurity[ss.userName]
+		sh.mu.Lock()
+		if sh.currentUses >= maxShareUses {
+			sh.mu.Unlock()
+			return nil, errTooManyUses
+		}
+		sh.mu.Unlock()
+		access, exists = sh.fileSecurity[ss.workgroup+"/"+ss.userName]
 		if !exists {
 			return nil, errAccessDenied
 		}

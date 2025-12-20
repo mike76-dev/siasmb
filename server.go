@@ -10,6 +10,7 @@ import (
 	"github.com/mike76-dev/siasmb/rpc"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/stores"
+	"go.sia.tech/core/types"
 )
 
 // serverStats keeps track of the server statistics.
@@ -31,6 +32,14 @@ type serverStats struct {
 	// bigBufNeed uint32
 }
 
+// Store implements the minimal store.
+type Store interface {
+	BanHost(host, reason string) error
+	GetAccounts(sh stores.Share) (ars []stores.AccessRights, err error)
+	GetAccountByID(id int) (acc stores.Account, err error)
+	GetShare(id types.Hash256, name string) (s stores.Share, err error)
+}
+
 // server is the implementation of an SMB server.
 type server struct {
 	enabled                         bool
@@ -47,13 +56,13 @@ type server struct {
 
 	// Auxiliary fields.
 	listener        net.Listener
-	bs              *stores.BansStore
 	mu              sync.Mutex
 	connectionCount map[string]int
+	store           Store
 }
 
 // newServer returns an initialized SMB server.
-func newServer(l net.Listener, bs *stores.BansStore) *server {
+func newServer(l net.Listener, st Store) *server {
 	s := &server{
 		enabled:                         true,
 		serverGuid:                      uuid.New(),
@@ -65,8 +74,8 @@ func newServer(l net.Listener, bs *stores.BansStore) *server {
 		globalOpenTable:                 make(map[uint64]*open),
 		globalSessionTable:              make(map[uint64]*session),
 		listener:                        l,
-		bs:                              bs,
 		connectionCount:                 make(map[string]int),
+		store:                           st,
 	}
 	s.stats.start = time.Now()
 	return s

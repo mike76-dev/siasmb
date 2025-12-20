@@ -22,7 +22,6 @@ import (
 type Server struct {
 	targetName   string
 	targetDomain string
-	accounts     map[string]string
 
 	nmsg    []byte
 	cmsg    []byte
@@ -30,29 +29,24 @@ type Server struct {
 	session *Session
 
 	mechTypes []asn1.ObjectIdentifier
+	accounts  AccountStore
+}
+
+// AccountStore defines the minimal account store.
+type AccountStore interface {
+	FindAccount(username, workgroup string) (stores.Account, error)
 }
 
 // NewServer returns an initialized NTLMv2 server.
-func NewServer(targetName, targetDomain string, store *stores.AccountStore) *Server {
+func NewServer(targetName, targetDomain string, store AccountStore) *Server {
 	mechTypes := make([]asn1.ObjectIdentifier, 1)
 	mechTypes[0] = spnego.NlmpOid
-	s := &Server{
+	return &Server{
 		targetName:   targetName,
 		targetDomain: targetDomain,
-		accounts:     make(map[string]string),
 		mechTypes:    mechTypes,
+		accounts:     store,
 	}
-
-	for user, password := range store.Accounts {
-		s.AddAccount(user, password)
-	}
-
-	return s
-}
-
-// AddAccount adds a new user-password pair to the server's database.
-func (s *Server) AddAccount(user, password string) {
-	s.accounts[user] = password
 }
 
 // Negotiate generates an NTLM NEGOTIATE message to be put in SMB2_NEGOTIATE response.
@@ -261,14 +255,22 @@ func (s *Server) Authenticate(amsg []byte) (err error) {
 	}
 	encryptedRandomSessionKey := amsg[encryptedRandomSessionKeyBufferOffset : encryptedRandomSessionKeyBufferOffset+uint32(encryptedRandomSessionKeyLen)] // amsg.EncryptedRandomSessionKey
 
-	var domain string
-
 	if len(userName) != 0 || len(ntChallengeResponse) != 0 {
 		user := strings.ToLower(utils.DecodeToString(userName))
+		var domain string
+		if len(domainName) != 0 {
+			domain = strings.ToLower(utils.DecodeToString(domainName))
+		}
+
+		acc, err := s.accounts.FindAccount(user, domain)
+		if err != nil {
+			return err
+		}
+
 		expectedNtChallengeResponse := make([]byte, len(ntChallengeResponse))
 		ntlmv2ClientChallenge := ntChallengeResponse[16:]
 		USER := utils.EncodeStringToBytes(strings.ToUpper(user))
-		password := utils.EncodeStringToBytes(s.accounts[user])
+		password := utils.EncodeStringToBytes(acc.Password)
 		h := hmac.New(md5.New, ntowfv2(USER, password, domainName))
 		serverChallenge := s.cmsg[24:32]
 		timeStamp := ntlmv2ClientChallenge[8:16]
@@ -277,10 +279,6 @@ func (s *Server) Authenticate(amsg []byte) (err error) {
 		encodeNtlmv2Response(expectedNtChallengeResponse, h, serverChallenge, clientChallenge, timeStamp, bytesEncoder(targetInfo))
 		if !bytes.Equal(ntChallengeResponse, expectedNtChallengeResponse) {
 			return errors.New("login failure")
-		}
-
-		if len(domainName) != 0 {
-			domain = utils.DecodeToString(domainName)
 		}
 
 		session := new(Session)

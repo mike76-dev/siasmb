@@ -1,0 +1,12 @@
+mode: renterd
+maxConnections: 30
+api:
+  port: 9999
+  password: ''
+database:
+  host: 127.0.0.1
+  port: 5432
+  user: postgres
+  password: ''
+  database: siasmb
+  sslMode: verify-full

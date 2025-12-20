@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -12,15 +15,17 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mike76-dev/siasmb/api"
 	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/stores"
 )
 
-const version = "2.0.0"
+const version = "2.1.0-alpha"
 
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
-var connectionLimit = flag.Int("maxConnections", 30, "maximal number of connections from a single host within 10 minutes")
+
+var isIndexd bool // true if `indexd` mode is active
 
 func main() {
 	log.Printf("Starting SiaSMB v%s...\n", version)
@@ -32,43 +37,56 @@ func main() {
 		panic(err)
 	}
 
-	// Initialize stores.
-	bs, err := stores.NewJSONBansStore(dir)
+	// Read the config file.
+	cfg, err := stores.ReadConfig(dir)
 	if err != nil {
 		panic(err)
 	}
 
-	as, err := stores.NewJSONAccountStore(dir)
-	if err != nil {
-		panic(err)
+	if cfg.Mode == "indexd" {
+		isIndexd = true
+		panic("indexd mode not supported yet")
+	} else if cfg.Mode != "renterd" {
+		panic("invalid mode")
 	}
 
-	ss, err := stores.NewSharesStore(dir)
+	if len(cfg.Database.Password) < 4 {
+		panic("database password too short")
+	}
+
+	// Create the global context.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Connect to the SQL database.
+	db, err := stores.NewStore(ctx, cfg.Database)
 	if err != nil {
 		panic(err)
 	}
+	defer db.Close()
+
+	// Start the API server.
+	lAPI, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.API.Port))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer lAPI.Close()
+	a := api.NewAPI(db)
+	defer a.Close()
+	apiSrv := &http.Server{Handler: api.BasicAuth(cfg.API.Password)(a)}
+	go apiSrv.Serve(lAPI)
+	log.Printf("API: listening at %s ...\n", lAPI.Addr())
 
 	// Start listening on the SMB port 445.
 	l, err := net.Listen("tcp", ":445")
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("Listening at %s ...\n", l.Addr())
+	log.Printf("SMB: listening at %s ...\n", l.Addr())
 	defer l.Close()
 
 	// Start the SMB server.
-	server := newServer(l, bs)
-	for _, sh := range ss.Shares {
-		cs := make(map[string]struct{})
-		fs := make(map[string]uint32)
-		for _, p := range sh.Policies {
-			cs[p.Username] = struct{}{}
-			fs[p.Username] = stores.FlagsFromAccessRights(p)
-		}
-		if err := server.registerShare(sh.Name, sh.ServerName, sh.Password, sh.Bucket, cs, fs, sh.Remark); err != nil {
-			log.Printf("Error registering share %s: %v\n", sh.Name, err)
-		}
-	}
+	server := newServer(l, db)
 
 	// Start a thread to watch for the stop signal.
 	c := make(chan os.Signal, 1)
@@ -84,13 +102,6 @@ func main() {
 					server.mu.Lock()
 					server.connectionCount = make(map[string]int)
 					server.mu.Unlock()
-
-					// Save the ban list.
-					server.bs.Mu.Lock()
-					if err := server.bs.Save(); err != nil {
-						log.Println("Couldn't save state:", err)
-					}
-					server.bs.Mu.Unlock()
 
 					// Drop unused connections.
 					for _, cn := range server.connectionList {
@@ -111,12 +122,8 @@ func main() {
 			connection.conn.Close()
 		}
 
-		server.bs.Mu.Lock()
-		if err := server.bs.Save(); err != nil {
-			log.Println("Couldn't save state:", err)
-		}
-		server.bs.Mu.Unlock()
-
+		apiSrv.Close()
+		lAPI.Close()
 		l.Close()
 		os.Exit(0)
 	}()
@@ -127,7 +134,10 @@ func main() {
 		} else {
 			// Check if the remote host is on the ban list.
 			host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
-			if _, banned := server.bs.Bans[host]; banned {
+			banned, _, err := db.IsBanned(host)
+			if err != nil {
+				panic(err)
+			} else if banned {
 				conn.Close()
 				continue
 			}
@@ -137,7 +147,7 @@ func main() {
 			num := server.connectionCount[host]
 			server.connectionCount[host] = num + 1
 			server.mu.Unlock()
-			if num >= *connectionLimit {
+			if num >= cfg.MaxConnections {
 				server.blockHost(host, "too many connections")
 				log.Printf("Blocked host %s for too many connections (%d)\n", host, num)
 			}
@@ -150,7 +160,7 @@ func main() {
 
 				log.Println("Incoming connection from", conn.RemoteAddr())
 				c := server.newConnection(conn)
-				c.ntlmServer = ntlm.NewServer("SERVER", "", as)
+				c.ntlmServer = ntlm.NewServer("SERVER", "", db)
 
 				for {
 					msg, err := readMessage(conn)
