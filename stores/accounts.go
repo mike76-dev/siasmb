@@ -28,7 +28,7 @@ func (db *Database) GetAccountByID(id int) (acc Account, err error) {
 		var username, password, workgroup string
 		err = tx.QueryRow(ctx, query, id).Scan(&username, &password, &workgroup)
 		if errors.Is(err, sql.ErrNoRows) {
-			return errors.New("account not found")
+			return nil
 		} else if err != nil {
 			return fmt.Errorf("failed to retrieve account: %w", err)
 		}
@@ -51,7 +51,7 @@ func (db *Database) FindAccount(username, workgroup string) (acc Account, err er
 		var password string
 		err = tx.QueryRow(ctx, query, username, workgroup).Scan(&id, &password)
 		if errors.Is(err, sql.ErrNoRows) {
-			return errors.New("account not found")
+			return nil
 		} else if err != nil {
 			return fmt.Errorf("failed to retrieve account: %w", err)
 		}
@@ -107,6 +107,37 @@ func (db *Database) RemoveAccount(username, workgroup string) error {
 			return nil
 		}
 	})
+}
+
+// FindAccounts returns all accounts of the specified workgroup.
+func (db *Database) FindAccounts(workgroup string) (accs []Account, err error) {
+	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = `
+			SELECT id, account_name, account_password
+			FROM accounts
+			WHERE workgroup = $1
+		`
+		rows, err := tx.Query(ctx, query, workgroup)
+		if err != nil {
+			return fmt.Errorf("failed to fetch accounts: %w", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id int
+			var username, password string
+			if err := rows.Scan(&id, &username, &password); err != nil {
+				return fmt.Errorf("failed to fetch accounts: %w", err)
+			}
+			accs = append(accs, Account{
+				ID:        id,
+				Username:  username,
+				Password:  password,
+				Workgroup: workgroup,
+			})
+		}
+		return nil
+	})
+	return
 }
 
 // RemoveAccounts removes all accounts of the specified workgroup.

@@ -39,13 +39,18 @@ func (db *Database) RegisterShare(s Share) error {
 }
 
 // UnregisterShare removes the share from the database.
-func (db *Database) UnregisterShare(id types.Hash256) error {
+func (db *Database) UnregisterShare(id types.Hash256, name string) error {
+	if (id == types.Hash256{}) && name == "" {
+		return nil
+	}
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
 			DELETE FROM shares
-			WHERE share_id = $1
+			WHERE (share_id = '\x0000000000000000000000000000000000000000000000000000000000000000'
+			AND share_name = $1)
+			OR share_id = $2
 		`
-		_, err := tx.Exec(ctx, query, id[:])
+		_, err := tx.Exec(ctx, query, name, id[:])
 		if err != nil {
 			return fmt.Errorf("failed to remove share: %w", err)
 		} else {
@@ -59,6 +64,9 @@ func (db *Database) UnregisterShare(id types.Hash256) error {
 // support multiple shares with the same name, so the ID will be the only way
 // to distinguish between the shares.
 func (db *Database) GetShare(id types.Hash256, name string) (s Share, err error) {
+	if (id == types.Hash256{}) && name == "" {
+		return Share{}, nil
+	}
 	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
 			SELECT share_name, server_name, api_password, bucket, remark, created_at
@@ -71,7 +79,7 @@ func (db *Database) GetShare(id types.Hash256, name string) (s Share, err error)
 		var created time.Time
 		err = tx.QueryRow(ctx, query, name, id[:]).Scan(&name, &server, &password, &bucket, &remark, &created)
 		if errors.Is(err, sql.ErrNoRows) {
-			return errors.New("share not found")
+			return nil
 		} else if err != nil {
 			return fmt.Errorf("failed to retrieve share: %w", err)
 		}
@@ -131,8 +139,11 @@ func (db *Database) GetShares(acc Account) (shares []Share, err error) {
 	return
 }
 
-// GetPolicies lists all the accounts that can connect to the specified share.
+// GetAccounts lists all the accounts that can connect to the specified share.
 func (db *Database) GetAccounts(sh Share) (ars []AccessRights, err error) {
+	if (sh.ID == types.Hash256{}) && sh.Name == "" {
+		return nil, nil
+	}
 	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
 			SELECT account, read_access, write_access, delete_access, execute_access

@@ -23,6 +23,9 @@ type AccessRights struct {
 
 // GetAccessRights retrieves the access policy for the given account.
 func (db *Database) GetAccessRights(share Share, acc Account) (ar AccessRights, err error) {
+	if (share.ID == types.Hash256{}) && share.Name == "" {
+		return AccessRights{}, nil
+	}
 	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
 			SELECT read_access, write_access, delete_access, execute_access
@@ -35,7 +38,7 @@ func (db *Database) GetAccessRights(share Share, acc Account) (ar AccessRights, 
 		var ra, wa, da, ea bool
 		err = tx.QueryRow(ctx, query, share.Name, share.ID[:], acc.ID).Scan(&ra, &wa, &da, &ea)
 		if errors.Is(err, sql.ErrNoRows) {
-			return errors.New("policy not found")
+			return nil
 		} else if err != nil {
 			return fmt.Errorf("failed to retrieve policy: %w", err)
 		}
@@ -76,6 +79,9 @@ func (db *Database) SetAccessRights(ar AccessRights) error {
 
 // RemoveAccessRights removes the access policy to the share for the given account.
 func (db *Database) RemoveAccessRights(share Share, acc Account) error {
+	if (share.ID == types.Hash256{}) && share.Name == "" {
+		return nil
+	}
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
 			DELETE FROM policies
