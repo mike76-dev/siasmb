@@ -187,10 +187,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		// Respond with an SMB2_NEGOTIATE response.
 		dialect := nr.MaxCommonDialect()
-		if dialect == smb2.SMB_DIALECT_202 {
+		switch dialect {
+		case smb2.SMB_DIALECT_202:
 			c.negotiateDialect = dialect
 			c.dialect = "2.0.2"
-		} else if dialect == smb2.SMB_DIALECT_MULTICREDIT {
+		case smb2.SMB_DIALECT_MULTICREDIT:
 			c.supportsMultiCredit = true
 		}
 
