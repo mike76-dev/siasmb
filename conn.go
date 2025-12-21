@@ -158,7 +158,19 @@ func (c *connection) acceptRequest(msg []byte) error {
 		}
 
 		// Request processed; this message ID is not allowed anymore.
-		delete(c.commandSequenceWindow, mid)
+		if c.negotiateDialect == smb2.SMB_DIALECT_202 || !c.supportsMultiCredit {
+			delete(c.commandSequenceWindow, mid)
+		} else { // Remove as many IDs as the CreditCharge field
+			var count uint16
+			i := mid
+			for count < req.Header().CreditCharge() {
+				if _, found := c.commandSequenceWindow[i]; found {
+					delete(c.commandSequenceWindow, i)
+					count++
+				}
+				i++
+			}
+		}
 
 		// Put request in the queue.
 		c.requestList[mid] = req
