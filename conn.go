@@ -395,6 +395,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			if errors.Is(err, errAccessDenied) {
 				resp := smb2.NewErrorResponse(tcr, smb2.STATUS_ACCESS_DENIED, nil)
 				return resp, ss, nil
+			} else if errors.Is(err, errNoShare) {
+				resp := smb2.NewErrorResponse(tcr, smb2.STATUS_SHARE_UNAVAILABLE, nil)
+				return resp, ss, nil
 			} else {
 				resp := smb2.NewErrorResponse(tcr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, ss, nil
