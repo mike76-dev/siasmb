@@ -203,11 +203,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		// Respond with an SMB2_NEGOTIATE response.
 		dialect := nr.MaxCommonDialect()
+		c.negotiateDialect = dialect
 		switch dialect {
 		case smb2.SMB_DIALECT_202:
-			c.negotiateDialect = dialect
 			c.dialect = "2.0.2"
 		case smb2.SMB_DIALECT_MULTICREDIT:
+			c.dialect = "2.?.?"
 			c.supportsMultiCredit = true
 		}
 		c.grantCredits(nr.Header().MessageID(), 1) // Grant just one credit
