@@ -10,6 +10,12 @@ const (
 	SMB2WriteResponseStructureSize = 17
 )
 
+const (
+	// SMB2_WRITE flags.
+	WRITEFLAG_WRITE_THROUGH    = 0x00000001
+	WRITEFLAG_WRITE_UNBUFFERED = 0x00000002
+)
+
 // WriteRequest represents an SMB2_WRITE request.
 type WriteRequest struct {
 	Request

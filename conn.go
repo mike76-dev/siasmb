@@ -1074,6 +1074,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			id = op.id()
 		}
 
+		if c.dialect == "2.1" || c.dialect == "3.0" {
+			if wr.Flags()&smb2.WRITEFLAG_WRITE_THROUGH > 0 && op.createOptions&smb2.FILE_NO_INTERMEDIATE_BUFFERING == 0 {
+				resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, ss, nil
+			}
+		}
+
 		req.SetOpenID(id)
 		if op.fileName != "" && op.fileName[0] == '.' { // Ignore SMB2_WRITE requests to any hidden file (whose name starts with a dot)
 			resp := &smb2.WriteResponse{}
