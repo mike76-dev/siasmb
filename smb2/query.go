@@ -126,7 +126,7 @@ type QueryDirectoryRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (qdr QueryDirectoryRequest) Validate() error {
+func (qdr QueryDirectoryRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(qdr.data).Validate(); err != nil {
 		return err
 	}
@@ -143,6 +143,19 @@ func (qdr QueryDirectoryRequest) Validate() error {
 	length := binary.LittleEndian.Uint16(qdr.data[SMB2HeaderSize+26 : SMB2HeaderSize+28])
 	if off+length > uint16(len(qdr.data)) {
 		return ErrInvalidParameter
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(qdr.data) - SMB2HeaderSize - SMB2QueryDirectoryRequestMinSize)
+		ers := qdr.OutputBufferLength()
+		if qdr.Header().CreditCharge() == 0 {
+			if sps > 65536 || ers > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if qdr.Header().CreditCharge() < uint16((max(sps, ers)-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil
@@ -706,7 +719,7 @@ type QueryInfoRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (qir QueryInfoRequest) Validate() error {
+func (qir QueryInfoRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(qir.data).Validate(); err != nil {
 		return err
 	}
@@ -723,6 +736,19 @@ func (qir QueryInfoRequest) Validate() error {
 	length := binary.LittleEndian.Uint32(qir.data[SMB2HeaderSize+12 : SMB2HeaderSize+16])
 	if uint32(off)+length > uint32(len(qir.data)) {
 		return ErrInvalidParameter
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(qir.data) - SMB2HeaderSize - SMB2QueryInfoRequestMinSize)
+		ers := qir.OutputBufferLength()
+		if qir.Header().CreditCharge() == 0 {
+			if sps > 65536 || ers > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if qir.Header().CreditCharge() < uint16((max(sps, ers)-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil

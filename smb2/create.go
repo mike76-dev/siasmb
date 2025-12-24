@@ -140,7 +140,7 @@ type CreateRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (cr CreateRequest) Validate() error {
+func (cr CreateRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(cr.data).Validate(); err != nil {
 		return err
 	}
@@ -175,6 +175,37 @@ func (cr CreateRequest) Validate() error {
 	cLength := binary.LittleEndian.Uint32(cr.data[SMB2HeaderSize+52 : SMB2HeaderSize+56])
 	if cOff+cLength > uint32(len(cr.data)) {
 		return ErrInvalidParameter
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(cr.data) - SMB2HeaderSize - SMB2CreateRequestMinSize)
+		var ers uint32
+		contexts, err := cr.CreateContexts()
+		if err != nil {
+			return ErrInvalidParameter
+		}
+		for ctx := range contexts {
+			switch ctx {
+			case CREATE_EA_BUFFER, CREATE_SD_BUFFER:
+			case CREATE_DURABLE_HANDLE_REQUEST, CREATE_DURABLE_HANDLE_RECONNECT:
+				ers += 8
+			case CREATE_QUERY_MAXIMAL_ACCESS_REQUEST:
+				ers += 8
+			case CREATE_ALLOCATION_SIZE, CREATE_TIMEWAROP_TOKEN:
+			case CREATE_QUERY_ON_DISK_ID:
+				ers += 32
+			case CREATE_REQUEST_LEASE:
+				ers += 32
+			}
+		}
+		if cr.Header().CreditCharge() == 0 {
+			if sps > 65536 || ers > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if cr.Header().CreditCharge() < uint16((max(sps, ers)-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil

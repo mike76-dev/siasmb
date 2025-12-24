@@ -24,7 +24,7 @@ type SessionSetupRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (ssr SessionSetupRequest) Validate() error {
+func (ssr SessionSetupRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(ssr.data).Validate(); err != nil {
 		return err
 	}
@@ -35,6 +35,19 @@ func (ssr SessionSetupRequest) Validate() error {
 
 	if ssr.structureSize() != SMB2SessionSetupRequestStructureSize {
 		return ErrWrongFormat
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(ssr.data) - SMB2HeaderSize - SMB2SessionSetupRequestMinSize)
+		ers := uint32(207)
+		if ssr.Header().CreditCharge() == 0 {
+			if sps > 65536 || ers > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if ssr.Header().CreditCharge() < uint16((max(sps, ers)-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil

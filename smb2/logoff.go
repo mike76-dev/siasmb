@@ -18,7 +18,7 @@ type LogoffRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (lr LogoffRequest) Validate() error {
+func (lr LogoffRequest) Validate(_ bool) error {
 	if err := Header(lr.data).Validate(); err != nil {
 		return err
 	}

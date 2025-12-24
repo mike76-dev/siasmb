@@ -16,7 +16,7 @@ type WriteRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (wr WriteRequest) Validate() error {
+func (wr WriteRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(wr.data).Validate(); err != nil {
 		return err
 	}
@@ -33,6 +33,18 @@ func (wr WriteRequest) Validate() error {
 	length := binary.LittleEndian.Uint32(wr.data[SMB2HeaderSize+4 : SMB2HeaderSize+8])
 	if uint32(off)+length > uint32(len(wr.data)) {
 		return ErrInvalidParameter
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(wr.data) - SMB2HeaderSize - SMB2WriteRequestMinSize)
+		if wr.Header().CreditCharge() == 0 {
+			if sps > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if wr.Header().CreditCharge() < uint16((sps-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil

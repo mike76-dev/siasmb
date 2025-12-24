@@ -78,7 +78,7 @@ type NegotiateRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (nr NegotiateRequest) Validate() error {
+func (nr NegotiateRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(nr.data).Validate(); err != nil {
 		return err
 	}
@@ -155,6 +155,19 @@ func (nr NegotiateRequest) Validate() error {
 
 	if !supported {
 		return ErrDialectNotSupported
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(nr.data) - SMB2HeaderSize - SMB2NegotiateRequestMinSize)
+		ers := uint32(74) //TODO revisit in 3.1.1
+		if nr.Header().CreditCharge() == 0 {
+			if sps > 65536 || ers > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if nr.Header().CreditCharge() < uint16((max(sps, ers)-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil

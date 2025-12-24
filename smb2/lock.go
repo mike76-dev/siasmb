@@ -31,7 +31,7 @@ type Lock struct {
 }
 
 // Validate implements GenericRequest interface.
-func (lr LockRequest) Validate() error {
+func (lr LockRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(lr.data).Validate(); err != nil {
 		return err
 	}
@@ -51,6 +51,18 @@ func (lr LockRequest) Validate() error {
 
 	if len(lr.data) != SMB2HeaderSize+SMB2LockRequestMinSize+24*int(lockCount) {
 		return ErrWrongLength
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(lr.data) - SMB2HeaderSize - SMB2LockRequestMinSize)
+		if lr.Header().CreditCharge() == 0 {
+			if sps > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if lr.Header().CreditCharge() < uint16((sps-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil

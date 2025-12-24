@@ -37,7 +37,7 @@ type ChangeNotifyRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (cnr ChangeNotifyRequest) Validate() error {
+func (cnr ChangeNotifyRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(cnr.data).Validate(); err != nil {
 		return err
 	}
@@ -48,6 +48,18 @@ func (cnr ChangeNotifyRequest) Validate() error {
 
 	if cnr.structureSize() != SMB2ChangeNotifyRequestStructureSize {
 		return ErrWrongFormat
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		ers := cnr.OutputBufferLength()
+		if cnr.Header().CreditCharge() == 0 {
+			if ers > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if cnr.Header().CreditCharge() < uint16((ers-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil
