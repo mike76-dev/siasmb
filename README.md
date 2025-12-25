@@ -8,7 +8,7 @@ How to set up a `renterd` node is described here: [https://github.com/SiaFoundat
 * The SMB port 445 needs to be open on the machine where the server is running.
 
 ## Limitations
-* At this moment, only the SMB dialect 2.0.2 is supported. Newer dialects will potentially be supported in the future.
+* At this moment, only the SMB dialects 2.0.2 and 2.1 are supported. Newer dialects will potentially be supported in the future.
 * Guest or anonymous access is not supported.
 
 ## Installing PostgreSQL
@@ -134,7 +134,7 @@ Please note: Windows 2000/NT/XP and earlier are not supported. The earliest supp
 ### MacOS
 1. In the `Finder` menu choose `Go -> Connect to Server...`.
 2. Enter `smb://<SERVER_NET_ADDRESS>/<SHARE_NAME>` as the server name, then click `Connect`.
-3. In the next popup window, choose `Connect As: Registered User` and enter the user credentials (matching one of the registered accounts), then click `Connect`.
+3. In the next popup window, choose `Connect As: Registered User` and enter the user credentials (matching one of the registered accounts, in form `<WORKGROUP>`\\`<USERNAME>`), then click `Connect`.
 
 ### Ubuntu GUI
 1. In the file manager (e.g. Nautilus), navigate to `Other Locations`, enter `smb://<SERVER_NET_ADDRESS>/<SHARE_NAME>` in the `Enter server address` field, then click `Connect`.
@@ -155,12 +155,30 @@ sudo chown $USER:$USER /mnt/sia
 ```
 3. Mount the share with
 ```
-sudo mount -t cifs //<SERVER_NET_ADDRESS>/<SHARE_NAME> /mnt/sia -o username=<USERNAME>,password=<PASSWORD>,vers=2.0
+sudo mount -t cifs //<SERVER_NET_ADDRESS>/<SHARE_NAME> /mnt/sia -o username=<USERNAME>,workgroup=<WORKGROUP>,password=<PASSWORD>,vers=2.0
 ```
 4. To unmount, type
 ```
 sudo umount /mnt/sia
 ```
+
+## Proposed Testing Scenario
+1. Connect to the share
+2. Copy a file to the share root
+3. Rename the file in the share root
+4. Copy that file from the share root
+5. Make a directory in the share root
+6. Copy a file to that directory
+7. Rename the file in that directory
+8. Copy that file from that directory
+9. Rename that directory
+10. Delete that directory
+11. Delete the file in the root directory
+12. Copy a directory containing files to the share root
+13. Copy that directory from the share root
+14. Disconnect from the share
+
+Please note: on Windows, there may be issues with reads or writes when OneDrive is enabled and the file is not available locally.
 
 ## Bug Reporting
 Please do not hesitate to open an issue if you discover any bugs.
