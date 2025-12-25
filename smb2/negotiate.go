@@ -42,6 +42,14 @@ const (
 )
 
 const (
+	// MinSupportedDialect is the minimum dialect that is supported by the server.
+	MinSupportedDialect = SMB_DIALECT_202
+
+	// MaxSupportedDialect is the maximum dialect that is supported by the server.
+	MaxSupportedDialect = SMB_DIALECT_21
+)
+
+const (
 	// Security modes.
 	NEGOTIATE_SIGNING_ENABLED  = 0x0001
 	NEGOTIATE_SIGNING_REQUIRED = 0x0002
@@ -70,7 +78,7 @@ type NegotiateRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (nr NegotiateRequest) Validate() error {
+func (nr NegotiateRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(nr.data).Validate(); err != nil {
 		return err
 	}
@@ -95,8 +103,15 @@ func (nr NegotiateRequest) Validate() error {
 
 		var supported bool
 		for _, d := range dialects {
-			if d == SMB_DIALECT_2 {
+			switch d {
+			case SMB_DIALECT_2:
 				supported = true
+			case SMB_DIALECT_MULTI:
+				if MaxSupportedDialect != SMB_DIALECT_202 {
+					supported = true
+				}
+			}
+			if supported {
 				break
 			}
 		}
@@ -132,7 +147,7 @@ func (nr NegotiateRequest) Validate() error {
 	var supported bool
 	for i := 0; i < int(dialectCount); i++ {
 		dialect := binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+SMB2NegotiateRequestMinSize+i*2 : SMB2HeaderSize+SMB2NegotiateRequestMinSize+i*2+2])
-		if dialect == SMB_DIALECT_202 {
+		if dialect >= MinSupportedDialect && dialect <= MaxSupportedDialect {
 			supported = true
 			break
 		}
@@ -140,6 +155,19 @@ func (nr NegotiateRequest) Validate() error {
 
 	if !supported {
 		return ErrDialectNotSupported
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(nr.data) - SMB2HeaderSize - SMB2NegotiateRequestMinSize)
+		ers := uint32(74) //TODO revisit in 3.1.1
+		if nr.Header().CreditCharge() == 0 {
+			if sps > 65536 || ers > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if nr.Header().CreditCharge() < uint16((max(sps, ers)-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil
@@ -160,6 +188,36 @@ func (nr NegotiateRequest) ClientGuid() []byte {
 	guid := make([]byte, 16)
 	copy(guid, nr.data[SMB2HeaderSize+12:SMB2HeaderSize+28])
 	return guid
+}
+
+// MaxCommonDialect returns the greatest dialect supported both by the client and the server.
+func (nr NegotiateRequest) MaxCommonDialect() uint16 {
+	var max uint16
+	if Header(nr.data).IsSmb() { // SMB_COM_NEGOTIATE
+		dialects := utils.NullTerminatedToStrings(nr.data[SMBHeaderSize+4:])
+		for _, d := range dialects {
+			switch d {
+			case SMB_DIALECT_2:
+				if max < SMB_DIALECT_202 && MinSupportedDialect <= SMB_DIALECT_202 {
+					max = SMB_DIALECT_202
+				}
+			case SMB_DIALECT_MULTI:
+				if max < SMB_DIALECT_MULTICREDIT && MaxSupportedDialect >= SMB_DIALECT_202 {
+					max = SMB_DIALECT_MULTICREDIT
+				}
+			}
+		}
+	} else {
+		dialectCount := binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+2 : SMB2HeaderSize+4])
+		for i := 0; i < int(dialectCount); i++ {
+			dialect := binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+SMB2NegotiateRequestMinSize+i*2 : SMB2HeaderSize+SMB2NegotiateRequestMinSize+i*2+2])
+			if dialect > max && dialect >= MinSupportedDialect && dialect <= MaxSupportedDialect {
+				max = dialect
+			}
+		}
+	}
+
+	return max
 }
 
 // NegotiateResponse represents an SMB2_NEGOTIATE response.
@@ -221,14 +279,14 @@ func (nr *NegotiateResponse) SetSecurityBuffer(buf []byte) {
 }
 
 // NewNegotiateResponse generates an SMB2_NEGOTIATE response to an SMB_COM_NEGOTIATE request.
-func NewNegotiateResponse(serverGuid []byte, ns *ntlm.Server) *NegotiateResponse {
+func NewNegotiateResponse(serverGuid []byte, ns *ntlm.Server, dialect uint16) *NegotiateResponse {
 	nr := &NegotiateResponse{}
 	nr.data = make([]byte, SMB2HeaderSize+SMB2NegotiateResponseMinSize)
 	h := NewHeader(nr.data)
 	h.SetCommand(SMB2_NEGOTIATE)
 	h.SetStatus(STATUS_OK)
 	h.SetFlags(FLAGS_SERVER_TO_REDIR)
-	nr.Generate(serverGuid, ns)
+	nr.Generate(serverGuid, ns, dialect)
 	return nr
 }
 
@@ -251,7 +309,7 @@ func (nr *NegotiateResponse) FromRequest(req GenericRequest) {
 }
 
 // Generate populates the fields of the SMB2_NEGOTIATE response.
-func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server) {
+func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server, dialect uint16) {
 	token, err := ns.Negotiate()
 	if err != nil {
 		panic(err)
@@ -264,7 +322,7 @@ func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server) {
 	}
 
 	nr.setStructureSize()
-	nr.SetDialectRevision(SMB_DIALECT_202)
+	nr.SetDialectRevision(dialect)
 	nr.SetSecurityMode(NEGOTIATE_SIGNING_ENABLED)
 	nr.SetCapabilities(GLOBAL_CAP_DFS | GLOBAL_CAP_LARGE_MTU)
 	nr.SetServerGuid(serverGuid)

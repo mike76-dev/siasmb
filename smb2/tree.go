@@ -96,7 +96,7 @@ type TreeConnectRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (tcr TreeConnectRequest) Validate() error {
+func (tcr TreeConnectRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(tcr.data).Validate(); err != nil {
 		return err
 	}
@@ -107,6 +107,18 @@ func (tcr TreeConnectRequest) Validate() error {
 
 	if tcr.structureSize() != SMB2TreeConnectRequestStructureSize {
 		return ErrWrongFormat
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(tcr.data) - SMB2HeaderSize - SMB2TreeConnectRequestMinSize)
+		if tcr.Header().CreditCharge() == 0 {
+			if sps > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if tcr.Header().CreditCharge() < uint16((sps-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil
@@ -181,7 +193,7 @@ type TreeDisconnectRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (tdr TreeDisconnectRequest) Validate() error {
+func (tdr TreeDisconnectRequest) Validate(_ bool) error {
 	if err := Header(tdr.data).Validate(); err != nil {
 		return err
 	}

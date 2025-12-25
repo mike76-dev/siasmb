@@ -16,7 +16,7 @@ type ReadRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (rr ReadRequest) Validate() error {
+func (rr ReadRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(rr.data).Validate(); err != nil {
 		return err
 	}
@@ -27,6 +27,19 @@ func (rr ReadRequest) Validate() error {
 
 	if rr.structureSize() != SMB2ReadRequestStructureSize {
 		return ErrWrongFormat
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(rr.data) - SMB2HeaderSize - SMB2ReadRequestMinSize)
+		ers := rr.Length()
+		if rr.Header().CreditCharge() == 0 {
+			if sps > 65536 || ers > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if rr.Header().CreditCharge() < uint16((max(sps, ers)-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil

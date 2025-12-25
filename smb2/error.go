@@ -39,6 +39,7 @@ const (
 	STATUS_USER_SESSION_DELETED     = 0xc0000203
 	STATUS_NOT_FOUND                = 0xc0000225
 	STATUS_DUPLICATE_OBJECTID       = 0xc000022a
+	STATUS_SHARE_UNAVAILABLE        = 0xc0000480
 )
 
 // ErrorResponse represents an SMB2_ERROR response.

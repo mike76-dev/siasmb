@@ -45,7 +45,7 @@ type IoctlRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (ir IoctlRequest) Validate() error {
+func (ir IoctlRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(ir.data).Validate(); err != nil {
 		return err
 	}
@@ -62,6 +62,19 @@ func (ir IoctlRequest) Validate() error {
 	length := binary.LittleEndian.Uint32(ir.data[SMB2HeaderSize+28 : SMB2HeaderSize+32])
 	if length > 0 && ((off > 0 && off < SMB2HeaderSize+SMB2IoctlRequestMinSize) || off%8 > 0 || off+length > uint32(len(ir.data))) {
 		return ErrInvalidParameter
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(ir.data) - SMB2HeaderSize - SMB2IoctlRequestMinSize)
+		ers := ir.MaxInputResponse() + ir.MaxOutputResponse()
+		if ir.Header().CreditCharge() == 0 {
+			if sps > 65536 || ers > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if ir.Header().CreditCharge() < uint16((max(sps, ers)-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil

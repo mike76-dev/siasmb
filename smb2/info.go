@@ -21,7 +21,7 @@ type SetInfoRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (sir SetInfoRequest) Validate() error {
+func (sir SetInfoRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(sir.data).Validate(); err != nil {
 		return err
 	}
@@ -38,6 +38,18 @@ func (sir SetInfoRequest) Validate() error {
 	length := binary.LittleEndian.Uint32(sir.data[SMB2HeaderSize+4 : SMB2HeaderSize+8])
 	if uint32(off)+length > uint32(len(sir.data)) {
 		return ErrInvalidParameter
+	}
+
+	// Validate CreditCharge.
+	if supportsMultiCredit {
+		sps := uint32(len(sir.data) - SMB2HeaderSize - SMB2SetInfoRequestMinSize)
+		if sir.Header().CreditCharge() == 0 {
+			if sps > 65536 {
+				return ErrInvalidParameter
+			}
+		} else if sir.Header().CreditCharge() < uint16((sps-1)/65536)+1 {
+			return ErrInvalidParameter
+		}
 	}
 
 	return nil

@@ -40,6 +40,13 @@ type Store interface {
 	GetShare(id types.Hash256, name string) (s stores.Share, err error)
 }
 
+// ServerHashLevel values.
+const (
+	HashEnableAll = iota
+	HashDisableAll
+	HashEnableShare
+)
+
 // server is the implementation of an SMB server.
 type server struct {
 	enabled                         bool
@@ -53,6 +60,7 @@ type server struct {
 	serverSideCopyMaxNumberOfChunks uint64
 	serverSideCopyMaxChunkSize      uint64
 	serverSideCopyMaxDataSize       uint64
+	serverHashLevel                 int
 
 	// Auxiliary fields.
 	listener        net.Listener
@@ -69,6 +77,7 @@ func newServer(l net.Listener, st Store) *server {
 		serverSideCopyMaxNumberOfChunks: 256,
 		serverSideCopyMaxChunkSize:      2 >> 10, // 1MiB
 		serverSideCopyMaxDataSize:       2 >> 14, // 16MiB
+		serverHashLevel:                 HashDisableAll,
 		shareList:                       make(map[string]*share),
 		connectionList:                  make(map[string]*connection),
 		globalOpenTable:                 make(map[uint64]*open),
