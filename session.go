@@ -41,6 +41,9 @@ type session struct {
 	idleTime         time.Time
 	userName         string
 	workgroup        string
+	encryptData      bool
+	encryptionKey    []byte
+	decryptionKey    []byte
 
 	mu sync.Mutex
 }

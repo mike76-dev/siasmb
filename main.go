@@ -87,6 +87,11 @@ func main() {
 
 	// Start the SMB server.
 	server := newServer(l, db)
+	if smb2.Is3X(smb2.MaxSupportedDialect) {
+		server.serverCapabilities |= smb2.GLOBAL_CAP_ENCRYPTION
+		server.encryptData = true
+		server.rejectUnencryptedAccess = true
+	}
 
 	// Start a thread to watch for the stop signal.
 	c := make(chan os.Signal, 1)

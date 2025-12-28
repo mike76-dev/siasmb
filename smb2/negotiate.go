@@ -72,6 +72,11 @@ var (
 	ErrInvalidParameter    = errors.New("wrong parameter supplied")
 )
 
+// Is3X returns true if the dialect belongs to the 3.x family.
+func Is3X(dialect uint16) bool {
+	return dialect != SMB_DIALECT_UNKNOWN && dialect >= SMB_DIALECT_30
+}
+
 // NegotiateRequest represents an SMB2_NEGOTIATE request.
 type NegotiateRequest struct {
 	Request
@@ -279,14 +284,14 @@ func (nr *NegotiateResponse) SetSecurityBuffer(buf []byte) {
 }
 
 // NewNegotiateResponse generates an SMB2_NEGOTIATE response to an SMB_COM_NEGOTIATE request.
-func NewNegotiateResponse(serverGuid []byte, ns *ntlm.Server, dialect uint16) *NegotiateResponse {
+func NewNegotiateResponse(serverGuid []byte, ns *ntlm.Server, dialect uint16, capabilities uint32) *NegotiateResponse {
 	nr := &NegotiateResponse{}
 	nr.data = make([]byte, SMB2HeaderSize+SMB2NegotiateResponseMinSize)
 	h := NewHeader(nr.data)
 	h.SetCommand(SMB2_NEGOTIATE)
 	h.SetStatus(STATUS_OK)
 	h.SetFlags(FLAGS_SERVER_TO_REDIR)
-	nr.Generate(serverGuid, ns, dialect)
+	nr.Generate(serverGuid, ns, dialect, capabilities)
 	return nr
 }
 
@@ -309,7 +314,7 @@ func (nr *NegotiateResponse) FromRequest(req GenericRequest) {
 }
 
 // Generate populates the fields of the SMB2_NEGOTIATE response.
-func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server, dialect uint16) {
+func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server, dialect uint16, capabilities uint32) {
 	token, err := ns.Negotiate()
 	if err != nil {
 		panic(err)
@@ -324,7 +329,7 @@ func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server, dialec
 	nr.setStructureSize()
 	nr.SetDialectRevision(dialect)
 	nr.SetSecurityMode(NEGOTIATE_SIGNING_ENABLED)
-	nr.SetCapabilities(GLOBAL_CAP_DFS | GLOBAL_CAP_LARGE_MTU)
+	nr.SetCapabilities(capabilities)
 	nr.SetServerGuid(serverGuid)
 	nr.SetMaxTransactSize(MaxTransactSize)
 	nr.SetMaxReadSize(MaxReadSize)

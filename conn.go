@@ -55,6 +55,9 @@ type connection struct {
 	supportsMultiCredit   bool
 	sessionTable          map[uint64]*session
 	creationTime          time.Time
+	serverCapabilities    uint32
+	clientSecurityMode    uint16
+	serverSecurityMode    uint16
 
 	// Auxiliary fields.
 	conn       net.Conn
@@ -212,7 +215,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 		c.grantCredits(nr.Header().MessageID(), 1) // Grant just one credit
 
-		resp := smb2.NewNegotiateResponse(c.server.serverGuid[:], c.ntlmServer, dialect)
+		resp := smb2.NewNegotiateResponse(c.server.serverGuid[:], c.ntlmServer, dialect, c.serverCapabilities)
 		return resp, nil, nil
 	}
 
@@ -263,7 +266,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		resp := &smb2.NegotiateResponse{}
 		resp.FromRequest(nr)
-		resp.Generate(c.server.serverGuid[:], c.ntlmServer, c.negotiateDialect)
+		resp.Generate(c.server.serverGuid[:], c.ntlmServer, c.negotiateDialect, c.serverCapabilities)
 
 		return resp, nil, nil
 

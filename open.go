@@ -62,6 +62,8 @@ type open struct {
 	fileName                    string
 	createOptions               uint32
 	fileAttributes              uint32
+	createGuid                  [16]byte
+	isReplayEligible            bool
 
 	// Since renterd has no idea about such attributes of the most operating systems as
 	// CreationTime, LastWriteTime, LastAccessTime, and ChangeTime, we can only operate

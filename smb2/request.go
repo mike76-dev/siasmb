@@ -29,17 +29,22 @@ const (
 type GenericRequest interface {
 	Validate(bool) error
 	Header() Header
+	Len() int
 	CancelRequestID() uint64
 	GroupID() uint64
 	OpenID() []byte
+	IsEncrypted() bool
+	TransformSessionID() uint64
 }
 
 // Request is the representation of an SMB2 request.
 type Request struct {
-	cancelRequestID uint64
-	groupID         uint64
-	data            []byte
-	openID          []byte
+	cancelRequestID    uint64
+	groupID            uint64
+	data               []byte
+	openID             []byte
+	isEncrypted        bool
+	transformSessionID uint64
 }
 
 // structureSize returns the StructureSize field of an SMB2 request.
@@ -131,6 +136,11 @@ func (req Request) Header() Header {
 	return Header(req.data)
 }
 
+// Len returns the length of the request body.
+func (req Request) Len() int {
+	return len(req.data)
+}
+
 // CancelRequestID returns the cancel ID of the request.
 func (req Request) CancelRequestID() uint64 {
 	return req.cancelRequestID
@@ -150,6 +160,27 @@ func (req Request) OpenID() []byte {
 func (req *Request) SetOpenID(id []byte) {
 	req.openID = make([]byte, 16)
 	copy(req.openID, id)
+}
+
+// IsEncrypted returns true if the request is encrypted.
+func (req Request) IsEncrypted() bool {
+	return req.isEncrypted
+}
+
+// SetEncrypted changes the encryption status of the request.
+func (req *Request) SetEncrypted(enc bool) {
+	req.isEncrypted = enc
+}
+
+// TransformSessionID returns the SessionID sent by the client in the
+// SMB2 TRANSFORM_HEADER, if the request is encrypted.
+func (req Request) TransformSessionID() uint64 {
+	return req.transformSessionID
+}
+
+// SetTransformSessionID sets the TransformSessionID field of the request.
+func (req *Request) SetTransformSessionID(id uint64) {
+	req.transformSessionID = id
 }
 
 // GenericResponse implements a few common methods of SMB2 responses.

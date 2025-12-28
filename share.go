@@ -41,6 +41,7 @@ type share struct {
 	currentUses                       int
 	forceLevel2Oplock                 bool
 	hashEnabled                       bool
+	encryptData                       bool
 
 	// Auxiliary fields.
 	client    *client.Client
@@ -66,6 +67,7 @@ func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
 		remark:          ss.Remark,
 		connectSecurity: make(map[string]struct{}),
 		fileSecurity:    make(map[string]uint32),
+		encryptData:     s.encryptData,
 	}
 
 	sh.client = client.New(ss.ServerName, ss.Password)

@@ -61,6 +61,11 @@ type server struct {
 	serverSideCopyMaxChunkSize      uint64
 	serverSideCopyMaxDataSize       uint64
 	serverHashLevel                 int
+	serverCapabilities              uint32
+	globalClientTable               map[[16]byte]*smbClient
+	encryptData                     bool
+	rejectUnencryptedAccess         bool
+	allowAnonymousAccess            bool
 
 	// Auxiliary fields.
 	listener        net.Listener
@@ -78,10 +83,12 @@ func newServer(l net.Listener, st Store) *server {
 		serverSideCopyMaxChunkSize:      2 >> 10, // 1MiB
 		serverSideCopyMaxDataSize:       2 >> 14, // 16MiB
 		serverHashLevel:                 HashDisableAll,
+		serverCapabilities:              smb2.GLOBAL_CAP_DFS | smb2.GLOBAL_CAP_LARGE_MTU,
 		shareList:                       make(map[string]*share),
 		connectionList:                  make(map[string]*connection),
 		globalOpenTable:                 make(map[uint64]*open),
 		globalSessionTable:              make(map[uint64]*session),
+		globalClientTable:               make(map[[16]byte]*smbClient),
 		listener:                        l,
 		connectionCount:                 make(map[string]int),
 		store:                           st,
@@ -106,6 +113,7 @@ func (s *server) newConnection(conn net.Conn) *connection {
 		maxTransactSize:       smb2.MaxTransactSize,
 		maxReadSize:           smb2.MaxReadSize,
 		maxWriteSize:          smb2.MaxWriteSize,
+		serverCapabilities:    s.serverCapabilities,
 		server:                s,
 		writeChan:             make(chan []byte),
 		closeChan:             make(chan struct{}),
