@@ -46,7 +46,7 @@ const (
 	MinSupportedDialect = SMB_DIALECT_202
 
 	// MaxSupportedDialect is the maximum dialect that is supported by the server.
-	MaxSupportedDialect = SMB_DIALECT_21
+	MaxSupportedDialect = SMB_DIALECT_30
 )
 
 const (

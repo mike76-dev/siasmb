@@ -2,14 +2,18 @@ package main
 
 import (
 	"bytes"
+	"crypto/aes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"hash"
 	"sync"
 	"time"
 
+	"github.com/mike76-dev/siasmb/internal/cmac"
+	"github.com/mike76-dev/siasmb/kdf"
 	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/smb2"
 )
@@ -44,6 +48,9 @@ type session struct {
 	encryptData      bool
 	encryptionKey    []byte
 	decryptionKey    []byte
+	applicationKey   []byte
+	signer           hash.Hash
+	verifier         hash.Hash
 
 	mu sync.Mutex
 }
@@ -139,6 +146,22 @@ func (ss *session) finalize(req smb2.SessionSetupRequest) {
 	ss.signingRequired = (req.SecurityMode()&smb2.NEGOTIATE_SIGNING_REQUIRED > 0) && !ss.isAnonymous && !ss.isGuest && ss.connection.shouldSign
 	ss.sessionKey = ss.connection.ntlmServer.Session().SessionKey()
 
+	switch ss.connection.negotiateDialect {
+	case smb2.SMB_DIALECT_202, smb2.SMB_DIALECT_21:
+		ss.signer = hmac.New(sha256.New, ss.sessionKey)
+		ss.verifier = hmac.New(sha256.New, ss.sessionKey)
+	case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302:
+		signingKey := kdf.Kdf(ss.sessionKey, []byte("SMB2AESCMAC\x00"), []byte("SmbSign\x00"))
+		ciph, err := aes.NewCipher(signingKey)
+		if err != nil {
+			panic(err)
+		}
+		ss.signer = cmac.New(ciph)
+		ss.verifier = cmac.New(ciph)
+
+		ss.applicationKey = kdf.Kdf(ss.sessionKey, []byte("SMB2APP\x00"), []byte("SmbRpc\x00"))
+	}
+
 	ss.connection.mu.Lock()
 	defer ss.connection.mu.Unlock()
 
@@ -160,19 +183,18 @@ func (ss *session) finalize(req smb2.SessionSetupRequest) {
 func (ss *session) sign(buf []byte) {
 	var off uint32
 	var zero [16]byte
-	h := hmac.New(sha256.New, ss.sessionKey)
 	for {
 		next := binary.LittleEndian.Uint32(buf[off+20 : off+24])
 		flags := binary.LittleEndian.Uint32(buf[off+16 : off+20])
 		binary.LittleEndian.PutUint32(buf[off+16:off+20], flags|smb2.FLAGS_SIGNED)
 		copy(buf[off+48:off+64], zero[:])
-		h.Reset()
+		ss.signer.Reset()
 		if next == 0 { // Last response in the chain
-			h.Write(buf[off:])
+			ss.signer.Write(buf[off:])
 		} else {
-			h.Write(buf[off : off+next])
+			ss.signer.Write(buf[off : off+next])
 		}
-		copy(buf[off+48:off+64], h.Sum(nil))
+		copy(buf[off+48:off+64], ss.signer.Sum(nil))
 		off += next
 		if next == 0 {
 			break
@@ -188,9 +210,8 @@ func (ss *session) validateRequest(req *smb2.Request) bool {
 
 	signature := req.Header().Signature()
 	req.Header().WipeSignature()
-	h := hmac.New(sha256.New, ss.sessionKey)
-	h.Reset()
-	h.Write(req.Header())
-	sum := h.Sum(nil)
+	ss.verifier.Reset()
+	ss.verifier.Write(req.Header())
+	sum := ss.verifier.Sum(nil)
 	return bytes.Equal(signature, sum[:16])
 }
