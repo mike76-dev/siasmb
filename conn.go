@@ -128,6 +128,22 @@ func (c *connection) acceptRequest(msg []byte) error {
 			}
 			c.grantCredits(mid, 1) // Grant just one credit
 		} else {
+			if c.supportsMultiCredit {
+				if req.Header().Command() != smb2.SMB2_READ &&
+					req.Header().Command() != smb2.SMB2_WRITE &&
+					req.Header().Command() != smb2.SMB2_IOCTL &&
+					req.Header().Command() != smb2.SMB2_QUERY_DIRECTORY &&
+					req.Header().Command() != smb2.SMB2_CHANGE_NOTIFY &&
+					req.Header().Command() != smb2.SMB2_QUERY_INFO &&
+					req.Header().Command() != smb2.SMB2_SET_INFO &&
+					req.Len() > 68*1024 {
+					return errLongRequest
+				}
+			} else {
+				if req.Len() > 68*1024 {
+					return errLongRequest
+				}
+			}
 			mid = req.Header().MessageID()
 			credits := req.Header().CreditRequest() // Grant whatever the CreditRequest is
 			if credits == 0 {                       // The number of credits cannot be zero
