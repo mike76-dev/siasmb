@@ -83,8 +83,8 @@ type NegotiateRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (nr NegotiateRequest) Validate(supportsMultiCredit bool) error {
-	if err := Header(nr.data).Validate(); err != nil {
+func (nr NegotiateRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
+	if err := Header(nr.data).Validate(dialect); err != nil {
 		return err
 	}
 

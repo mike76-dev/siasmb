@@ -59,8 +59,9 @@ var (
 )
 
 const (
-	SMBHeaderSize  = 32
-	SMB2HeaderSize = 64
+	SMBHeaderSize           = 32
+	SMB2HeaderSize          = 64
+	SMB2TransformHeaderSize = 52
 
 	SMB2HeaderStructureSize = 64
 )
@@ -92,7 +93,7 @@ func (h Header) IsSmb2() bool {
 }
 
 // Validate returns an error if the header is malformed, nil otherwise.
-func (h Header) Validate() error {
+func (h Header) Validate(dialect uint16) error {
 	if len(h) < 4 {
 		return ErrWrongLength
 	}
@@ -115,14 +116,11 @@ func (h Header) Validate() error {
 		}
 
 		id := binary.LittleEndian.Uint32(h[:4])
-		if id == PROTOCOL_SMB2_ENCRYPTED {
+		if id == PROTOCOL_SMB2_ENCRYPTED && !Is3X(dialect) {
 			return ErrEncryptedMessage
-		}
-		if id == PROTOCOL_SMB2_COMPRESSED {
+		} else if id == PROTOCOL_SMB2_COMPRESSED && dialect != SMB_DIALECT_311 {
 			return ErrCompressedMessage
-		}
-
-		if binary.LittleEndian.Uint16(h[4:6]) != SMB2HeaderStructureSize {
+		} else if binary.LittleEndian.Uint16(h[4:6]) != SMB2HeaderStructureSize {
 			return ErrWrongFormat
 		}
 
@@ -268,4 +266,66 @@ func (h Header) SetSignature(signature []byte) {
 func (h Header) WipeSignature() {
 	var zero [16]byte
 	h.SetSignature(zero[:])
+}
+
+// EncryptionSignature returns the Signature field of the SMB2 TRANSFORM_HEADER.
+func (h Header) EncryptionSignature() []byte {
+	signature := make([]byte, 16)
+	copy(signature, h[4:20])
+	return signature
+}
+
+// SetEncryptionSignature sets the Signature field of the SMB2 TRANSFORM_HEADER.
+func (h Header) SetEncryptionSignature(signature []byte) {
+	copy(h[4:20], signature)
+}
+
+// WipeEncryptionSignature clears the Signature field of the SMB2 TRANSFORM_HEADER.
+func (h Header) WipeEncryptionSignature() {
+	var zero [16]byte
+	h.SetEncryptionSignature(zero[:])
+}
+
+// Nonce returns the Nonce field of the SMB2 TRANSFORM_HEADER.
+func (h Header) Nonce() []byte {
+	nonce := make([]byte, 16)
+	copy(nonce, h[20:36])
+	return nonce
+}
+
+// SetNonce sets the Nonce field of the SMB2 TRANSFORM_HEADER.
+func (h Header) SetNonce(nonce []byte) {
+	n := make([]byte, 16)
+	copy(n, nonce)
+	copy(h[20:36], nonce)
+}
+
+// OriginalMessageSize returns the OriginalMessageSize field of the SMB2 TRANSFORM_HEADER.
+func (h Header) OriginalMessageSize() uint32 {
+	return binary.LittleEndian.Uint32(h[36:40])
+}
+
+// SetOriginalMessageSize sets the OriginalMessageSize field of the SMB2 TRANSFORM_HEADER.
+func (h Header) SetOriginalMessageSize(size uint32) {
+	binary.LittleEndian.PutUint32(h[36:40], size)
+}
+
+// EncryptionFlags returns the Flags field of the SMB2 TRANSFORM_HEADER.
+func (h Header) EncryptionFlags() uint16 {
+	return binary.LittleEndian.Uint16(h[42:44])
+}
+
+// SetEncryptionFlags sets the EncryptionFlags field of the SMB2 TRANSFORM_HEADER.
+func (h Header) SetEncryptionFlags(flags uint16) {
+	binary.LittleEndian.PutUint16(h[42:44], flags)
+}
+
+// TransformSessionID returns the SessionID field of the SMB2 TRANSFORM_HEADER.
+func (h Header) TransformSessionID() uint64 {
+	return binary.LittleEndian.Uint64(h[44:52])
+}
+
+// SetTransformSessionID sets the SessionID field of the SMB2 TRANSFORM_HEADER.
+func (h Header) SetTransformSessionID(sid uint64) {
+	binary.LittleEndian.PutUint64(h[44:52], sid)
 }

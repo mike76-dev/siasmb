@@ -16,8 +16,8 @@ type FlushRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (fr FlushRequest) Validate(_ bool) error {
-	if err := Header(fr.data).Validate(); err != nil {
+func (fr FlushRequest) Validate(_ bool, dialect uint16) error {
+	if err := Header(fr.data).Validate(dialect); err != nil {
 		return err
 	}
 
