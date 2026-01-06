@@ -72,10 +72,11 @@ type server struct {
 	mu              sync.Mutex
 	connectionCount map[string]int
 	store           Store
+	debug           bool
 }
 
 // newServer returns an initialized SMB server.
-func newServer(l net.Listener, st Store) *server {
+func newServer(l net.Listener, st Store, debug bool) *server {
 	s := &server{
 		enabled:                         true,
 		serverGuid:                      uuid.New(),
@@ -92,6 +93,7 @@ func newServer(l net.Listener, st Store) *server {
 		listener:                        l,
 		connectionCount:                 make(map[string]int),
 		store:                           st,
+		debug:                           debug,
 	}
 	s.stats.start = time.Now()
 	return s

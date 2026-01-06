@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"hash"
+	"log"
 	"sync"
 	"time"
 
@@ -150,6 +151,13 @@ func (ss *session) finalize(req smb2.SessionSetupRequest) {
 	ss.signingRequired = (req.SecurityMode()&smb2.NEGOTIATE_SIGNING_REQUIRED > 0) && !ss.isAnonymous && !ss.isGuest && ss.connection.shouldSign
 	ss.sessionKey = ss.connection.ntlmServer.Session().SessionKey()
 	ss.encryptData = ss.connection.server.encryptData
+
+	if ss.connection.server.debug {
+		buf := make([]byte, 8)
+		binary.LittleEndian.PutUint64(buf, ss.sessionID)
+		log.Printf("Session ID: %x\n", buf)
+		log.Printf("Session key: %x\n", ss.sessionKey)
+	}
 
 	switch ss.connection.negotiateDialect {
 	case smb2.SMB_DIALECT_202, smb2.SMB_DIALECT_21:

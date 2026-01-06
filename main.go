@@ -86,7 +86,7 @@ func main() {
 	defer l.Close()
 
 	// Start the SMB server.
-	server := newServer(l, db)
+	server := newServer(l, db, cfg.Debug)
 	if smb2.Is3X(smb2.MaxSupportedDialect) {
 		server.serverCapabilities |= smb2.GLOBAL_CAP_ENCRYPTION
 		server.encryptData = true

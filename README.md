@@ -75,6 +75,7 @@ Inside the `psql` prompt:
 ## Running the Server
 A config file, `siasmb.yml`, needs to be created in the directory where the server will be running. It should contain the following lines:
 ```
+debug: false               # indicates whether to display the session ID and key for tools like Wireshark to decrypt the encrypted data
 node: renterd              # indexd mode will be supported at a later step
 maxConnections: 30         # the maximum number of connections accepted from the same IP within 10 minutes
 api:
