@@ -103,11 +103,40 @@ func (c *connection) acceptRequest(msg []byte) error {
 		return errLongRequest
 	}
 
+	if len(msg) < smb2.SMB2HeaderSize {
+		return smb2.ErrWrongLength
+	}
+
 	// Assign a random cancel ID.
 	cid := make([]byte, 8)
 	rand.Read(cid)
 
-	reqs, err := smb2.GetRequests(msg, binary.LittleEndian.Uint64(cid), c.negotiateDialect)
+	// Check for encryption.
+	var tsid uint64
+	var size uint32
+	if smb2.Header(msg).ProtocolID() == smb2.PROTOCOL_SMB2_ENCRYPTED {
+		if c.serverCapabilities&smb2.GLOBAL_CAP_ENCRYPTION == 0 {
+			return smb2.ErrEncryptedMessage
+		}
+		if smb2.Header(msg).EncryptionFlags() != 1 {
+			return smb2.ErrWrongFormat
+		}
+		tsid = smb2.Header(msg).TransformSessionID()
+		size = smb2.Header(msg).OriginalMessageSize()
+		ss, ok := c.sessionTable[tsid]
+		if !ok {
+			return errSessionNotFound
+		}
+		if ss.isAnonymous || ss.isGuest {
+			return errAccessDenied
+		}
+		msg = ss.decrypt(msg)
+		if uint32(len(msg)) != size {
+			return smb2.ErrWrongLength
+		}
+	}
+
+	reqs, err := smb2.GetRequests(msg, binary.LittleEndian.Uint64(cid), c.negotiateDialect, tsid)
 	if err != nil {
 		return err
 	}
@@ -368,6 +397,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				flags = smb2.SESSION_FLAG_IS_GUEST
 			default:
 			}
+		}
+		if c.server.encryptData {
+			flags |= smb2.SESSION_FLAG_ENCRYPT_DATA
 		}
 
 		resp := &smb2.SessionSetupResponse{}

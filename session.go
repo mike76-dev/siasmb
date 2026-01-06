@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mike76-dev/siasmb/internal/ccm"
 	"github.com/mike76-dev/siasmb/internal/cmac"
 	"github.com/mike76-dev/siasmb/kdf"
 	"github.com/mike76-dev/siasmb/ntlm"
@@ -51,6 +53,8 @@ type session struct {
 	applicationKey   []byte
 	signer           hash.Hash
 	verifier         hash.Hash
+	encrypter        cipher.AEAD
+	decrypter        cipher.AEAD
 
 	mu sync.Mutex
 }
@@ -145,6 +149,7 @@ func (ss *session) finalize(req smb2.SessionSetupRequest) {
 	}
 	ss.signingRequired = (req.SecurityMode()&smb2.NEGOTIATE_SIGNING_REQUIRED > 0) && !ss.isAnonymous && !ss.isGuest && ss.connection.shouldSign
 	ss.sessionKey = ss.connection.ntlmServer.Session().SessionKey()
+	ss.encryptData = ss.connection.server.encryptData
 
 	switch ss.connection.negotiateDialect {
 	case smb2.SMB_DIALECT_202, smb2.SMB_DIALECT_21:
@@ -160,6 +165,26 @@ func (ss *session) finalize(req smb2.SessionSetupRequest) {
 		ss.verifier = cmac.New(ciph)
 
 		ss.applicationKey = kdf.Kdf(ss.sessionKey, []byte("SMB2APP\x00"), []byte("SmbRpc\x00"))
+		ss.encryptionKey = kdf.Kdf(ss.sessionKey, []byte("SMB2AESCCM\x00"), []byte("ServerOut\x00"))
+		ss.decryptionKey = kdf.Kdf(ss.sessionKey, []byte("SMB2AESCCM\x00"), []byte("ServerIn \x00"))
+
+		ciph, err = aes.NewCipher(ss.encryptionKey)
+		if err != nil {
+			panic(err)
+		}
+		ss.encrypter, err = ccm.NewCCMWithNonceAndTagSizes(ciph, 11, 16)
+		if err != nil {
+			panic(err)
+		}
+
+		ciph, err = aes.NewCipher(ss.decryptionKey)
+		if err != nil {
+			panic(err)
+		}
+		ss.decrypter, err = ccm.NewCCMWithNonceAndTagSizes(ciph, 11, 16)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	ss.connection.mu.Lock()
@@ -214,4 +239,29 @@ func (ss *session) validateRequest(req *smb2.Request) bool {
 	ss.verifier.Write(req.Header())
 	sum := ss.verifier.Sum(nil)
 	return bytes.Equal(signature, sum[:16])
+}
+
+// encrypt uses the encryption key to encrypt the SMB message.
+func (ss *session) encrypt(buf []byte) []byte {
+	nonce := make([]byte, ss.encrypter.NonceSize())
+	rand.Read(nonce)
+	output := smb2.Header(make([]byte, smb2.SMB2TransformHeaderSize+len(buf)+16))
+	output.SetProtocolID(smb2.PROTOCOL_SMB2_ENCRYPTED)
+	output.SetNonce(nonce)
+	output.SetOriginalMessageSize(uint32(len(buf)))
+	output.SetEncryptionFlags(1)
+	output.SetTransformSessionID(ss.sessionID)
+	ss.encrypter.Seal(output[:52], nonce, buf, output.AssociatedData())
+	output.SetEncryptionSignature(output[len(output)-16:])
+	return output[:len(output)-16]
+}
+
+// decrypt uses the decryption key to decrypt the SMB message.
+func (ss *session) decrypt(buf []byte) []byte {
+	input := append(buf[smb2.SMB2TransformHeaderSize:], smb2.Header(buf).EncryptionSignature()...)
+	msg, err := ss.decrypter.Open(input[:0], smb2.Header(buf).Nonce()[:ss.decrypter.NonceSize()], input, smb2.Header(buf).AssociatedData())
+	if err != nil {
+		panic(err)
+	}
+	return msg
 }

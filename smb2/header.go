@@ -83,12 +83,12 @@ func (h Header) CopyFrom(src Header) {
 
 // IsSmb returns true if the SMB signature is detected in the header.
 func (h Header) IsSmb() bool {
-	return binary.LittleEndian.Uint32(h[:4]) == PROTOCOL_SMB
+	return h.ProtocolID() == PROTOCOL_SMB
 }
 
 // IsSmb2 returns true if the SMB2 signature is detected in the header.
 func (h Header) IsSmb2() bool {
-	id := binary.LittleEndian.Uint32(h[:4])
+	id := h.ProtocolID()
 	return id == PROTOCOL_SMB2 || id == PROTOCOL_SMB2_ENCRYPTED || id == PROTOCOL_SMB2_COMPRESSED
 }
 
@@ -115,7 +115,7 @@ func (h Header) Validate(dialect uint16) error {
 			return ErrWrongLength
 		}
 
-		id := binary.LittleEndian.Uint32(h[:4])
+		id := h.ProtocolID()
 		if id == PROTOCOL_SMB2_ENCRYPTED && !Is3X(dialect) {
 			return ErrEncryptedMessage
 		} else if id == PROTOCOL_SMB2_COMPRESSED && dialect != SMB_DIALECT_311 {
@@ -328,4 +328,19 @@ func (h Header) TransformSessionID() uint64 {
 // SetTransformSessionID sets the SessionID field of the SMB2 TRANSFORM_HEADER.
 func (h Header) SetTransformSessionID(sid uint64) {
 	binary.LittleEndian.PutUint64(h[44:52], sid)
+}
+
+// AssociatedData returns the encrypting-relevant data of the SMB2 TRANSFORM_HEADER.
+func (h Header) AssociatedData() []byte {
+	return h[20:52]
+}
+
+// ProtocolID returns the ProtocolID of the header.
+func (h Header) ProtocolID() uint32 {
+	return binary.LittleEndian.Uint32(h[:4])
+}
+
+// SetProtocolID sets the ProtocolID of the header.
+func (h Header) SetProtocolID(id uint32) {
+	binary.LittleEndian.PutUint32(h[:4], id)
 }

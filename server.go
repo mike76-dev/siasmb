@@ -145,22 +145,32 @@ func (s *server) closeConnection(c *connection) {
 
 // writeResponse encodes the response and adds it to the sending queue.
 func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResponse) {
+	wipeSignatures := func(msg []byte) {
+		var off uint32
+		var zero [16]byte
+		for {
+			next := binary.LittleEndian.Uint32(msg[off+20 : off+24])
+			copy(msg[off+48:off+64], zero[:])
+			off += next
+			if next == 0 {
+				return
+			}
+		}
+	}
+
 	buf := resp.Encode()
 
 	if ss != nil && ss.state == sessionValid { // A session exists, sign if required
-		if resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) || resp.Header().Command() == smb2.SMB2_SESSION_SETUP {
+		if resp.ShouldEncrypt() {
+			wipeSignatures(buf)
+			buf = ss.encrypt(buf)
+		} else if resp.Header().Command() != smb2.SMB2_SESSION_SETUP && ss.encryptData {
+			wipeSignatures(buf)
+			buf = ss.encrypt(buf)
+		} else if resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
 			ss.sign(buf)
 		} else { // Otherwise, wipe the signature(s)
-			var off uint32
-			var zero [16]byte
-			for {
-				next := binary.LittleEndian.Uint32(buf[off+20 : off+24])
-				copy(buf[off+48:off+64], zero[:])
-				off += next
-				if next == 0 {
-					break
-				}
-			}
+			wipeSignatures(buf)
 		}
 	}
 

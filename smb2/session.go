@@ -14,8 +14,9 @@ const (
 
 const (
 	// Session flags.
-	SESSION_FLAG_IS_GUEST = 0x0001
-	SESSION_FLAG_IS_NULL  = 0x0002
+	SESSION_FLAG_IS_GUEST     = 0x0001
+	SESSION_FLAG_IS_NULL      = 0x0002
+	SESSION_FLAG_ENCRYPT_DATA = 0x0004
 )
 
 // SessionSetupRequest represents an SMB2_SESSION_SETUP request.

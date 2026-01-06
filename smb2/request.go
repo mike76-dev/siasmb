@@ -57,10 +57,12 @@ func (req Request) structureSize() uint16 {
 }
 
 // GetRequests parses the message body for SMB/SMB2 requests.
-func GetRequests(data []byte, cid uint64, dialect uint16) (reqs []*Request, err error) {
+func GetRequests(data []byte, cid uint64, dialect uint16, tsid uint64) (reqs []*Request, err error) {
 	req := &Request{
-		cancelRequestID: cid,
-		data:            data,
+		cancelRequestID:    cid,
+		data:               data,
+		isEncrypted:        tsid != 0,
+		transformSessionID: tsid,
 	}
 
 	if err := req.Header().Validate(dialect); err != nil {
@@ -102,8 +104,10 @@ func GetRequests(data []byte, cid uint64, dialect uint16) (reqs []*Request, err 
 
 		off += next
 		req = &Request{
-			cancelRequestID: cid,
-			data:            data[off:],
+			cancelRequestID:    cid,
+			data:               data[off:],
+			isEncrypted:        tsid != 0,
+			transformSessionID: tsid,
 		}
 
 		if err := req.Header().Validate(dialect); err != nil {
@@ -197,15 +201,17 @@ type GenericResponse interface {
 	OpenID() []byte
 	SetOpenID(id []byte)
 	Append(newResp GenericResponse)
+	ShouldEncrypt() bool
 }
 
 // Response is the representation of an SMB2 response.
 type Response struct {
-	data      []byte
-	groupID   uint64
-	sessionID uint64
-	treeID    uint32
-	openID    []byte
+	data          []byte
+	groupID       uint64
+	sessionID     uint64
+	treeID        uint32
+	openID        []byte
+	shouldEncrypt bool
 }
 
 // EncodedLength returns the length of the response body.
@@ -269,6 +275,7 @@ func (resp *Response) FromRequest(req GenericRequest) {
 		Header(resp.data).ClearFlag(FLAGS_RELATED_OPERATIONS)
 	}
 	resp.groupID = req.GroupID()
+	resp.shouldEncrypt = req.IsEncrypted()
 }
 
 // Append adds a new response to the chain.
@@ -291,6 +298,11 @@ func (resp *Response) Append(newResp GenericResponse) {
 	binary.LittleEndian.PutUint32(resp.data[off+20:off+24], uint32(newLen)-off)
 	newResp.Header().SetFlag(FLAGS_RELATED_OPERATIONS)
 	resp.data = append(resp.data, newResp.Encode()...)
+}
+
+// ShouldEncrypt returns true if the response should be encrypted.
+func (resp Response) ShouldEncrypt() bool {
+	return resp.shouldEncrypt
 }
 
 // CancelRequest represents an SMB2_CANCEL request.
