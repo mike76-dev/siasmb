@@ -30,6 +30,11 @@ const (
 )
 
 var (
+	// fileIdEmpty is used to indicate an empty file ID.
+	fileIdEmpty = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
+)
+
+var (
 	errRequestNotWithinWindow        = errors.New("request out of command sequence window")
 	errCommandSecuenceWindowExceeded = errors.New("command sequence window exceeded")
 	errLongRequest                   = errors.New("request too long")
@@ -1301,12 +1306,20 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		id := ir.FileID()
 		switch ir.CtlCode() {
-		case smb2.FSCTL_VALIDATE_NEGOTIATE_INFO:
-			resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil) // Mocking the behavior of Samba on Linux
+		case smb2.FSCTL_DFS_GET_REFERRALS,
+			smb2.FSCTL_DFS_GET_REFERRALS_EX,
+			smb2.FSCTL_QUERY_NETWORK_INTERFACE_INFO,
+			smb2.FSCTL_VALIDATE_NEGOTIATE_INFO,
+			smb2.FSCTL_PIPE_WAIT:
+			var resp smb2.GenericResponse
+			if bytes.Equal(id, fileIdEmpty) {
+				resp = smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
+			} else {
+				resp = smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
+			}
+
 			return resp, ss, nil
-		case smb2.FSCTL_DFS_GET_REFERRALS:
-			resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_FOUND, nil) // Mocking the behavior of Samba on Linux
-			return resp, ss, nil
+
 		case smb2.FSCTL_PIPE_TRANSCEIVE:
 			if tc.share.name != "ipc$" { // FSCTL_PIPE_TRANSCEIVE is only allowed on the IPC$ share
 				resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
