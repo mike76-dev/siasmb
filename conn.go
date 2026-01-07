@@ -821,27 +821,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		id := cr.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		var op *open
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(cr, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
 
-		req.SetOpenID(id)
 		if op.pendingUpload != nil { // This SMB2_CLOSE request is a sign for us to flush any active multipart upload
 			_, err := op.treeConnect.share.client.FinishUpload(
 				op.ctx,
@@ -948,27 +933,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := rr.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(rr, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(rr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
-
-		req.SetOpenID(id)
 
 		if op.grantedAccess&(smb2.FILE_READ_DATA|smb2.GENERIC_READ) == 0 {
 			resp := smb2.NewErrorResponse(rr, smb2.STATUS_ACCESS_DENIED, nil)
@@ -1104,24 +1074,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := wr.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(wr, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(wr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
 
 		if c.dialect == "2.1" || c.dialect == "3.0" {
@@ -1131,7 +1088,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 		}
 
-		req.SetOpenID(id)
 		if op.fileName != "" && op.fileName[0] == '.' { // Ignore SMB2_WRITE requests to any hidden file (whose name starts with a dot)
 			resp := &smb2.WriteResponse{}
 			resp.FromRequest(wr)
@@ -1343,6 +1299,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		id := ir.FileID()
 		switch ir.CtlCode() {
 		case smb2.FSCTL_VALIDATE_NEGOTIATE_INFO:
 			resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil) // Mocking the behavior of Samba on Linux
@@ -1356,27 +1313,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, ss, nil
 			}
 
-			var op *open
-			id := ir.FileID()
-			fid := binary.LittleEndian.Uint64(id[:8])
-			dfid := binary.LittleEndian.Uint64(id[8:16])
-			ss.mu.Lock()
-			op, found = ss.openTable[fid]
-			ss.mu.Unlock()
-			if !found || op.durableFileID != dfid {
-				if req.GroupID() > 0 {
-					op = c.findOpen(req.GroupID())
-				}
-
-				if op == nil {
-					resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
-					return resp, ss, nil
-				}
-
-				id = op.id()
+			op := c.findOpen(ss, id, req)
+			if op == nil {
+				resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
+				return resp, ss, nil
 			}
 
-			req.SetOpenID(id)
 			ip := rpc.InboundPacket{}
 			ip.Read(bytes.NewBuffer(ir.InputBuffer()))
 
@@ -1510,54 +1452,24 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 
 		case smb2.FSCTL_SRV_REQUEST_RESUME_KEY:
-			var op *open
-			id := ir.FileID()
-			fid := binary.LittleEndian.Uint64(id[:8])
-			dfid := binary.LittleEndian.Uint64(id[8:16])
-			ss.mu.Lock()
-			op, found = ss.openTable[fid]
-			ss.mu.Unlock()
-			if !found || op.durableFileID != dfid {
-				if req.GroupID() > 0 {
-					op = c.findOpen(req.GroupID())
-				}
-
-				if op == nil {
-					resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
-					return resp, ss, nil
-				}
-
-				id = op.id()
+			op := c.findOpen(ss, id, req)
+			if op == nil {
+				resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
+				return resp, ss, nil
 			}
 
-			req.SetOpenID(id)
 			resp := &smb2.IoctlResponse{}
 			resp.FromRequest(ir)
 			resp.Generate(ir.CtlCode(), id, 0, op.getResumeKey())
 			return resp, ss, nil
 
 		case smb2.FSCTL_CREATE_OR_GET_OBJECT_ID:
-			var op *open
-			id := ir.FileID()
-			fid := binary.LittleEndian.Uint64(id[:8])
-			dfid := binary.LittleEndian.Uint64(id[8:16])
-			ss.mu.Lock()
-			op, found = ss.openTable[fid]
-			ss.mu.Unlock()
-			if !found || op.durableFileID != dfid {
-				if req.GroupID() > 0 {
-					op = c.findOpen(req.GroupID())
-				}
-
-				if op == nil {
-					resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
-					return resp, ss, nil
-				}
-
-				id = op.id()
+			op := c.findOpen(ss, id, req)
+			if op == nil {
+				resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
+				return resp, ss, nil
 			}
 
-			req.SetOpenID(id)
 			resp := &smb2.IoctlResponse{}
 			resp.FromRequest(ir)
 			resp.Generate(ir.CtlCode(), id, 0, op.getObjectID())
@@ -1649,24 +1561,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := qdr.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
 
 		if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // The Open must be a directory
@@ -1679,7 +1578,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		req.SetOpenID(id)
 		searchPath := qdr.FileName()
 		single := qdr.Flags()&smb2.RETURN_SINGLE_ENTRY > 0
 		var buf []byte
@@ -1752,24 +1650,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := cnr.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(cnr, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
 
 		if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // The Open must be a directory
@@ -1783,7 +1668,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		// Put the request in the async command list.
-		req.SetOpenID(id)
 		aid := make([]byte, 8)
 		rand.Read(aid)
 		asyncID := binary.LittleEndian.Uint64(aid)
@@ -1843,27 +1727,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := qir.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(qir, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(qir, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
-
-		req.SetOpenID(id)
 
 		var info []byte
 		switch qir.InfoType() {
@@ -1982,27 +1851,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := sir.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(sir, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(sir, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
 
-		req.SetOpenID(id)
 		switch sir.InfoType() {
 		case smb2.INFO_FILE:
 			switch sir.FileInfoClass() {
@@ -2234,8 +2089,30 @@ func (c *connection) sendResponses() {
 	}
 }
 
-// findOpen finds an Open by the group ID of the response.
-func (c *connection) findOpen(groupID uint64) *open {
+// findOpen is a helper function that tries to find an open by its ID.
+func (c *connection) findOpen(ss *session, id []byte, req *smb2.Request) *open {
+	fid := binary.LittleEndian.Uint64(id[:8])
+	dfid := binary.LittleEndian.Uint64(id[8:16])
+
+	ss.mu.Lock()
+	op, found := ss.openTable[fid]
+	ss.mu.Unlock()
+
+	if !found || op.durableFileID != dfid {
+		if req.GroupID() > 0 {
+			op = c.findOpenByGroupID(req.GroupID())
+		}
+
+		if op != nil {
+			req.SetOpenID(op.id())
+		}
+	}
+
+	return op
+}
+
+// findOpenByGroupID finds an Open by the group ID of the response.
+func (c *connection) findOpenByGroupID(groupID uint64) *open {
 	c.mu.Lock()
 	resp, found := c.pendingResponses[groupID]
 	c.mu.Unlock()
