@@ -30,7 +30,6 @@ type share struct {
 	connectSecurity                   map[string]struct{}
 	fileSecurity                      map[string]uint32
 	cscFlags                          uint32
-	isDfs                             bool
 	doAccessBasedDirectoryEnumeration bool
 	allowNamespaceCaching             bool
 	forceSharedDelete                 bool
