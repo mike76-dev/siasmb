@@ -332,6 +332,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return nil, nil, err
 		}
 
+		if smb2.Is3X(c.negotiateDialect) && c.server.encryptData && c.clientCapabilities&smb2.GLOBAL_CAP_ENCRYPTION == 0 {
+			resp := smb2.NewErrorResponse(ssr, smb2.STATUS_ACCESS_DENIED, nil)
+			return resp, nil, nil
+		}
+
 		// Find a session or create a new one.
 		ss, found, err := c.server.registerSession(c, ssr)
 		if err != nil {
@@ -366,6 +371,21 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			ss.finalize(ssr)
 			ss.idleTime = time.Now()
 			token = spnego.FinalNegTokenResp
+			if smb2.Is3X(c.negotiateDialect) && c.negotiateDialect != smb2.SMB_DIALECT_202 {
+				c.server.mu.Lock()
+				cl, ok := c.server.globalClientTable[[16]byte(c.clientGuid)]
+				c.server.mu.Unlock()
+				if !ok {
+					cl = &smbClient{[16]byte(c.clientGuid), c.negotiateDialect}
+					c.server.mu.Lock()
+					c.server.globalClientTable[[16]byte(c.clientGuid)] = cl
+					c.server.mu.Unlock()
+				} else if cl.dialect != c.negotiateDialect {
+					c.server.deregisterSession(c, ss.sessionID)
+					resp := smb2.NewErrorResponse(ssr, smb2.STATUS_USER_SESSION_DELETED, nil)
+					return resp, nil, nil
+				}
+			}
 		} else { // Begin the session setup process
 			negToken, err := spnego.DecodeNegTokenInit(ssr.SecurityBuffer())
 			var noSpnego bool
