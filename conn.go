@@ -292,6 +292,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		c.clientCapabilities = nr.Capabilities()
 		c.clientGuid = nr.ClientGuid()
+		c.clientSecurityMode = nr.SecurityMode()
 		c.negotiateDialect = nr.MaxCommonDialect()
 		switch c.negotiateDialect {
 		case smb2.SMB_DIALECT_202:

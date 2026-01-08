@@ -116,6 +116,7 @@ func (s *server) newConnection(conn net.Conn) *connection {
 		maxReadSize:           smb2.MaxReadSize,
 		maxWriteSize:          smb2.MaxWriteSize,
 		serverCapabilities:    s.serverCapabilities,
+		serverSecurityMode:    smb2.NEGOTIATE_SIGNING_ENABLED,
 		server:                s,
 		writeChan:             make(chan []byte),
 		closeChan:             make(chan struct{}),
