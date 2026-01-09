@@ -117,6 +117,28 @@ func (ir IoctlRequest) Flags() uint32 {
 	return binary.LittleEndian.Uint32(ir.data[SMB2HeaderSize+48 : SMB2HeaderSize+52])
 }
 
+func (ir IoctlRequest) ValidateNegotiateInfo() (caps uint32, guid []byte, sm uint16, dialects []uint16, err error) {
+	buf := ir.InputBuffer()
+	if len(buf) < 24 {
+		err = ErrWrongLength
+		return
+	}
+	caps = binary.LittleEndian.Uint32(buf[:4])
+	guid = make([]byte, 16)
+	copy(guid, buf[4:20])
+	sm = binary.LittleEndian.Uint16(buf[20:22])
+	count := int(binary.LittleEndian.Uint16(buf[22:24]))
+	if len(buf) < 24+count*2 {
+		err = ErrInvalidParameter
+		return
+	}
+	dialects = make([]uint16, count)
+	for i := 0; i < count; i++ {
+		dialects[i] = binary.LittleEndian.Uint16(buf[24+i*2 : 26+i*2])
+	}
+	return
+}
+
 // IoctlResponse represents an SMB2_IOCTL response.
 type IoctlResponse struct {
 	Response
@@ -177,4 +199,13 @@ func (ir *IoctlResponse) Generate(code uint32, fid []byte, flags uint32, output 
 	ir.SetFileID(fid)
 	ir.SetFlags(flags)
 	ir.SetOutputBuffer(output)
+}
+
+func ValidateNegotiateInfo(caps uint32, guid []byte, sm uint16, dialect uint16) []byte {
+	buf := make([]byte, 24)
+	binary.LittleEndian.PutUint32(buf[:4], caps)
+	copy(buf[4:20], guid)
+	binary.LittleEndian.PutUint16(buf[20:22], sm)
+	binary.LittleEndian.PutUint16(buf[22:24], dialect)
+	return buf
 }

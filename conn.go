@@ -1335,7 +1335,27 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			if bytes.Equal(id, smb2.DummyFileID) {
 				resp = smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
 			} else {
-				resp = smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
+				if ir.CtlCode() == smb2.FSCTL_VALIDATE_NEGOTIATE_INFO {
+					if ir.MaxOutputResponse() < 24 {
+						return nil, nil, smb2.ErrWrongLength
+					}
+					caps, guid, sm, _, err := ir.ValidateNegotiateInfo()
+					if err != nil {
+						return nil, nil, smb2.ErrInvalidParameter
+					} else if !bytes.Equal(guid, c.clientGuid) {
+						return nil, nil, smb2.ErrInvalidParameter
+					} else if sm != c.clientSecurityMode {
+						return nil, nil, smb2.ErrInvalidParameter
+					} else if caps != c.clientCapabilities {
+						return nil, nil, smb2.ErrInvalidParameter
+					}
+					r := &smb2.IoctlResponse{}
+					r.FromRequest(ir)
+					r.Generate(ir.CtlCode(), smb2.DummyFileID, 0, smb2.ValidateNegotiateInfo(c.serverCapabilities, c.server.serverGuid[:], c.serverSecurityMode, c.negotiateDialect))
+					return r, ss, nil
+				} else {
+					resp = smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
+				}
 			}
 
 			return resp, ss, nil
