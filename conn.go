@@ -30,11 +30,6 @@ const (
 )
 
 var (
-	// fileIdEmpty is used to indicate an empty file ID.
-	fileIdEmpty = []byte{0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff}
-)
-
-var (
 	errRequestNotWithinWindow        = errors.New("request out of command sequence window")
 	errCommandSecuenceWindowExceeded = errors.New("command sequence window exceeded")
 	errLongRequest                   = errors.New("request too long")
@@ -1337,7 +1332,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			smb2.FSCTL_VALIDATE_NEGOTIATE_INFO,
 			smb2.FSCTL_PIPE_WAIT:
 			var resp smb2.GenericResponse
-			if bytes.Equal(id, fileIdEmpty) {
+			if bytes.Equal(id, smb2.DummyFileID) {
 				resp = smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
 			} else {
 				resp = smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
