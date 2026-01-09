@@ -180,11 +180,14 @@ func (tcr *TreeConnectResponse) FromRequest(req GenericRequest) {
 }
 
 // Generate populates the fields of the SMB2_TREE_CONNECT response.
-func (tcr *TreeConnectResponse) Generate(tid uint32, st uint8, access uint32) {
+func (tcr *TreeConnectResponse) Generate(tid uint32, st uint8, access uint32, encrypt bool) {
 	Header(tcr.data).SetStatus(STATUS_OK)
 	Header(tcr.data).SetTreeID(tid)
 	tcr.SetShareType(st)
 	tcr.SetMaximalAccess(access)
+	if encrypt {
+		tcr.SetShareFlags(SHAREFLAG_ENCRYPT_DATA)
+	}
 }
 
 // TreeDisconnectRequest represents an SMB2_TREE_DISCONNECT request.

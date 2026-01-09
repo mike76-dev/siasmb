@@ -99,6 +99,11 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 				return nil, err
 			}
 		}
+
+		if smb2.Is3X(c.negotiateDialect) && sh.encryptData && c.clientCapabilities&smb2.GLOBAL_CAP_ENCRYPTION == 0 {
+			return nil, errAccessDenied
+		}
+
 		sh.mu.Lock()
 		if sh.currentUses >= maxShareUses {
 			sh.mu.Unlock()
