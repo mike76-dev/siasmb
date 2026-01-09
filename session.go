@@ -269,7 +269,8 @@ func (ss *session) decrypt(buf []byte) []byte {
 	input := append(buf[smb2.SMB2TransformHeaderSize:], smb2.Header(buf).EncryptionSignature()...)
 	msg, err := ss.decrypter.Open(input[:0], smb2.Header(buf).Nonce()[:ss.decrypter.NonceSize()], input, smb2.Header(buf).AssociatedData())
 	if err != nil {
-		panic(err)
+		log.Printf("Decryption error at session %d: %v", ss.sessionID, err)
+		return nil
 	}
 	return msg
 }
