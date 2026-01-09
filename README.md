@@ -8,7 +8,7 @@ How to set up a `renterd` node is described here: [https://github.com/SiaFoundat
 * The SMB port 445 needs to be open on the machine where the server is running.
 
 ## Limitations
-* At this moment, only the SMB dialects 2.0.2 and 2.1 are supported. Newer dialects will potentially be supported in the future.
+* At this moment, only the SMB dialects 2.0.2, 2.1, and 3.0 are supported. Newer dialects will potentially be supported in the future.
 * Guest or anonymous access is not supported.
 
 ## Installing PostgreSQL
