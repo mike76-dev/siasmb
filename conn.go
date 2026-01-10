@@ -1332,7 +1332,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			smb2.FSCTL_VALIDATE_NEGOTIATE_INFO,
 			smb2.FSCTL_PIPE_WAIT:
 			var resp smb2.GenericResponse
-			if bytes.Equal(id, smb2.DummyFileID) {
+			if !bytes.Equal(id, smb2.DummyFileID) {
 				resp = smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
 			} else {
 				if ir.CtlCode() == smb2.FSCTL_VALIDATE_NEGOTIATE_INFO {
