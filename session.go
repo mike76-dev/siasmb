@@ -54,8 +54,8 @@ type session struct {
 	applicationKey   []byte
 	signer           hash.Hash
 	verifier         hash.Hash
-	encrypter        cipher.AEAD
-	decrypter        cipher.AEAD
+	encrypter        cipher.Block
+	decrypter        cipher.Block
 
 	mu sync.Mutex
 }
@@ -180,19 +180,13 @@ func (ss *session) finalize(req smb2.SessionSetupRequest) {
 		if err != nil {
 			panic(err)
 		}
-		ss.encrypter, err = ccm.NewCCMWithNonceAndTagSizes(ciph, 11, 16)
-		if err != nil {
-			panic(err)
-		}
+		ss.encrypter = ciph
 
 		ciph, err = aes.NewCipher(ss.decryptionKey)
 		if err != nil {
 			panic(err)
 		}
-		ss.decrypter, err = ccm.NewCCMWithNonceAndTagSizes(ciph, 11, 16)
-		if err != nil {
-			panic(err)
-		}
+		ss.decrypter = ciph
 	}
 
 	ss.connection.mu.Lock()
@@ -251,7 +245,11 @@ func (ss *session) validateRequest(req *smb2.Request) bool {
 
 // encrypt uses the encryption key to encrypt the SMB message.
 func (ss *session) encrypt(buf []byte) []byte {
-	nonce := make([]byte, ss.encrypter.NonceSize())
+	encrypter, err := ccm.NewCCMWithNonceAndTagSizes(ss.encrypter, 11, 16)
+	if err != nil {
+		panic(err)
+	}
+	nonce := make([]byte, encrypter.NonceSize())
 	rand.Read(nonce)
 	output := smb2.Header(make([]byte, smb2.SMB2TransformHeaderSize+len(buf)+16))
 	output.SetProtocolID(smb2.PROTOCOL_SMB2_ENCRYPTED)
@@ -259,15 +257,20 @@ func (ss *session) encrypt(buf []byte) []byte {
 	output.SetOriginalMessageSize(uint32(len(buf)))
 	output.SetEncryptionFlags(1)
 	output.SetTransformSessionID(ss.sessionID)
-	ss.encrypter.Seal(output[:52], nonce, buf, output.AssociatedData())
+	encrypter.Seal(output[:smb2.SMB2TransformHeaderSize], nonce, buf, output.AssociatedData())
 	output.SetEncryptionSignature(output[len(output)-16:])
-	return output[:len(output)-16]
+	output = output[:len(output)-16]
+	return output
 }
 
 // decrypt uses the decryption key to decrypt the SMB message.
 func (ss *session) decrypt(buf []byte) []byte {
 	input := append(buf[smb2.SMB2TransformHeaderSize:], smb2.Header(buf).EncryptionSignature()...)
-	msg, err := ss.decrypter.Open(input[:0], smb2.Header(buf).Nonce()[:ss.decrypter.NonceSize()], input, smb2.Header(buf).AssociatedData())
+	decrypter, err := ccm.NewCCMWithNonceAndTagSizes(ss.decrypter, 11, 16)
+	if err != nil {
+		panic(err)
+	}
+	msg, err := decrypter.Open(input[:0], smb2.Header(buf).Nonce()[:decrypter.NonceSize()], input, smb2.Header(buf).AssociatedData())
 	if err != nil {
 		log.Printf("Decryption error at session %d: %v", ss.sessionID, err)
 		return nil
