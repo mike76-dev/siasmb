@@ -1353,6 +1353,8 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					r.FromRequest(ir)
 					r.Generate(ir.CtlCode(), smb2.DummyFileID, 0, smb2.ValidateNegotiateInfo(c.serverCapabilities, c.server.serverGuid[:], c.serverSecurityMode, c.negotiateDialect))
 					return r, ss, nil
+				} else if ir.CtlCode() == smb2.FSCTL_DFS_GET_REFERRALS || ir.CtlCode() == smb2.FSCTL_DFS_GET_REFERRALS_EX {
+					resp = smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_DEVICE_REQUEST, nil)
 				} else {
 					resp = smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
 				}
