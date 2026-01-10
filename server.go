@@ -154,6 +154,7 @@ func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResp
 		for {
 			next := binary.LittleEndian.Uint32(msg[off+20 : off+24])
 			copy(msg[off+48:off+64], zero[:])
+			smb2.Header(msg[off:]).ClearFlag(smb2.FLAGS_SIGNED)
 			off += next
 			if next == 0 {
 				return
