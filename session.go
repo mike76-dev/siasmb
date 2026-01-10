@@ -231,7 +231,7 @@ func (ss *session) sign(buf []byte) {
 
 // validateRequest returns true if the request is correctly signed by the client.
 func (ss *session) validateRequest(req *smb2.Request) bool {
-	if !req.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
+	if !req.Header().IsFlagSet(smb2.FLAGS_SIGNED) || req.IsEncrypted() {
 		return true
 	}
 
