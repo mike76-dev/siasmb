@@ -494,6 +494,9 @@ func (op *open) read(offset, length uint64) []byte {
 	var result []byte
 	remaining := int64(length)
 
+	op.mu.Lock()
+	defer op.mu.Unlock()
+
 	for remaining > 0 {
 		chunkOffset := (offset / op.chunkSize) * op.chunkSize
 		chunkStart := offset % op.chunkSize

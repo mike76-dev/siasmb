@@ -1226,6 +1226,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 							}
 						} else {
 							// If we don't know the file size, wait 10 minutes, then flush anyway.
+							op.pendingUpload.mu.Lock()
+							size := op.pendingUpload.totalSize
+							op.pendingUpload.mu.Unlock()
 							go func(size uint64) {
 								<-time.After(10 * time.Minute)
 								if op != nil && op.pendingUpload != nil && op.pendingUpload.totalSize == size {
@@ -1244,7 +1247,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 										op.pendingUpload = nil
 									}
 								}
-							}(op.pendingUpload.totalSize)
+							}(size)
 						}
 
 						resp = &smb2.WriteResponse{}
