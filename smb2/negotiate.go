@@ -207,7 +207,7 @@ func (nr NegotiateRequest) MaxCommonDialect() uint16 {
 					max = SMB_DIALECT_202
 				}
 			case SMB_DIALECT_MULTI:
-				if max < SMB_DIALECT_MULTICREDIT && MaxSupportedDialect >= SMB_DIALECT_202 {
+				if max < SMB_DIALECT_MULTICREDIT && MaxSupportedDialect >= SMB_DIALECT_21 {
 					max = SMB_DIALECT_MULTICREDIT
 				}
 			}
