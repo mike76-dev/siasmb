@@ -171,7 +171,7 @@ func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResp
 		} else if resp.Header().Command() != smb2.SMB2_SESSION_SETUP && ss.encryptData {
 			wipeSignatures(buf)
 			buf = ss.encrypt(buf)
-		} else if resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
+		} else if resp.Header().Command() == smb2.SMB2_SESSION_SETUP || resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
 			ss.sign(buf)
 		} else { // Otherwise, wipe the signature(s)
 			wipeSignatures(buf)

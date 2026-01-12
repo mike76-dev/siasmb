@@ -364,9 +364,16 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 			// User successfully authenticated.
 			ss.finalize(ssr)
+			if smb2.Is3X(c.negotiateDialect) && c.server.encryptData && c.serverCapabilities&smb2.GLOBAL_CAP_ENCRYPTION != 0 {
+				ss.signingRequired = false
+				ss.encryptData = true
+			} else {
+				ss.signingRequired = true
+				ss.encryptData = false
+			}
 			ss.idleTime = time.Now()
 			token = spnego.FinalNegTokenResp
-			if smb2.Is3X(c.negotiateDialect) && c.negotiateDialect != smb2.SMB_DIALECT_202 {
+			if smb2.Is3X(c.negotiateDialect) {
 				c.server.mu.Lock()
 				cl, ok := c.server.globalClientTable[[16]byte(c.clientGuid)]
 				c.server.mu.Unlock()
@@ -419,7 +426,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			default:
 			}
 		}
-		if c.server.encryptData {
+		if ss.encryptData {
 			flags |= smb2.SESSION_FLAG_ENCRYPT_DATA
 		}
 
