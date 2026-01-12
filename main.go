@@ -106,10 +106,11 @@ func main() {
 					// Reset the abuse protection.
 					server.mu.Lock()
 					server.connectionCount = make(map[string]int)
+					cl := server.connectionList
 					server.mu.Unlock()
 
 					// Drop unused connections.
-					for _, cn := range server.connectionList {
+					for _, cn := range cl {
 						if cn.isStale() {
 							server.closeConnection(cn)
 						}
