@@ -316,6 +316,9 @@ func (c *Client) ReadObject(ctx context.Context, bucket, path string, offset, le
 
 // StartUpload initiates a multipart upload.
 func (c *Client) StartUpload(ctx context.Context, bucket, path string) (uploadID string, err error) {
+	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
+		return
+	}
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	var resp api.MultipartCreateResponse
 	if err = c.doRequest(ctx, "POST", "/api/bus/multipart/create", api.MultipartCreateRequest{
@@ -329,6 +332,9 @@ func (c *Client) StartUpload(ctx context.Context, bucket, path string) (uploadID
 
 // AbortUpload aborts an initiated multipart upload.
 func (c *Client) AbortUpload(ctx context.Context, bucket, path string, uploadID string) (err error) {
+	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
+		return
+	}
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	err = c.doRequest(ctx, "POST", "/api/bus/multipart/abort", api.MultipartAbortRequest{
 		Bucket:   bucket,
@@ -340,6 +346,9 @@ func (c *Client) AbortUpload(ctx context.Context, bucket, path string, uploadID 
 
 // FinishUpload completes a multipart upload.
 func (c *Client) FinishUpload(ctx context.Context, bucket, path string, uploadID string, parts []api.MultipartCompletedPart) (eTag string, err error) {
+	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
+		return
+	}
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 
 	// The parts may come out of order, but renterd will error back, so we need to sort them.
@@ -358,6 +367,9 @@ func (c *Client) FinishUpload(ctx context.Context, bucket, path string, uploadID
 
 // UploadPart uploads the provided chunk of data to the Sia network.
 func (c *Client) UploadPart(ctx context.Context, r io.Reader, bucket, path, uploadID string, partNumber int, offset, length uint64) (eTag string, err error) {
+	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
+		return
+	}
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	path = api.ObjectKeyEscape(path)
 	values := make(url.Values)
