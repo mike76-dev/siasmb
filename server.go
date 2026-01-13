@@ -84,7 +84,6 @@ func newServer(l net.Listener, st Store, debug bool) *server {
 		serverSideCopyMaxChunkSize:      2 >> 10, // 1MiB
 		serverSideCopyMaxDataSize:       2 >> 14, // 16MiB
 		serverHashLevel:                 HashDisableAll,
-		serverCapabilities:              smb2.GLOBAL_CAP_LARGE_MTU,
 		shareList:                       make(map[string]*share),
 		connectionList:                  make(map[string]*connection),
 		globalOpenTable:                 make(map[uint64]*open),

@@ -255,12 +255,15 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		case smb2.SMB_DIALECT_202:
 			c.negotiateDialect = dialect
 			c.dialect = "2.0.2"
+			c.maxTransactSize = 65536
+			c.maxReadSize = 65536
+			c.maxWriteSize = 65536
 		case smb2.SMB_DIALECT_MULTICREDIT:
 			c.supportsMultiCredit = true
 		}
 		c.grantCredits(nr.Header().MessageID(), 1) // Grant just one credit
 
-		resp := smb2.NewNegotiateResponse(c.server.serverGuid[:], c.ntlmServer, dialect, c.serverCapabilities)
+		resp := smb2.NewNegotiateResponse(c.server.serverGuid[:], c.ntlmServer, dialect, c.serverCapabilities, uint32(c.maxTransactSize), uint32(c.maxReadSize), uint32(c.maxWriteSize))
 		return resp, nil, nil
 	}
 
@@ -308,11 +311,15 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		if c.negotiateDialect != smb2.SMB_DIALECT_202 {
 			c.supportsMultiCredit = true
+		} else {
+			c.maxTransactSize = 65536
+			c.maxReadSize = 65536
+			c.maxWriteSize = 65536
 		}
 
 		resp := &smb2.NegotiateResponse{}
 		resp.FromRequest(nr)
-		resp.Generate(c.server.serverGuid[:], c.ntlmServer, c.negotiateDialect, c.serverCapabilities)
+		resp.Generate(c.server.serverGuid[:], c.ntlmServer, c.negotiateDialect, c.serverCapabilities, uint32(c.maxTransactSize), uint32(c.maxReadSize), uint32(c.maxWriteSize))
 
 		return resp, nil, nil
 

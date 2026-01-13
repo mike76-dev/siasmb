@@ -284,14 +284,14 @@ func (nr *NegotiateResponse) SetSecurityBuffer(buf []byte) {
 }
 
 // NewNegotiateResponse generates an SMB2_NEGOTIATE response to an SMB_COM_NEGOTIATE request.
-func NewNegotiateResponse(serverGuid []byte, ns *ntlm.Server, dialect uint16, capabilities uint32) *NegotiateResponse {
+func NewNegotiateResponse(serverGuid []byte, ns *ntlm.Server, dialect uint16, capabilities uint32, maxTransactSize, maxReadSize, maxWriteSize uint32) *NegotiateResponse {
 	nr := &NegotiateResponse{}
 	nr.data = make([]byte, SMB2HeaderSize+SMB2NegotiateResponseMinSize)
 	h := NewHeader(nr.data)
 	h.SetCommand(SMB2_NEGOTIATE)
 	h.SetStatus(STATUS_OK)
 	h.SetFlags(FLAGS_SERVER_TO_REDIR)
-	nr.Generate(serverGuid, ns, dialect, capabilities)
+	nr.Generate(serverGuid, ns, dialect, capabilities, maxTransactSize, maxReadSize, maxWriteSize)
 	return nr
 }
 
@@ -314,7 +314,7 @@ func (nr *NegotiateResponse) FromRequest(req GenericRequest) {
 }
 
 // Generate populates the fields of the SMB2_NEGOTIATE response.
-func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server, dialect uint16, capabilities uint32) {
+func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server, dialect uint16, capabilities uint32, maxTransactSize, maxReadSize, maxWriteSize uint32) {
 	token, err := ns.Negotiate()
 	if err != nil {
 		panic(err)
@@ -331,9 +331,9 @@ func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server, dialec
 	nr.SetSecurityMode(NEGOTIATE_SIGNING_ENABLED)
 	nr.SetCapabilities(capabilities)
 	nr.SetServerGuid(serverGuid)
-	nr.SetMaxTransactSize(MaxTransactSize)
-	nr.SetMaxReadSize(MaxReadSize)
-	nr.SetMaxWriteSize(MaxWriteSize)
+	nr.SetMaxTransactSize(maxTransactSize)
+	nr.SetMaxReadSize(maxReadSize)
+	nr.SetMaxWriteSize(maxWriteSize)
 	nr.SetSystemTime(time.Now())
 
 	nr.SetSecurityBuffer(token)
