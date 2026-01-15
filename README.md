@@ -179,8 +179,6 @@ sudo umount /mnt/sia
 13. Copy that directory from the share root
 14. Disconnect from the share
 
-Please note: on Windows, there may be issues with reads or writes when OneDrive is enabled and the file is not available locally.
-
 ## Bug Reporting
 Please do not hesitate to open an issue if you discover any bugs.
 

@@ -27,13 +27,21 @@ var (
 	errNoFiles     = errors.New("no files found")
 )
 
+// uploadChunk represents a single part of a multipart upload.
+type uploadChunk struct {
+	offset uint64
+	data   []byte
+}
+
 // upload holds the information about an active multipart upload.
 type upload struct {
-	uploadID  string
-	partCount int
-	parts     []api.MultipartCompletedPart
-	totalSize uint64
-	mu        sync.Mutex
+	uploadID   string
+	partCount  int
+	parts      []api.MultipartCompletedPart
+	totalSize  uint64
+	nextOffset uint64
+	pending    map[uint64]*uploadChunk
+	mu         sync.Mutex
 }
 
 // open represents an Open object.
