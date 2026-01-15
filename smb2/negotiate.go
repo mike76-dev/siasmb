@@ -46,7 +46,7 @@ const (
 	MinSupportedDialect = SMB_DIALECT_202
 
 	// MaxSupportedDialect is the maximum dialect that is supported by the server.
-	MaxSupportedDialect = SMB_DIALECT_21
+	MaxSupportedDialect = SMB_DIALECT_30
 )
 
 const (
@@ -72,14 +72,19 @@ var (
 	ErrInvalidParameter    = errors.New("wrong parameter supplied")
 )
 
+// Is3X returns true if the dialect belongs to the 3.x family.
+func Is3X(dialect uint16) bool {
+	return dialect != SMB_DIALECT_UNKNOWN && dialect >= SMB_DIALECT_30
+}
+
 // NegotiateRequest represents an SMB2_NEGOTIATE request.
 type NegotiateRequest struct {
 	Request
 }
 
 // Validate implements GenericRequest interface.
-func (nr NegotiateRequest) Validate(supportsMultiCredit bool) error {
-	if err := Header(nr.data).Validate(); err != nil {
+func (nr NegotiateRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
+	if err := Header(nr.data).Validate(dialect); err != nil {
 		return err
 	}
 
@@ -202,7 +207,7 @@ func (nr NegotiateRequest) MaxCommonDialect() uint16 {
 					max = SMB_DIALECT_202
 				}
 			case SMB_DIALECT_MULTI:
-				if max < SMB_DIALECT_MULTICREDIT && MaxSupportedDialect >= SMB_DIALECT_202 {
+				if max < SMB_DIALECT_MULTICREDIT && MaxSupportedDialect >= SMB_DIALECT_21 {
 					max = SMB_DIALECT_MULTICREDIT
 				}
 			}
@@ -279,14 +284,14 @@ func (nr *NegotiateResponse) SetSecurityBuffer(buf []byte) {
 }
 
 // NewNegotiateResponse generates an SMB2_NEGOTIATE response to an SMB_COM_NEGOTIATE request.
-func NewNegotiateResponse(serverGuid []byte, ns *ntlm.Server, dialect uint16) *NegotiateResponse {
+func NewNegotiateResponse(serverGuid []byte, ns *ntlm.Server, dialect uint16, capabilities uint32, maxTransactSize, maxReadSize, maxWriteSize uint32) *NegotiateResponse {
 	nr := &NegotiateResponse{}
 	nr.data = make([]byte, SMB2HeaderSize+SMB2NegotiateResponseMinSize)
 	h := NewHeader(nr.data)
 	h.SetCommand(SMB2_NEGOTIATE)
 	h.SetStatus(STATUS_OK)
 	h.SetFlags(FLAGS_SERVER_TO_REDIR)
-	nr.Generate(serverGuid, ns, dialect)
+	nr.Generate(serverGuid, ns, dialect, capabilities, maxTransactSize, maxReadSize, maxWriteSize)
 	return nr
 }
 
@@ -309,7 +314,7 @@ func (nr *NegotiateResponse) FromRequest(req GenericRequest) {
 }
 
 // Generate populates the fields of the SMB2_NEGOTIATE response.
-func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server, dialect uint16) {
+func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server, dialect uint16, capabilities uint32, maxTransactSize, maxReadSize, maxWriteSize uint32) {
 	token, err := ns.Negotiate()
 	if err != nil {
 		panic(err)
@@ -324,11 +329,11 @@ func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server, dialec
 	nr.setStructureSize()
 	nr.SetDialectRevision(dialect)
 	nr.SetSecurityMode(NEGOTIATE_SIGNING_ENABLED)
-	nr.SetCapabilities(GLOBAL_CAP_DFS | GLOBAL_CAP_LARGE_MTU)
+	nr.SetCapabilities(capabilities)
 	nr.SetServerGuid(serverGuid)
-	nr.SetMaxTransactSize(MaxTransactSize)
-	nr.SetMaxReadSize(MaxReadSize)
-	nr.SetMaxWriteSize(MaxWriteSize)
+	nr.SetMaxTransactSize(maxTransactSize)
+	nr.SetMaxReadSize(maxReadSize)
+	nr.SetMaxWriteSize(maxWriteSize)
 	nr.SetSystemTime(time.Now())
 
 	nr.SetSecurityBuffer(token)

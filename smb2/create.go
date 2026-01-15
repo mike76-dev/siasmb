@@ -104,15 +104,22 @@ const (
 
 const (
 	// Create context.
-	CREATE_EA_BUFFER                    = 0x45787441
-	CREATE_SD_BUFFER                    = 0x53656344
-	CREATE_DURABLE_HANDLE_REQUEST       = 0x44486e51
-	CREATE_DURABLE_HANDLE_RECONNECT     = 0x44486e43
-	CREATE_ALLOCATION_SIZE              = 0x416c5369
-	CREATE_QUERY_MAXIMAL_ACCESS_REQUEST = 0x4d784163
-	CREATE_TIMEWAROP_TOKEN              = 0x54577270
-	CREATE_QUERY_ON_DISK_ID             = 0x51466964
-	CREATE_REQUEST_LEASE                = 0x52714c73
+	CREATE_EA_BUFFER                        = 0x45787441
+	CREATE_SD_BUFFER                        = 0x53656344
+	CREATE_DURABLE_HANDLE_REQUEST           = 0x44486e51
+	CREATE_DURABLE_HANDLE_RECONNECT         = 0x44486e43
+	CREATE_ALLOCATION_SIZE                  = 0x416c5369
+	CREATE_QUERY_MAXIMAL_ACCESS_REQUEST     = 0x4d784163
+	CREATE_TIMEWAROP_TOKEN                  = 0x54577270
+	CREATE_QUERY_ON_DISK_ID                 = 0x51466964
+	CREATE_REQUEST_LEASE                    = 0x52714c73
+	SMB2_CREATE_REQUEST_LEASE_V2            = 0x52714c73
+	SMB2_CREATE_DURABLE_HANDLE_REQUEST_V2   = 0x44483251
+	SMB2_CREATE_DURABLE_HANDLE_RECONNECT_V2 = 0x44483243
+	SMB2_CREATE_APP_INSTANCE_ID             = 0x45BCA66AEFA7F74A9008FA462E144D74
+	SMB2_CREATE_APP_INSTANCE_VERSION        = 0xB982D0B73B56074FA07B524A8116A010
+	SVHDX_OPEN_DEVICE_CONTEXT               = 0x9CCBCF9E04C1E643980E158DA1F6EC83
+	SMB2_CREATECONTEXT_RESERVED             = 0x93AD25509CB411E7B42383DE968BCD7C
 )
 
 const (
@@ -140,8 +147,8 @@ type CreateRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (cr CreateRequest) Validate(supportsMultiCredit bool) error {
-	if err := Header(cr.data).Validate(); err != nil {
+func (cr CreateRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
+	if err := Header(cr.data).Validate(dialect); err != nil {
 		return err
 	}
 

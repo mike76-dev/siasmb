@@ -61,16 +61,22 @@ type server struct {
 	serverSideCopyMaxChunkSize      uint64
 	serverSideCopyMaxDataSize       uint64
 	serverHashLevel                 int
+	serverCapabilities              uint32
+	globalClientTable               map[[16]byte]*smbClient
+	encryptData                     bool
+	rejectUnencryptedAccess         bool
+	allowAnonymousAccess            bool
 
 	// Auxiliary fields.
 	listener        net.Listener
 	mu              sync.Mutex
 	connectionCount map[string]int
 	store           Store
+	debug           bool
 }
 
 // newServer returns an initialized SMB server.
-func newServer(l net.Listener, st Store) *server {
+func newServer(l net.Listener, st Store, debug bool) *server {
 	s := &server{
 		enabled:                         true,
 		serverGuid:                      uuid.New(),
@@ -82,9 +88,11 @@ func newServer(l net.Listener, st Store) *server {
 		connectionList:                  make(map[string]*connection),
 		globalOpenTable:                 make(map[uint64]*open),
 		globalSessionTable:              make(map[uint64]*session),
+		globalClientTable:               make(map[[16]byte]*smbClient),
 		listener:                        l,
 		connectionCount:                 make(map[string]int),
 		store:                           st,
+		debug:                           debug,
 	}
 	s.stats.start = time.Now()
 	return s
@@ -106,6 +114,8 @@ func (s *server) newConnection(conn net.Conn) *connection {
 		maxTransactSize:       smb2.MaxTransactSize,
 		maxReadSize:           smb2.MaxReadSize,
 		maxWriteSize:          smb2.MaxWriteSize,
+		serverCapabilities:    s.serverCapabilities,
+		serverSecurityMode:    smb2.NEGOTIATE_SIGNING_ENABLED,
 		server:                s,
 		writeChan:             make(chan []byte),
 		closeChan:             make(chan struct{}),
@@ -137,22 +147,33 @@ func (s *server) closeConnection(c *connection) {
 
 // writeResponse encodes the response and adds it to the sending queue.
 func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResponse) {
+	wipeSignatures := func(msg []byte) {
+		var off uint32
+		var zero [16]byte
+		for {
+			next := binary.LittleEndian.Uint32(msg[off+20 : off+24])
+			copy(msg[off+48:off+64], zero[:])
+			smb2.Header(msg[off:]).ClearFlag(smb2.FLAGS_SIGNED)
+			off += next
+			if next == 0 {
+				return
+			}
+		}
+	}
+
 	buf := resp.Encode()
 
 	if ss != nil && ss.state == sessionValid { // A session exists, sign if required
-		if resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) || resp.Header().Command() == smb2.SMB2_SESSION_SETUP {
+		if resp.ShouldEncrypt() {
+			wipeSignatures(buf)
+			buf = ss.encrypt(buf)
+		} else if resp.Header().Command() != smb2.SMB2_SESSION_SETUP && ss.encryptData {
+			wipeSignatures(buf)
+			buf = ss.encrypt(buf)
+		} else if resp.Header().Command() == smb2.SMB2_SESSION_SETUP || resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
 			ss.sign(buf)
 		} else { // Otherwise, wipe the signature(s)
-			var off uint32
-			var zero [16]byte
-			for {
-				next := binary.LittleEndian.Uint32(buf[off+20 : off+24])
-				copy(buf[off+48:off+64], zero[:])
-				off += next
-				if next == 0 {
-					break
-				}
-			}
+			wipeSignatures(buf)
 		}
 	}
 

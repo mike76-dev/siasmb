@@ -31,6 +31,7 @@ func (dc DatabaseConfig) String() string {
 
 // Config lists the config fields.
 type Config struct {
+	Debug          bool           `yaml:"debug"`
 	Mode           string         `yaml:"mode"`
 	MaxConnections int            `yaml:"maxConnections"`
 	API            APIConfig      `yaml:"api"`

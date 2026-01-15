@@ -22,8 +22,8 @@ type WriteRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (wr WriteRequest) Validate(supportsMultiCredit bool) error {
-	if err := Header(wr.data).Validate(); err != nil {
+func (wr WriteRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
+	if err := Header(wr.data).Validate(dialect); err != nil {
 		return err
 	}
 
@@ -107,6 +107,8 @@ func (wr *WriteResponse) FromRequest(req GenericRequest) {
 	Header(wr.data).SetStatus(STATUS_OK)
 	if Header(wr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(wr.data).SetCreditResponse(0)
+	} else {
+		Header(wr.data).SetCreditResponse(max(req.Header().CreditCharge(), req.Header().CreditRequest()))
 	}
 }
 

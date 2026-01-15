@@ -20,6 +20,7 @@ const (
 	STATUS_INVALID_HANDLE           = 0xc0000008
 	STATUS_INVALID_PARAMETER        = 0xc000000d
 	STATUS_NO_SUCH_FILE             = 0xc000000f
+	STATUS_INVALID_DEVICE_REQUEST   = 0xC0000010
 	STATUS_END_OF_FILE              = 0xc0000011
 	STATUS_MORE_PROCESSING_REQUIRED = 0xc0000016
 	STATUS_ACCESS_DENIED            = 0xc0000022
@@ -92,6 +93,9 @@ func NewErrorResponse(req GenericRequest, status uint32, data []byte) *ErrorResp
 	er := &ErrorResponse{}
 	er.FromRequest(req)
 	Header(er.data).SetStatus(status)
+	if status == STATUS_PENDING {
+		Header(er.data).SetCreditResponse(0)
+	}
 	er.SetErrorData(data)
 	return er
 }

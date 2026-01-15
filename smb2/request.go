@@ -27,19 +27,24 @@ const (
 
 // GenericRequest implements a few common methods of SMB2 requests.
 type GenericRequest interface {
-	Validate(bool) error
+	Validate(bool, uint16) error
 	Header() Header
+	Len() int
 	CancelRequestID() uint64
 	GroupID() uint64
 	OpenID() []byte
+	IsEncrypted() bool
+	TransformSessionID() uint64
 }
 
 // Request is the representation of an SMB2 request.
 type Request struct {
-	cancelRequestID uint64
-	groupID         uint64
-	data            []byte
-	openID          []byte
+	cancelRequestID    uint64
+	groupID            uint64
+	data               []byte
+	openID             []byte
+	isEncrypted        bool
+	transformSessionID uint64
 }
 
 // structureSize returns the StructureSize field of an SMB2 request.
@@ -52,13 +57,15 @@ func (req Request) structureSize() uint16 {
 }
 
 // GetRequests parses the message body for SMB/SMB2 requests.
-func GetRequests(data []byte, cid uint64) (reqs []*Request, err error) {
+func GetRequests(data []byte, cid uint64, dialect uint16, tsid uint64) (reqs []*Request, err error) {
 	req := &Request{
-		cancelRequestID: cid,
-		data:            data,
+		cancelRequestID:    cid,
+		data:               data,
+		isEncrypted:        tsid != 0,
+		transformSessionID: tsid,
 	}
 
-	if err := req.Header().Validate(); err != nil {
+	if err := req.Header().Validate(dialect); err != nil {
 		return nil, err
 	}
 
@@ -97,11 +104,13 @@ func GetRequests(data []byte, cid uint64) (reqs []*Request, err error) {
 
 		off += next
 		req = &Request{
-			cancelRequestID: cid,
-			data:            data[off:],
+			cancelRequestID:    cid,
+			data:               data[off:],
+			isEncrypted:        tsid != 0,
+			transformSessionID: tsid,
 		}
 
-		if err := req.Header().Validate(); err != nil {
+		if err := req.Header().Validate(dialect); err != nil {
 			return nil, err
 		}
 
@@ -122,13 +131,18 @@ func GetRequests(data []byte, cid uint64) (reqs []*Request, err error) {
 }
 
 // Validate returns an error if the request is malformed, nil otherwise.
-func (req Request) Validate(_ bool) error {
-	return req.Header().Validate()
+func (req Request) Validate(_ bool, dialect uint16) error {
+	return req.Header().Validate(dialect)
 }
 
 // Header casts the request to the Header type.
 func (req Request) Header() Header {
 	return Header(req.data)
+}
+
+// Len returns the length of the request body.
+func (req Request) Len() int {
+	return len(req.data)
 }
 
 // CancelRequestID returns the cancel ID of the request.
@@ -152,6 +166,27 @@ func (req *Request) SetOpenID(id []byte) {
 	copy(req.openID, id)
 }
 
+// IsEncrypted returns true if the request is encrypted.
+func (req Request) IsEncrypted() bool {
+	return req.isEncrypted
+}
+
+// SetEncrypted changes the encryption status of the request.
+func (req *Request) SetEncrypted(enc bool) {
+	req.isEncrypted = enc
+}
+
+// TransformSessionID returns the SessionID sent by the client in the
+// SMB2 TRANSFORM_HEADER, if the request is encrypted.
+func (req Request) TransformSessionID() uint64 {
+	return req.transformSessionID
+}
+
+// SetTransformSessionID sets the TransformSessionID field of the request.
+func (req *Request) SetTransformSessionID(id uint64) {
+	req.transformSessionID = id
+}
+
 // GenericResponse implements a few common methods of SMB2 responses.
 type GenericResponse interface {
 	FromRequest(req GenericRequest)
@@ -166,15 +201,17 @@ type GenericResponse interface {
 	OpenID() []byte
 	SetOpenID(id []byte)
 	Append(newResp GenericResponse)
+	ShouldEncrypt() bool
 }
 
 // Response is the representation of an SMB2 response.
 type Response struct {
-	data      []byte
-	groupID   uint64
-	sessionID uint64
-	treeID    uint32
-	openID    []byte
+	data          []byte
+	groupID       uint64
+	sessionID     uint64
+	treeID        uint32
+	openID        []byte
+	shouldEncrypt bool
 }
 
 // EncodedLength returns the length of the response body.
@@ -238,6 +275,7 @@ func (resp *Response) FromRequest(req GenericRequest) {
 		Header(resp.data).ClearFlag(FLAGS_RELATED_OPERATIONS)
 	}
 	resp.groupID = req.GroupID()
+	resp.shouldEncrypt = req.IsEncrypted()
 }
 
 // Append adds a new response to the chain.
@@ -262,14 +300,19 @@ func (resp *Response) Append(newResp GenericResponse) {
 	resp.data = append(resp.data, newResp.Encode()...)
 }
 
+// ShouldEncrypt returns true if the response should be encrypted.
+func (resp Response) ShouldEncrypt() bool {
+	return resp.shouldEncrypt
+}
+
 // CancelRequest represents an SMB2_CANCEL request.
 type CancelRequest struct {
 	Request
 }
 
 // Validate implements GenericRequest interface.
-func (cr CancelRequest) Validate(_ bool) error {
-	if err := Header(cr.data).Validate(); err != nil {
+func (cr CancelRequest) Validate(_ bool, dialect uint16) error {
+	if err := Header(cr.data).Validate(dialect); err != nil {
 		return err
 	}
 
@@ -290,8 +333,8 @@ type EchoRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (er EchoRequest) Validate(_ bool) error {
-	if err := Header(er.data).Validate(); err != nil {
+func (er EchoRequest) Validate(_ bool, dialect uint16) error {
+	if err := Header(er.data).Validate(dialect); err != nil {
 		return err
 	}
 

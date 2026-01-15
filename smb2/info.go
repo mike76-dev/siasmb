@@ -21,8 +21,8 @@ type SetInfoRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (sir SetInfoRequest) Validate(supportsMultiCredit bool) error {
-	if err := Header(sir.data).Validate(); err != nil {
+func (sir SetInfoRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
+	if err := Header(sir.data).Validate(dialect); err != nil {
 		return err
 	}
 
@@ -106,6 +106,8 @@ func (sir *SetInfoResponse) FromRequest(req GenericRequest) {
 	Header(sir.data).SetStatus(STATUS_OK)
 	if Header(sir.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(sir.data).SetCreditResponse(0)
+	} else {
+		Header(sir.data).SetCreditResponse(max(req.Header().CreditCharge(), req.Header().CreditRequest()))
 	}
 }
 

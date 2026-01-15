@@ -86,7 +86,15 @@ func main() {
 	defer l.Close()
 
 	// Start the SMB server.
-	server := newServer(l, db)
+	server := newServer(l, db, cfg.Debug)
+	if smb2.MaxSupportedDialect != smb2.SMB_DIALECT_202 {
+		server.serverCapabilities |= smb2.GLOBAL_CAP_LARGE_MTU
+	}
+	if smb2.Is3X(smb2.MaxSupportedDialect) {
+		server.serverCapabilities |= smb2.GLOBAL_CAP_ENCRYPTION
+		server.encryptData = true
+		server.rejectUnencryptedAccess = true
+	}
 
 	// Start a thread to watch for the stop signal.
 	c := make(chan os.Signal, 1)
@@ -101,10 +109,11 @@ func main() {
 					// Reset the abuse protection.
 					server.mu.Lock()
 					server.connectionCount = make(map[string]int)
+					cl := server.connectionList
 					server.mu.Unlock()
 
 					// Drop unused connections.
-					for _, cn := range server.connectionList {
+					for _, cn := range cl {
 						if cn.isStale() {
 							server.closeConnection(cn)
 						}

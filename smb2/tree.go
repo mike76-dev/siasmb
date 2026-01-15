@@ -96,8 +96,8 @@ type TreeConnectRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (tcr TreeConnectRequest) Validate(supportsMultiCredit bool) error {
-	if err := Header(tcr.data).Validate(); err != nil {
+func (tcr TreeConnectRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
+	if err := Header(tcr.data).Validate(dialect); err != nil {
 		return err
 	}
 
@@ -180,11 +180,14 @@ func (tcr *TreeConnectResponse) FromRequest(req GenericRequest) {
 }
 
 // Generate populates the fields of the SMB2_TREE_CONNECT response.
-func (tcr *TreeConnectResponse) Generate(tid uint32, st uint8, access uint32) {
+func (tcr *TreeConnectResponse) Generate(tid uint32, st uint8, access uint32, encrypt bool) {
 	Header(tcr.data).SetStatus(STATUS_OK)
 	Header(tcr.data).SetTreeID(tid)
 	tcr.SetShareType(st)
 	tcr.SetMaximalAccess(access)
+	if encrypt {
+		tcr.SetShareFlags(SHAREFLAG_ENCRYPT_DATA)
+	}
 }
 
 // TreeDisconnectRequest represents an SMB2_TREE_DISCONNECT request.
@@ -193,8 +196,8 @@ type TreeDisconnectRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (tdr TreeDisconnectRequest) Validate(_ bool) error {
-	if err := Header(tdr.data).Validate(); err != nil {
+func (tdr TreeDisconnectRequest) Validate(_ bool, dialect uint16) error {
+	if err := Header(tdr.data).Validate(dialect); err != nil {
 		return err
 	}
 

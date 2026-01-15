@@ -8,7 +8,7 @@ How to set up a `renterd` node is described here: [https://github.com/SiaFoundat
 * The SMB port 445 needs to be open on the machine where the server is running.
 
 ## Limitations
-* At this moment, only the SMB dialects 2.0.2 and 2.1 are supported. Newer dialects will potentially be supported in the future.
+* At this moment, only the SMB dialects 2.0.2, 2.1, and 3.0 are supported. Newer dialects will potentially be supported in the future.
 * Guest or anonymous access is not supported.
 
 ## Installing PostgreSQL
@@ -75,6 +75,7 @@ Inside the `psql` prompt:
 ## Running the Server
 A config file, `siasmb.yml`, needs to be created in the directory where the server will be running. It should contain the following lines:
 ```
+debug: false               # indicates whether to display the session ID and key for tools like Wireshark to decrypt the encrypted data
 node: renterd              # indexd mode will be supported at a later step
 maxConnections: 30         # the maximum number of connections accepted from the same IP within 10 minutes
 api:
@@ -177,8 +178,6 @@ sudo umount /mnt/sia
 12. Copy a directory containing files to the share root
 13. Copy that directory from the share root
 14. Disconnect from the share
-
-Please note: on Windows, there may be issues with reads or writes when OneDrive is enabled and the file is not available locally.
 
 ## Bug Reporting
 Please do not hesitate to open an issue if you discover any bugs.

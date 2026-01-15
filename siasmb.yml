@@ -1,3 +1,4 @@
+debug: false
 mode: renterd
 maxConnections: 30
 api:

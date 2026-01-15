@@ -55,6 +55,9 @@ type connection struct {
 	supportsMultiCredit   bool
 	sessionTable          map[uint64]*session
 	creationTime          time.Time
+	serverCapabilities    uint32
+	clientSecurityMode    uint16
+	serverSecurityMode    uint16
 
 	// Auxiliary fields.
 	conn       net.Conn
@@ -100,11 +103,40 @@ func (c *connection) acceptRequest(msg []byte) error {
 		return errLongRequest
 	}
 
+	if len(msg) < smb2.SMB2HeaderSize {
+		return smb2.ErrWrongLength
+	}
+
 	// Assign a random cancel ID.
 	cid := make([]byte, 8)
 	rand.Read(cid)
 
-	reqs, err := smb2.GetRequests(msg, binary.LittleEndian.Uint64(cid))
+	// Check for encryption.
+	var tsid uint64
+	var size uint32
+	if smb2.Header(msg).ProtocolID() == smb2.PROTOCOL_SMB2_ENCRYPTED {
+		if c.serverCapabilities&smb2.GLOBAL_CAP_ENCRYPTION == 0 {
+			return smb2.ErrEncryptedMessage
+		}
+		if smb2.Header(msg).EncryptionFlags() != 1 {
+			return smb2.ErrWrongFormat
+		}
+		tsid = smb2.Header(msg).TransformSessionID()
+		size = smb2.Header(msg).OriginalMessageSize()
+		ss, ok := c.sessionTable[tsid]
+		if !ok {
+			return errSessionNotFound
+		}
+		if ss.isAnonymous || ss.isGuest {
+			return errAccessDenied
+		}
+		msg = ss.decrypt(msg)
+		if uint32(len(msg)) != size {
+			return smb2.ErrWrongLength
+		}
+	}
+
+	reqs, err := smb2.GetRequests(msg, binary.LittleEndian.Uint64(cid), c.negotiateDialect, tsid)
 	if err != nil {
 		return err
 	}
@@ -112,7 +144,7 @@ func (c *connection) acceptRequest(msg []byte) error {
 	var ss *session
 	var found bool
 	for i, req := range reqs {
-		if err := req.Header().Validate(); err != nil {
+		if err := req.Header().Validate(c.negotiateDialect); err != nil {
 			return err
 		}
 
@@ -125,9 +157,25 @@ func (c *connection) acceptRequest(msg []byte) error {
 			}
 			c.grantCredits(mid, 1) // Grant just one credit
 		} else {
+			if c.supportsMultiCredit {
+				if req.Header().Command() != smb2.SMB2_READ &&
+					req.Header().Command() != smb2.SMB2_WRITE &&
+					req.Header().Command() != smb2.SMB2_IOCTL &&
+					req.Header().Command() != smb2.SMB2_QUERY_DIRECTORY &&
+					req.Header().Command() != smb2.SMB2_CHANGE_NOTIFY &&
+					req.Header().Command() != smb2.SMB2_QUERY_INFO &&
+					req.Header().Command() != smb2.SMB2_SET_INFO &&
+					req.Len() > 68*1024 {
+					return errLongRequest
+				}
+			} else {
+				if req.Len() > 68*1024 {
+					return errLongRequest
+				}
+			}
 			mid = req.Header().MessageID()
-			credits := req.Header().CreditRequest() // Grant whatever the CreditRequest is
-			if credits == 0 {                       // The number of credits cannot be zero
+			credits := max(req.Header().CreditCharge(), req.Header().CreditRequest()) // Grant whatever the CreditRequest is. If CreditCharge is greater, grant that much.
+			if credits == 0 {                                                         // The number of credits cannot be zero
 				credits = 1
 			}
 
@@ -188,7 +236,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 	if req.Header().IsSmb() && req.Header().LegacyCommand() == smb2.SMB_COM_NEGOTIATE {
 		// The client has sent a legacy SMB_COM_NEGOTIATE request.
 		nr := smb2.NegotiateRequest{Request: *req}
-		if err := nr.Validate(c.supportsMultiCredit); err != nil {
+		if err := nr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrDialectNotSupported) { // The client doesn't support SMB2, decline
 				resp := smb2.NegotiateErrorResponse(smb2.STATUS_NOT_SUPPORTED)
 				return resp, nil, nil
@@ -207,12 +255,15 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		case smb2.SMB_DIALECT_202:
 			c.negotiateDialect = dialect
 			c.dialect = "2.0.2"
+			c.maxTransactSize = 65536
+			c.maxReadSize = 65536
+			c.maxWriteSize = 65536
 		case smb2.SMB_DIALECT_MULTICREDIT:
 			c.supportsMultiCredit = true
 		}
 		c.grantCredits(nr.Header().MessageID(), 1) // Grant just one credit
 
-		resp := smb2.NewNegotiateResponse(c.server.serverGuid[:], c.ntlmServer, dialect)
+		resp := smb2.NewNegotiateResponse(c.server.serverGuid[:], c.ntlmServer, dialect, c.serverCapabilities, uint32(c.maxTransactSize), uint32(c.maxReadSize), uint32(c.maxWriteSize))
 		return resp, nil, nil
 	}
 
@@ -224,7 +275,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		nr := smb2.NegotiateRequest{Request: *req}
-		if err := nr.Validate(c.supportsMultiCredit); err != nil {
+		if err := nr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrDialectNotSupported) {
 				resp := smb2.NewErrorResponse(nr, smb2.STATUS_NOT_SUPPORTED, nil)
 				return resp, nil, nil
@@ -239,6 +290,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		c.clientCapabilities = nr.Capabilities()
 		c.clientGuid = nr.ClientGuid()
+		c.clientSecurityMode = nr.SecurityMode()
 		c.negotiateDialect = nr.MaxCommonDialect()
 		switch c.negotiateDialect {
 		case smb2.SMB_DIALECT_202:
@@ -259,23 +311,32 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		if c.negotiateDialect != smb2.SMB_DIALECT_202 {
 			c.supportsMultiCredit = true
+		} else {
+			c.maxTransactSize = 65536
+			c.maxReadSize = 65536
+			c.maxWriteSize = 65536
 		}
 
 		resp := &smb2.NegotiateResponse{}
 		resp.FromRequest(nr)
-		resp.Generate(c.server.serverGuid[:], c.ntlmServer, c.negotiateDialect)
+		resp.Generate(c.server.serverGuid[:], c.ntlmServer, c.negotiateDialect, c.serverCapabilities, uint32(c.maxTransactSize), uint32(c.maxReadSize), uint32(c.maxWriteSize))
 
 		return resp, nil, nil
 
 	case smb2.SMB2_SESSION_SETUP:
 		ssr := smb2.SessionSetupRequest{Request: *req}
-		if err := ssr.Validate(c.supportsMultiCredit); err != nil {
+		if err := ssr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(ssr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
 			}
 			log.Println("Invalid SMB2_SESSION_SETUP request:", err)
 			return nil, nil, err
+		}
+
+		if smb2.Is3X(c.negotiateDialect) && c.server.encryptData && c.clientCapabilities&smb2.GLOBAL_CAP_ENCRYPTION == 0 {
+			resp := smb2.NewErrorResponse(ssr, smb2.STATUS_ACCESS_DENIED, nil)
+			return resp, nil, nil
 		}
 
 		// Find a session or create a new one.
@@ -310,8 +371,30 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 			// User successfully authenticated.
 			ss.finalize(ssr)
+			if smb2.Is3X(c.negotiateDialect) && c.server.encryptData && c.serverCapabilities&smb2.GLOBAL_CAP_ENCRYPTION != 0 {
+				ss.signingRequired = false
+				ss.encryptData = true
+			} else {
+				ss.signingRequired = true
+				ss.encryptData = false
+			}
 			ss.idleTime = time.Now()
 			token = spnego.FinalNegTokenResp
+			if smb2.Is3X(c.negotiateDialect) {
+				c.server.mu.Lock()
+				cl, ok := c.server.globalClientTable[[16]byte(c.clientGuid)]
+				c.server.mu.Unlock()
+				if !ok {
+					cl = &smbClient{[16]byte(c.clientGuid), c.negotiateDialect}
+					c.server.mu.Lock()
+					c.server.globalClientTable[[16]byte(c.clientGuid)] = cl
+					c.server.mu.Unlock()
+				} else if cl.dialect != c.negotiateDialect {
+					c.server.deregisterSession(c, ss.sessionID)
+					resp := smb2.NewErrorResponse(ssr, smb2.STATUS_USER_SESSION_DELETED, nil)
+					return resp, nil, nil
+				}
+			}
 		} else { // Begin the session setup process
 			negToken, err := spnego.DecodeNegTokenInit(ssr.SecurityBuffer())
 			var noSpnego bool
@@ -350,6 +433,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			default:
 			}
 		}
+		if ss.encryptData {
+			flags |= smb2.SESSION_FLAG_ENCRYPT_DATA
+		}
 
 		resp := &smb2.SessionSetupResponse{}
 		resp.FromRequest(ssr)
@@ -362,7 +448,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_LOGOFF:
 		lr := smb2.LogoffRequest{Request: *req}
-		if err := lr.Validate(c.supportsMultiCredit); err != nil {
+		if err := lr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(lr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -389,7 +475,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_TREE_CONNECT:
 		tcr := smb2.TreeConnectRequest{Request: *req}
-		if err := tcr.Validate(c.supportsMultiCredit); err != nil {
+		if err := tcr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(tcr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -423,13 +509,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		resp := &smb2.TreeConnectResponse{}
 		resp.FromRequest(tcr)
-		resp.Generate(tc.treeID, uint8(tc.share.shareType), tc.maximalAccess)
+		resp.Generate(tc.treeID, uint8(tc.share.shareType), tc.maximalAccess, tc.share.encryptData)
 
 		return resp, ss, nil
 
 	case smb2.SMB2_TREE_DISCONNECT:
 		tdr := smb2.TreeDisconnectRequest{Request: *req}
-		if err := tdr.Validate(c.supportsMultiCredit); err != nil {
+		if err := tdr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(tdr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -460,7 +546,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_CREATE:
 		cr := smb2.CreateRequest{Request: *req}
-		if err := cr.Validate(c.supportsMultiCredit); err != nil {
+		if err := cr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(cr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -741,7 +827,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_CLOSE:
 		cr := smb2.CloseRequest{Request: *req}
-		if err := cr.Validate(c.supportsMultiCredit); err != nil {
+		if err := cr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(cr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -770,41 +856,40 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		id := cr.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		var op *open
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(cr, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
 
-		req.SetOpenID(id)
 		if op.pendingUpload != nil { // This SMB2_CLOSE request is a sign for us to flush any active multipart upload
-			_, err := op.treeConnect.share.client.FinishUpload(
-				op.ctx,
-				op.treeConnect.share.bucket,
-				op.pathName,
-				op.pendingUpload.uploadID,
-				op.pendingUpload.parts,
-			)
-			if err != nil {
-				log.Println("Error completing write:", err)
+			op.pendingUpload.mu.Lock()
+			pending := len(op.pendingUpload.pending)
+			op.pendingUpload.mu.Unlock()
+			if pending == 0 {
+				_, err := op.treeConnect.share.client.FinishUpload(
+					op.ctx,
+					op.treeConnect.share.bucket,
+					op.pathName,
+					op.pendingUpload.uploadID,
+					op.pendingUpload.parts,
+				)
+				if err != nil {
+					log.Println("Error completing write:", err)
+				} else {
+					op.size = op.pendingUpload.totalSize
+					op.allocated = op.pendingUpload.totalSize
+					op.pendingUpload = nil
+				}
 			} else {
-				op.size = op.pendingUpload.totalSize
-				op.allocated = op.pendingUpload.totalSize
-				op.pendingUpload = nil
+				if err := op.treeConnect.share.client.AbortUpload(
+					op.ctx,
+					op.treeConnect.share.bucket,
+					op.pathName,
+					op.pendingUpload.uploadID,
+				); err != nil {
+					log.Println("Error aborting write:", err)
+				}
 			}
 		}
 
@@ -848,7 +933,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_FLUSH: // We don't do anything on an SMB2_FLUSH request, only send a response
 		fr := smb2.FlushRequest{Request: *req}
-		if err := fr.Validate(c.supportsMultiCredit); err != nil {
+		if err := fr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(fr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -873,7 +958,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_READ:
 		rr := smb2.ReadRequest{Request: *req}
-		if err := rr.Validate(c.supportsMultiCredit); err != nil {
+		if err := rr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(rr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -897,27 +982,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := rr.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(rr, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(rr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
-
-		req.SetOpenID(id)
 
 		if op.grantedAccess&(smb2.FILE_READ_DATA|smb2.GENERIC_READ) == 0 {
 			resp := smb2.NewErrorResponse(rr, smb2.STATUS_ACCESS_DENIED, nil)
@@ -1019,7 +1089,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_WRITE:
 		wr := smb2.WriteRequest{Request: *req}
-		if err := wr.Validate(c.supportsMultiCredit); err != nil {
+		if err := wr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -1053,24 +1123,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := wr.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(wr, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(wr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
 
 		if c.dialect == "2.1" || c.dialect == "3.0" {
@@ -1080,7 +1137,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 		}
 
-		req.SetOpenID(id)
 		if op.fileName != "" && op.fileName[0] == '.' { // Ignore SMB2_WRITE requests to any hidden file (whose name starts with a dot)
 			resp := &smb2.WriteResponse{}
 			resp.FromRequest(wr)
@@ -1096,6 +1152,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		// A special case: some clients use the SRVSVC named pipe for writing requests to it
 		// and reading responses from it. Usually, an SMB2_IOCTL request serves this purpose.
 		if strings.ToLower(op.fileName) == "srvsvc" {
+			if smb2.Is3X(c.negotiateDialect) && wr.Flags()&(smb2.WRITEFLAG_WRITE_THROUGH|smb2.WRITEFLAG_WRITE_UNBUFFERED) != 0 {
+				resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, ss, nil
+			}
 			buf := make([]byte, len(wr.Buffer()))
 			copy(buf, wr.Buffer())
 			op.mu.Lock()
@@ -1115,7 +1175,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, ss, nil
 			}
 
-			op.pendingUpload = &upload{uploadID: id}
+			op.pendingUpload = &upload{uploadID: id, pending: make(map[uint64]*uploadChunk)}
 		}
 
 		// An SMB2_WRITE request can take long enough, especially on the Sia network, for the client
@@ -1137,83 +1197,97 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		go func() {
 			var resp smb2.GenericResponse
-			r := bytes.NewReader(wr.Buffer())
 			if op.pendingUpload == nil { // Should not happen
 				resp = smb2.NewErrorResponse(wr, smb2.STATUS_NOT_SUPPORTED, nil)
 			} else {
+				offset := wr.Offset()
+				data := append([]byte{}, wr.Buffer()...)
 				op.pendingUpload.mu.Lock()
-				op.pendingUpload.partCount++
-				count := op.pendingUpload.partCount
-				op.pendingUpload.mu.Unlock()
-				eTag, err := tc.share.client.UploadPart(
-					op.ctx,
-					r,
-					tc.share.bucket,
-					op.pathName,
-					op.pendingUpload.uploadID,
-					count,
-					wr.Offset(),
-					uint64(len(wr.Buffer())),
-				)
-				if err != nil {
-					log.Println("Error writing data:", err)
-					resp = smb2.NewErrorResponse(wr, smb2.STATUS_DATA_ERROR, nil)
-				} else {
-					if op.pendingUpload != nil { // Add the part information to the pending upload
-						op.pendingUpload.mu.Lock()
+				op.pendingUpload.pending[offset] = &uploadChunk{offset, data}
+				var err error
+				for {
+					off := op.pendingUpload.nextOffset
+					chunk, ok := op.pendingUpload.pending[off]
+					if !ok {
+						break
+					}
+					op.pendingUpload.partCount++
+					var eTag string
+					eTag, err = tc.share.client.UploadPart(
+						op.ctx,
+						bytes.NewReader(chunk.data),
+						tc.share.bucket,
+						op.pathName,
+						op.pendingUpload.uploadID,
+						op.pendingUpload.partCount,
+						chunk.offset,
+						uint64(len(chunk.data)),
+					)
+					if err != nil {
+						log.Println("Error writing data:", err)
+						resp = smb2.NewErrorResponse(wr, smb2.STATUS_DATA_ERROR, nil)
+						break
+					} else {
 						op.pendingUpload.parts = append(op.pendingUpload.parts, api.MultipartCompletedPart{
-							PartNumber: count,
+							PartNumber: op.pendingUpload.partCount,
 							ETag:       eTag,
 						})
-						op.pendingUpload.totalSize += uint64(len(wr.Buffer()))
-						size := op.pendingUpload.totalSize
-						op.pendingUpload.mu.Unlock()
-						// If we know the file size, and if all parts have been uploaded, flush the upload.
-						if (op.size > 0 && size >= op.size) || (op.allocated > 0 && size >= op.allocated) {
-							eTag, err = tc.share.client.FinishUpload(
-								op.ctx,
-								tc.share.bucket,
-								op.pathName,
-								op.pendingUpload.uploadID,
-								op.pendingUpload.parts,
-							)
-							if err != nil {
-								log.Println("Error completing write:", err)
-								resp = smb2.NewErrorResponse(wr, smb2.STATUS_DATA_ERROR, nil)
-							} else {
-								op.size = size
-								op.allocated = size
-								op.pendingUpload = nil
-							}
-						} else {
-							// If we don't know the file size, wait 10 minutes, then flush anyway.
-							go func(size uint64) {
-								<-time.After(10 * time.Minute)
-								if op != nil && op.pendingUpload != nil && op.pendingUpload.totalSize == size {
-									eTag, err = op.treeConnect.share.client.FinishUpload(
-										op.ctx,
-										op.treeConnect.share.bucket,
-										op.pathName,
-										op.pendingUpload.uploadID,
-										op.pendingUpload.parts,
-									)
-									if err != nil {
-										log.Println("Error completing write:", err)
-									} else {
-										op.size = size
-										op.allocated = size
-										op.pendingUpload = nil
-									}
-								}
-							}(op.pendingUpload.totalSize)
-						}
-
-						resp = &smb2.WriteResponse{}
-						resp.FromRequest(wr)
-						resp.(*smb2.WriteResponse).Generate(uint32(len(wr.Buffer())))
-						resp.Header().SetAsyncID(asyncID)
-						resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
+						op.pendingUpload.totalSize += uint64(len(chunk.data))
+						op.pendingUpload.nextOffset += uint64(len(chunk.data))
+						delete(op.pendingUpload.pending, chunk.offset)
 					}
+				}
+				size := op.pendingUpload.totalSize
+				if err == nil {
+					// If we know the file size, and if all parts have been uploaded, flush the upload.
+					if ((op.size > 0 && size >= op.size) || (op.allocated > 0 && size >= op.allocated)) && len(op.pendingUpload.pending) == 0 {
+						_, err = tc.share.client.FinishUpload(
+							op.ctx,
+							tc.share.bucket,
+							op.pathName,
+							op.pendingUpload.uploadID,
+							op.pendingUpload.parts,
+						)
+						if err != nil {
+							log.Println("Error completing write:", err)
+							resp = smb2.NewErrorResponse(wr, smb2.STATUS_DATA_ERROR, nil)
+						} else {
+							op.size = size
+							op.allocated = size
+							op.pendingUpload = nil
+						}
+					} else {
+						// If we don't know the file size, wait 10 minutes, then flush anyway.
+						size := op.pendingUpload.totalSize
+						go func(size uint64) {
+							<-time.After(10 * time.Minute)
+							if op != nil && op.pendingUpload != nil && op.pendingUpload.totalSize == size {
+								_, err = op.treeConnect.share.client.FinishUpload(
+									op.ctx,
+									op.treeConnect.share.bucket,
+									op.pathName,
+									op.pendingUpload.uploadID,
+									op.pendingUpload.parts,
+								)
+								if err != nil {
+									log.Println("Error completing write:", err)
+								} else {
+									op.size = size
+									op.allocated = size
+									op.pendingUpload = nil
+								}
+							}
+						}(size)
+					}
+
+					resp = &smb2.WriteResponse{}
+					resp.FromRequest(wr)
+					resp.(*smb2.WriteResponse).Generate(uint32(len(wr.Buffer())))
+					resp.Header().SetAsyncID(asyncID)
+					resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
+				}
+				if op.pendingUpload != nil {
+					op.pendingUpload.mu.Unlock()
 				}
 			}
 
@@ -1229,7 +1303,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_LOCK: // We don't do anything on an SMB2_LOCK request, only send a response
 		lr := smb2.LockRequest{Request: *req}
-		if err := lr.Validate(c.supportsMultiCredit); err != nil {
+		if err := lr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(lr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -1254,7 +1328,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_IOCTL:
 		ir := smb2.IoctlRequest{Request: *req}
-		if err := ir.Validate(c.supportsMultiCredit); err != nil {
+		if err := ir.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -1292,40 +1366,60 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		id := ir.FileID()
 		switch ir.CtlCode() {
-		case smb2.FSCTL_VALIDATE_NEGOTIATE_INFO:
-			resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil) // Mocking the behavior of Samba on Linux
+		case smb2.FSCTL_DFS_GET_REFERRALS,
+			smb2.FSCTL_DFS_GET_REFERRALS_EX,
+			smb2.FSCTL_QUERY_NETWORK_INTERFACE_INFO,
+			smb2.FSCTL_VALIDATE_NEGOTIATE_INFO,
+			smb2.FSCTL_PIPE_WAIT:
+			var resp smb2.GenericResponse
+			if !bytes.Equal(id, smb2.DummyFileID) {
+				resp = smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, nil)
+			} else {
+				if ir.CtlCode() == smb2.FSCTL_VALIDATE_NEGOTIATE_INFO {
+					if smb2.Is3X(c.negotiateDialect) {
+						if ir.MaxOutputResponse() < 24 {
+							return nil, nil, smb2.ErrWrongLength
+						}
+						caps, guid, sm, _, err := ir.ValidateNegotiateInfo()
+						if err != nil {
+							return nil, nil, smb2.ErrInvalidParameter
+						} else if !bytes.Equal(guid, c.clientGuid) {
+							return nil, nil, smb2.ErrInvalidParameter
+						} else if sm != c.clientSecurityMode {
+							return nil, nil, smb2.ErrInvalidParameter
+						} else if caps != c.clientCapabilities {
+							return nil, nil, smb2.ErrInvalidParameter
+						}
+						r := &smb2.IoctlResponse{}
+						r.FromRequest(ir)
+						r.Generate(ir.CtlCode(), smb2.DummyFileID, 0, smb2.ValidateNegotiateInfo(c.serverCapabilities, c.server.serverGuid[:], c.serverSecurityMode, c.negotiateDialect))
+						return r, ss, nil
+					} else {
+						resp = smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
+					}
+				} else if ir.CtlCode() == smb2.FSCTL_DFS_GET_REFERRALS || ir.CtlCode() == smb2.FSCTL_DFS_GET_REFERRALS_EX {
+					resp = smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_DEVICE_REQUEST, nil)
+				} else {
+					resp = smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
+				}
+			}
+
 			return resp, ss, nil
-		case smb2.FSCTL_DFS_GET_REFERRALS:
-			resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_FOUND, nil) // Mocking the behavior of Samba on Linux
-			return resp, ss, nil
+
 		case smb2.FSCTL_PIPE_TRANSCEIVE:
 			if tc.share.name != "ipc$" { // FSCTL_PIPE_TRANSCEIVE is only allowed on the IPC$ share
 				resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
 				return resp, ss, nil
 			}
 
-			var op *open
-			id := ir.FileID()
-			fid := binary.LittleEndian.Uint64(id[:8])
-			dfid := binary.LittleEndian.Uint64(id[8:16])
-			ss.mu.Lock()
-			op, found = ss.openTable[fid]
-			ss.mu.Unlock()
-			if !found || op.durableFileID != dfid {
-				if req.GroupID() > 0 {
-					op = c.findOpen(req.GroupID())
-				}
-
-				if op == nil {
-					resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
-					return resp, ss, nil
-				}
-
-				id = op.id()
+			op := c.findOpen(ss, id, req)
+			if op == nil {
+				resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
+				return resp, ss, nil
 			}
 
-			req.SetOpenID(id)
 			ip := rpc.InboundPacket{}
 			ip.Read(bytes.NewBuffer(ir.InputBuffer()))
 
@@ -1459,54 +1553,24 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 
 		case smb2.FSCTL_SRV_REQUEST_RESUME_KEY:
-			var op *open
-			id := ir.FileID()
-			fid := binary.LittleEndian.Uint64(id[:8])
-			dfid := binary.LittleEndian.Uint64(id[8:16])
-			ss.mu.Lock()
-			op, found = ss.openTable[fid]
-			ss.mu.Unlock()
-			if !found || op.durableFileID != dfid {
-				if req.GroupID() > 0 {
-					op = c.findOpen(req.GroupID())
-				}
-
-				if op == nil {
-					resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
-					return resp, ss, nil
-				}
-
-				id = op.id()
+			op := c.findOpen(ss, id, req)
+			if op == nil {
+				resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
+				return resp, ss, nil
 			}
 
-			req.SetOpenID(id)
 			resp := &smb2.IoctlResponse{}
 			resp.FromRequest(ir)
 			resp.Generate(ir.CtlCode(), id, 0, op.getResumeKey())
 			return resp, ss, nil
 
 		case smb2.FSCTL_CREATE_OR_GET_OBJECT_ID:
-			var op *open
-			id := ir.FileID()
-			fid := binary.LittleEndian.Uint64(id[:8])
-			dfid := binary.LittleEndian.Uint64(id[8:16])
-			ss.mu.Lock()
-			op, found = ss.openTable[fid]
-			ss.mu.Unlock()
-			if !found || op.durableFileID != dfid {
-				if req.GroupID() > 0 {
-					op = c.findOpen(req.GroupID())
-				}
-
-				if op == nil {
-					resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
-					return resp, ss, nil
-				}
-
-				id = op.id()
+			op := c.findOpen(ss, id, req)
+			if op == nil {
+				resp := smb2.NewErrorResponse(ir, smb2.STATUS_FILE_CLOSED, nil)
+				return resp, ss, nil
 			}
 
-			req.SetOpenID(id)
 			resp := &smb2.IoctlResponse{}
 			resp.FromRequest(ir)
 			resp.Generate(ir.CtlCode(), id, 0, op.getObjectID())
@@ -1519,7 +1583,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_ECHO:
 		er := smb2.EchoRequest{Request: *req}
-		if err := er.Validate(c.supportsMultiCredit); err != nil {
+		if err := er.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(er, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -1550,7 +1614,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_QUERY_DIRECTORY:
 		qdr := smb2.QueryDirectoryRequest{Request: *req}
-		if err := qdr.Validate(c.supportsMultiCredit); err != nil {
+		if err := qdr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -1598,24 +1662,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := qdr.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
 
 		if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // The Open must be a directory
@@ -1628,7 +1679,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		req.SetOpenID(id)
 		searchPath := qdr.FileName()
 		single := qdr.Flags()&smb2.RETURN_SINGLE_ENTRY > 0
 		var buf []byte
@@ -1677,7 +1727,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_CHANGE_NOTIFY:
 		cnr := smb2.ChangeNotifyRequest{Request: *req}
-		if err := cnr.Validate(c.supportsMultiCredit); err != nil {
+		if err := cnr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(cnr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -1701,24 +1751,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := cnr.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(cnr, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
 
 		if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // The Open must be a directory
@@ -1732,7 +1769,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		// Put the request in the async command list.
-		req.SetOpenID(id)
 		aid := make([]byte, 8)
 		rand.Read(aid)
 		asyncID := binary.LittleEndian.Uint64(aid)
@@ -1759,7 +1795,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_QUERY_INFO:
 		qir := smb2.QueryInfoRequest{Request: *req}
-		if err := qir.Validate(c.supportsMultiCredit); err != nil {
+		if err := qir.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(qir, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -1792,27 +1828,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := qir.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(qir, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(qir, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
-
-		req.SetOpenID(id)
 
 		var info []byte
 		switch qir.InfoType() {
@@ -1898,7 +1919,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 	case smb2.SMB2_SET_INFO:
 		sir := smb2.SetInfoRequest{Request: *req}
-		if err := sir.Validate(c.supportsMultiCredit); err != nil {
+		if err := sir.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 			if errors.Is(err, smb2.ErrInvalidParameter) {
 				resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, nil, nil
@@ -1931,27 +1952,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		var op *open
 		id := sir.FileID()
-		fid := binary.LittleEndian.Uint64(id[:8])
-		dfid := binary.LittleEndian.Uint64(id[8:16])
-		ss.mu.Lock()
-		op, found = ss.openTable[fid]
-		ss.mu.Unlock()
-		if !found || op.durableFileID != dfid {
-			if req.GroupID() > 0 {
-				op = c.findOpen(req.GroupID())
-			}
-
-			if op == nil {
-				resp := smb2.NewErrorResponse(sir, smb2.STATUS_FILE_CLOSED, nil)
-				return resp, ss, nil
-			}
-
-			id = op.id()
+		op := c.findOpen(ss, id, req)
+		if op == nil {
+			resp := smb2.NewErrorResponse(sir, smb2.STATUS_FILE_CLOSED, nil)
+			return resp, ss, nil
 		}
 
-		req.SetOpenID(id)
 		switch sir.InfoType() {
 		case smb2.INFO_FILE:
 			switch sir.FileInfoClass() {
@@ -2183,8 +2190,30 @@ func (c *connection) sendResponses() {
 	}
 }
 
-// findOpen finds an Open by the group ID of the response.
-func (c *connection) findOpen(groupID uint64) *open {
+// findOpen is a helper function that tries to find an open by its ID.
+func (c *connection) findOpen(ss *session, id []byte, req *smb2.Request) *open {
+	fid := binary.LittleEndian.Uint64(id[:8])
+	dfid := binary.LittleEndian.Uint64(id[8:16])
+
+	ss.mu.Lock()
+	op, found := ss.openTable[fid]
+	ss.mu.Unlock()
+
+	if !found || op.durableFileID != dfid {
+		if req.GroupID() > 0 {
+			op = c.findOpenByGroupID(req.GroupID())
+		}
+
+		if op != nil {
+			req.SetOpenID(op.id())
+		}
+	}
+
+	return op
+}
+
+// findOpenByGroupID finds an Open by the group ID of the response.
+func (c *connection) findOpenByGroupID(groupID uint64) *open {
 	c.mu.Lock()
 	resp, found := c.pendingResponses[groupID]
 	c.mu.Unlock()
@@ -2208,7 +2237,7 @@ func (c *connection) findOpen(groupID uint64) *open {
 // cancelRequest cancels a pending asynchronous request.
 func (c *connection) cancelRequest(req *smb2.Request) error {
 	cr := smb2.CancelRequest{Request: *req}
-	if err := cr.Validate(c.supportsMultiCredit); err != nil {
+	if err := cr.Validate(c.supportsMultiCredit, c.negotiateDialect); err != nil {
 		return err
 	}
 

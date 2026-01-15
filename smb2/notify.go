@@ -37,8 +37,8 @@ type ChangeNotifyRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (cnr ChangeNotifyRequest) Validate(supportsMultiCredit bool) error {
-	if err := Header(cnr.data).Validate(); err != nil {
+func (cnr ChangeNotifyRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
+	if err := Header(cnr.data).Validate(dialect); err != nil {
 		return err
 	}
 
@@ -116,6 +116,8 @@ func (cnr *ChangeNotifyResponse) FromRequest(req GenericRequest) {
 	Header(cnr.data).SetStatus(STATUS_OK)
 	if Header(cnr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(cnr.data).SetCreditResponse(0)
+	} else {
+		Header(cnr.data).SetCreditResponse(max(req.Header().CreditCharge(), req.Header().CreditRequest()))
 	}
 }
 
