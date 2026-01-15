@@ -116,6 +116,8 @@ func (cnr *ChangeNotifyResponse) FromRequest(req GenericRequest) {
 	Header(cnr.data).SetStatus(STATUS_OK)
 	if Header(cnr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(cnr.data).SetCreditResponse(0)
+	} else {
+		Header(cnr.data).SetCreditResponse(max(req.Header().CreditCharge(), req.Header().CreditRequest()))
 	}
 }
 

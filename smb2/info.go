@@ -106,6 +106,8 @@ func (sir *SetInfoResponse) FromRequest(req GenericRequest) {
 	Header(sir.data).SetStatus(STATUS_OK)
 	if Header(sir.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(sir.data).SetCreditResponse(0)
+	} else {
+		Header(sir.data).SetCreditResponse(max(req.Header().CreditCharge(), req.Header().CreditRequest()))
 	}
 }
 

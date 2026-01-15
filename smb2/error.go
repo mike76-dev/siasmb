@@ -93,6 +93,9 @@ func NewErrorResponse(req GenericRequest, status uint32, data []byte) *ErrorResp
 	er := &ErrorResponse{}
 	er.FromRequest(req)
 	Header(er.data).SetStatus(status)
+	if status == STATUS_PENDING {
+		Header(er.data).SetCreditResponse(0)
+	}
 	er.SetErrorData(data)
 	return er
 }

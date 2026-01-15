@@ -190,6 +190,8 @@ func (ir *IoctlResponse) FromRequest(req GenericRequest) {
 	Header(ir.data).SetStatus(STATUS_OK)
 	if Header(ir.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(ir.data).SetCreditResponse(0)
+	} else {
+		Header(ir.data).SetCreditResponse(max(req.Header().CreditCharge(), req.Header().CreditRequest()))
 	}
 }
 

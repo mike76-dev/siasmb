@@ -114,6 +114,8 @@ func (rr *ReadResponse) FromRequest(req GenericRequest) {
 	Header(rr.data).SetStatus(STATUS_OK)
 	if Header(rr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(rr.data).SetCreditResponse(0)
+	} else {
+		Header(rr.data).SetCreditResponse(max(req.Header().CreditCharge(), req.Header().CreditRequest()))
 	}
 }
 

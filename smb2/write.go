@@ -107,6 +107,8 @@ func (wr *WriteResponse) FromRequest(req GenericRequest) {
 	Header(wr.data).SetStatus(STATUS_OK)
 	if Header(wr.data).IsFlagSet(FLAGS_ASYNC_COMMAND) {
 		Header(wr.data).SetCreditResponse(0)
+	} else {
+		Header(wr.data).SetCreditResponse(max(req.Header().CreditCharge(), req.Header().CreditRequest()))
 	}
 }
 

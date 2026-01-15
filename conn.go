@@ -174,8 +174,8 @@ func (c *connection) acceptRequest(msg []byte) error {
 				}
 			}
 			mid = req.Header().MessageID()
-			credits := req.Header().CreditRequest() // Grant whatever the CreditRequest is
-			if credits == 0 {                       // The number of credits cannot be zero
+			credits := max(req.Header().CreditCharge(), req.Header().CreditRequest()) // Grant whatever the CreditRequest is. If CreditCharge is greater, grant that much.
+			if credits == 0 {                                                         // The number of credits cannot be zero
 				credits = 1
 			}
 
