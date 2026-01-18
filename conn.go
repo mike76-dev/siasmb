@@ -1143,6 +1143,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 		}
 
+		if c.dialect == "3.0.2" || c.dialect == "3.1.1" {
+			if wr.Flags()&smb2.WRITEFLAG_WRITE_THROUGH > 0 && wr.Flags()&smb2.WRITEFLAG_WRITE_UNBUFFERED == 0 && op.createOptions&smb2.FILE_NO_INTERMEDIATE_BUFFERING == 0 {
+				resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, ss, nil
+			}
+		}
+
 		if op.fileName != "" && op.fileName[0] == '.' { // Ignore SMB2_WRITE requests to any hidden file (whose name starts with a dot)
 			resp := &smb2.WriteResponse{}
 			resp.FromRequest(wr)
