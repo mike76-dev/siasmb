@@ -10,6 +10,12 @@ const (
 	SMB2ReadResponseStructureSize = 17
 )
 
+const (
+	// Read flags.
+	READFLAG_READ_UNBUFFERED    = 0x01
+	READFLAG_REQUEST_COMPRESSED = 0x02
+)
+
 // ReadRequest represents an SMB2_READ request.
 type ReadRequest struct {
 	Request

@@ -997,6 +997,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		// A special case: some clients use the SRVSVC named pipe for writing requests to it
 		// and reading responses from it. Usually, an SMB2_IOCTL request serves this purpose.
 		if strings.ToLower(op.fileName) == "srvsvc" {
+			if c.negotiateDialect == smb2.SMB_DIALECT_302 || c.negotiateDialect == smb2.SMB_DIALECT_311 {
+				if rr.Flags()&smb2.READFLAG_READ_UNBUFFERED != 0 {
+					resp := smb2.NewErrorResponse(rr, smb2.STATUS_INVALID_PARAMETER, nil)
+					return resp, ss, nil
+				}
+			}
 			if op.srvsvcData != nil {
 				ip := rpc.InboundPacket{}
 				ip.Read(bytes.NewBuffer(op.srvsvcData))
