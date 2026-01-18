@@ -1589,6 +1589,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			resp.Generate(ir.CtlCode(), id, 0, op.getObjectID())
 			return resp, ss, nil
 
+		case smb2.FSCTL_SVHDX_SYNC_TUNNEL_REQUEST, smb2.FSCTL_QUERY_SHARED_VIRTUAL_DISK_SUPPORT:
+			resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_DEVICE_REQUEST, nil)
+			return resp, ss, nil
+
 		default: // Other FSCTL codes are not supported yet
 			resp := smb2.NewErrorResponse(ir, smb2.STATUS_NOT_SUPPORTED, nil)
 			return resp, ss, nil
