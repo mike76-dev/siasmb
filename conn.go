@@ -997,6 +997,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		// A special case: some clients use the SRVSVC named pipe for writing requests to it
 		// and reading responses from it. Usually, an SMB2_IOCTL request serves this purpose.
 		if strings.ToLower(op.fileName) == "srvsvc" {
+			if c.negotiateDialect == smb2.SMB_DIALECT_302 || c.negotiateDialect == smb2.SMB_DIALECT_311 {
+				if rr.Flags()&smb2.READFLAG_READ_UNBUFFERED != 0 {
+					resp := smb2.NewErrorResponse(rr, smb2.STATUS_INVALID_PARAMETER, nil)
+					return resp, ss, nil
+				}
+			}
 			if op.srvsvcData != nil {
 				ip := rpc.InboundPacket{}
 				ip.Read(bytes.NewBuffer(op.srvsvcData))
@@ -1132,6 +1138,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		if c.dialect == "2.1" || c.dialect == "3.0" {
 			if wr.Flags()&smb2.WRITEFLAG_WRITE_THROUGH > 0 && op.createOptions&smb2.FILE_NO_INTERMEDIATE_BUFFERING == 0 {
+				resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, ss, nil
+			}
+		}
+
+		if c.dialect == "3.0.2" || c.dialect == "3.1.1" {
+			if wr.Flags()&smb2.WRITEFLAG_WRITE_THROUGH > 0 && wr.Flags()&smb2.WRITEFLAG_WRITE_UNBUFFERED == 0 && op.createOptions&smb2.FILE_NO_INTERMEDIATE_BUFFERING == 0 {
 				resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, nil)
 				return resp, ss, nil
 			}
@@ -1574,6 +1587,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			resp := &smb2.IoctlResponse{}
 			resp.FromRequest(ir)
 			resp.Generate(ir.CtlCode(), id, 0, op.getObjectID())
+			return resp, ss, nil
+
+		case smb2.FSCTL_SVHDX_SYNC_TUNNEL_REQUEST, smb2.FSCTL_QUERY_SHARED_VIRTUAL_DISK_SUPPORT:
+			resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_DEVICE_REQUEST, nil)
 			return resp, ss, nil
 
 		default: // Other FSCTL codes are not supported yet
