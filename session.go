@@ -32,26 +32,28 @@ var (
 
 // session represents a Session object.
 type session struct {
-	sessionID        uint64
-	state            int
-	securityContext  ntlm.SecurityContext
-	isAnonymous      bool
-	isGuest          bool
-	sessionKey       []byte
-	signingRequired  bool
-	openTable        map[uint64]*open
-	treeConnectTable map[uint32]*treeConnect
-	expirationTime   time.Time
-	connection       *connection
-	creationTime     time.Time
-	idleTime         time.Time
-	userName         string
-	workgroup        string
-	encryptData      bool
-	signingKey       []byte
-	encryptionKey    []byte
-	decryptionKey    []byte
-	applicationKey   []byte
+	sessionID                 uint64
+	state                     int
+	securityContext           ntlm.SecurityContext
+	isAnonymous               bool
+	isGuest                   bool
+	sessionKey                []byte
+	signingRequired           bool
+	openTable                 map[uint64]*open
+	treeConnectTable          map[uint32]*treeConnect
+	expirationTime            time.Time
+	connection                *connection
+	creationTime              time.Time
+	idleTime                  time.Time
+	userName                  string
+	workgroup                 string
+	encryptData               bool
+	signingKey                []byte
+	encryptionKey             []byte
+	decryptionKey             []byte
+	applicationKey            []byte
+	preauthIntegrityHashValue []byte
+	fullSessionKey            []byte
 
 	mu sync.Mutex
 }

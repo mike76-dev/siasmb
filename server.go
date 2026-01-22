@@ -66,6 +66,7 @@ type server struct {
 	encryptData                     bool
 	rejectUnencryptedAccess         bool
 	allowAnonymousAccess            bool
+	compressionSupported            bool
 
 	// Auxiliary fields.
 	listener        net.Listener

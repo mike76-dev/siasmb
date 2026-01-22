@@ -35,6 +35,7 @@ type GenericRequest interface {
 	OpenID() []byte
 	IsEncrypted() bool
 	TransformSessionID() uint64
+	CompressReply() bool
 }
 
 // Request is the representation of an SMB2 request.
@@ -45,6 +46,7 @@ type Request struct {
 	openID             []byte
 	isEncrypted        bool
 	transformSessionID uint64
+	compressReply      bool
 }
 
 // structureSize returns the StructureSize field of an SMB2 request.
@@ -174,6 +176,17 @@ func (req Request) IsEncrypted() bool {
 // SetEncrypted changes the encryption status of the request.
 func (req *Request) SetEncrypted(enc bool) {
 	req.isEncrypted = enc
+}
+
+// CompressReply returns true if the response to this request is eligible
+// for compression.
+func (req Request) CompressReply() bool {
+	return req.compressReply
+}
+
+// SetCompressReply changes the response compression eligibility of the request.
+func (req *Request) SetCompressReply(cr bool) {
+	req.compressReply = cr
 }
 
 // TransformSessionID returns the SessionID sent by the client in the

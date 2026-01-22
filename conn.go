@@ -39,25 +39,32 @@ var (
 
 // connection represents a Connection object.
 type connection struct {
-	commandSequenceWindow map[uint64]struct{}
-	requestList           map[uint64]*smb2.Request
-	pendingResponses      map[uint64]smb2.GenericResponse
-	clientCapabilities    uint32
-	negotiateDialect      uint16
-	asyncCommandList      map[uint64]*smb2.Request
-	dialect               string
-	shouldSign            bool
-	clientName            string
-	clientGuid            []byte
-	maxTransactSize       uint64
-	maxWriteSize          uint64
-	maxReadSize           uint64
-	supportsMultiCredit   bool
-	sessionTable          map[uint64]*session
-	creationTime          time.Time
-	serverCapabilities    uint32
-	clientSecurityMode    uint16
-	serverSecurityMode    uint16
+	commandSequenceWindow      map[uint64]struct{}
+	requestList                map[uint64]*smb2.Request
+	pendingResponses           map[uint64]smb2.GenericResponse
+	clientCapabilities         uint32
+	negotiateDialect           uint16
+	asyncCommandList           map[uint64]*smb2.Request
+	dialect                    string
+	shouldSign                 bool
+	clientName                 string
+	clientGuid                 []byte
+	maxTransactSize            uint64
+	maxWriteSize               uint64
+	maxReadSize                uint64
+	supportsMultiCredit        bool
+	sessionTable               map[uint64]*session
+	creationTime               time.Time
+	serverCapabilities         uint32
+	clientSecurityMode         uint16
+	serverSecurityMode         uint16
+	preauthIntegrityHashID     uint16
+	preauthIntegrityHashValue  []byte
+	cipherID                   uint16
+	clientDialects             []uint16
+	compressionIDs             []uint16
+	supportsChainedCompression bool
+	signingAlgorithmID         uint16
 
 	// Auxiliary fields.
 	conn       net.Conn

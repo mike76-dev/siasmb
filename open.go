@@ -71,6 +71,7 @@ type open struct {
 	createOptions               uint32
 	fileAttributes              uint32
 	createGuid                  [16]byte
+	applicationInstanceVersion  [16]byte
 
 	// Since renterd has no idea about such attributes of the most operating systems as
 	// CreationTime, LastWriteTime, LastAccessTime, and ChangeTime, we can only operate

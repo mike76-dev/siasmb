@@ -95,6 +95,9 @@ func main() {
 		server.encryptData = true
 		server.rejectUnencryptedAccess = true
 	}
+	if smb2.MaxSupportedDialect == smb2.SMB_DIALECT_311 {
+		server.compressionSupported = true
+	}
 
 	// Start a thread to watch for the stop signal.
 	c := make(chan os.Signal, 1)
