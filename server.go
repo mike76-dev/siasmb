@@ -47,6 +47,12 @@ const (
 	HashEnableShare
 )
 
+// Supported hash algorithms.
+var supportedHashAlgos = []uint16{smb2.SHA_512}
+
+// Supported compression algorithms.
+var supportedCompressionAlgos = []uint16{}
+
 // server is the implementation of an SMB server.
 type server struct {
 	enabled                         bool
@@ -67,6 +73,7 @@ type server struct {
 	rejectUnencryptedAccess         bool
 	allowAnonymousAccess            bool
 	compressionSupported            bool
+	chainedCompressionSupported     bool
 
 	// Auxiliary fields.
 	listener        net.Listener

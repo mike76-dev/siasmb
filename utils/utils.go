@@ -54,3 +54,52 @@ func FindMaxKey[T any](m map[uint64]T) (key uint64, value T) {
 	}
 	return
 }
+
+// IsOverlapped returns true if there's at least one match between the two slices.
+func IsOverlapped[T comparable](a, b []T) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+
+	set := make(map[T]struct{}, len(a))
+	for _, v := range a {
+		set[v] = struct{}{}
+	}
+
+	for _, v := range b {
+		if _, ok := set[v]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Subset returns the largest common subset of both slices.
+func Subset[T comparable](a, b []T) []T {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+
+	set := make(map[T]struct{}, len(a))
+	for _, v := range a {
+		set[v] = struct{}{}
+	}
+
+	var c []T
+	for _, v := range b {
+		if _, ok := set[v]; ok {
+			c = append(c, v)
+		}
+	}
+
+	return c
+}

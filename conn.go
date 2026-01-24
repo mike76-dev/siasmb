@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha512"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -310,6 +311,8 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			c.dialect = "3.0.2"
 		case smb2.SMB_DIALECT_311:
 			c.dialect = "3.1.1"
+			c.clientDialects = nr.Dialects()
+			c.serverCapabilities = c.serverCapabilities &^ smb2.GLOBAL_CAP_ENCRYPTION
 		}
 
 		if nr.SecurityMode()&smb2.NEGOTIATE_SIGNING_REQUIRED > 0 {
@@ -327,6 +330,90 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		resp := &smb2.NegotiateResponse{}
 		resp.FromRequest(nr)
 		resp.Generate(c.server.serverGuid[:], c.ntlmServer, c.negotiateDialect, c.serverCapabilities, uint32(c.maxTransactSize), uint32(c.maxReadSize), uint32(c.maxWriteSize))
+
+		if c.negotiateDialect == smb2.SMB_DIALECT_311 {
+			ncs := nr.NegotiateContexts()
+			hashAlgos, _, err := smb2.GetPreauthIntegrityCapabilities(ncs)
+			if err != nil {
+				resp := smb2.NewErrorResponse(nr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, nil, nil
+			}
+			if !utils.IsOverlapped(hashAlgos, supportedHashAlgos) {
+				resp := smb2.NewErrorResponse(nr, smb2.STATUS_SMB_NO_PREAUTH_INTEGRITY_HASH_OVERLAP, nil)
+				return resp, nil, nil
+			}
+			c.preauthIntegrityHashID = supportedHashAlgos[0]
+			switch c.preauthIntegrityHashID {
+			case smb2.SHA_512:
+				preAuth := sha512.New()
+				preAuth.Write(c.preauthIntegrityHashValue)
+				preAuth.Write(req.Header()) // The entire request message
+				c.preauthIntegrityHashValue = preAuth.Sum(c.preauthIntegrityHashValue[:0])
+			}
+
+			ciphers, err := smb2.GetEncryptionCapabilities(ncs)
+			if err != nil {
+				resp := smb2.NewErrorResponse(nr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, nil, nil
+			}
+			if ciphers != nil {
+				c.cipherID = ciphers[0]
+				c.serverCapabilities |= smb2.GLOBAL_CAP_ENCRYPTION
+			}
+
+			flags, compAlgos, err := smb2.GetCompressionCapabilities(ncs)
+			if err != nil {
+				resp := smb2.NewErrorResponse(nr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, nil, nil
+			}
+			c.compressionIDs = compAlgos
+			if c.server.chainedCompressionSupported && flags&smb2.COMPRESSION_CAPABILITIES_FLAG_CHAINED != 0 {
+				flags = smb2.COMPRESSION_CAPABILITIES_FLAG_CHAINED
+				c.supportsChainedCompression = true
+			}
+
+			signingAlgos, err := smb2.GetSigningCapabilities(ncs)
+			if err != nil {
+				resp := smb2.NewErrorResponse(nr, smb2.STATUS_INVALID_PARAMETER, nil)
+				return resp, nil, nil
+			}
+			if signingAlgos != nil {
+				c.signingAlgorithmID = signingAlgos[0]
+			}
+
+			var blobs [][]byte
+			var salt [32]byte
+			rand.Read(salt[:])
+			blobs = append(blobs, smb2.PreauthIntegrityCapabilities(salt[:]))
+
+			if ciphers != nil {
+				blobs = append(blobs, smb2.EncryptionCapabilities(c.cipherID))
+			}
+
+			var cas []uint16
+			if compAlgos != nil {
+				if len(c.compressionIDs) == 0 {
+					cas = append(cas, smb2.COMPRESSION_NONE)
+				} else {
+					cas = c.compressionIDs
+				}
+				blobs = append(blobs, smb2.CompressionCapabilities(flags, cas))
+			}
+
+			if len(signingAlgos) != 0 {
+				blobs = append(blobs, smb2.SigningCapabilities(c.signingAlgorithmID))
+			}
+
+			resp.AddNegotiateContexts(blobs)
+
+			switch c.preauthIntegrityHashID {
+			case smb2.SHA_512:
+				preAuth := sha512.New()
+				preAuth.Write(c.preauthIntegrityHashValue)
+				preAuth.Write(resp.Header()) // The entire response message
+				c.preauthIntegrityHashValue = preAuth.Sum(c.preauthIntegrityHashValue[:0])
+			}
+		}
 
 		return resp, nil, nil
 
