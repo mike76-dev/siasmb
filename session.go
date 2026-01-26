@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
 	"errors"
 	"hash"
@@ -81,6 +83,17 @@ func (s *server) registerSession(connection *connection, req smb2.SessionSetupRe
 		s.globalSessionTable[ss.sessionID] = ss
 		s.stats.sOpens++
 		s.mu.Unlock()
+
+		if connection.negotiateDialect == smb2.SMB_DIALECT_311 {
+			ss.preauthIntegrityHashValue = bytes.Clone(ss.connection.preauthIntegrityHashValue)
+			switch ss.connection.preauthIntegrityHashID {
+			case smb2.SHA_512:
+				h := sha512.New()
+				h.Write(ss.preauthIntegrityHashValue)
+				h.Write(req.Header())
+				ss.preauthIntegrityHashValue = h.Sum(ss.preauthIntegrityHashValue[:0])
+			}
+		}
 	} else { // There is already a session with this ID, reactivate it
 		connection.mu.Lock()
 		ss, found = connection.sessionTable[req.Header().SessionID()]
@@ -147,8 +160,18 @@ func (ss *session) finalize(req smb2.SessionSetupRequest) {
 		ss.isGuest = true
 	}
 	ss.signingRequired = (req.SecurityMode()&smb2.NEGOTIATE_SIGNING_REQUIRED > 0) && !ss.isAnonymous && !ss.isGuest && ss.connection.shouldSign
+
+	if ss.connection.negotiateDialect == smb2.SMB_DIALECT_311 {
+		switch ss.connection.preauthIntegrityHashID {
+		case smb2.SHA_512:
+			h := sha512.New()
+			h.Write(ss.preauthIntegrityHashValue)
+			h.Write(req.Header())
+			ss.preauthIntegrityHashValue = h.Sum(ss.preauthIntegrityHashValue[:0])
+		}
+	}
+
 	ss.sessionKey = ss.connection.ntlmServer.Session().SessionKey()
-	ss.signingKey = kdf.Kdf(ss.sessionKey, []byte("SMB2AESCMAC\x00"), []byte("SmbSign\x00"))
 	ss.encryptData = ss.connection.server.encryptData
 
 	if ss.connection.server.debug {
@@ -161,9 +184,15 @@ func (ss *session) finalize(req smb2.SessionSetupRequest) {
 	switch ss.connection.negotiateDialect {
 	case smb2.SMB_DIALECT_202, smb2.SMB_DIALECT_21:
 	case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302:
+		ss.signingKey = kdf.Kdf(ss.sessionKey, []byte("SMB2AESCMAC\x00"), []byte("SmbSign\x00"))
 		ss.applicationKey = kdf.Kdf(ss.sessionKey, []byte("SMB2APP\x00"), []byte("SmbRpc\x00"))
 		ss.encryptionKey = kdf.Kdf(ss.sessionKey, []byte("SMB2AESCCM\x00"), []byte("ServerOut\x00"))
 		ss.decryptionKey = kdf.Kdf(ss.sessionKey, []byte("SMB2AESCCM\x00"), []byte("ServerIn \x00"))
+	case smb2.SMB_DIALECT_311:
+		ss.signingKey = kdf.Kdf(ss.sessionKey, []byte("SMBSigningKey\x00"), ss.preauthIntegrityHashValue)
+		ss.applicationKey = kdf.Kdf(ss.sessionKey, []byte("SMBAppKey\x00"), ss.preauthIntegrityHashValue)
+		ss.encryptionKey = kdf.Kdf(ss.sessionKey, []byte("SMBS2CCipherKey\x00"), ss.preauthIntegrityHashValue)
+		ss.decryptionKey = kdf.Kdf(ss.sessionKey, []byte("SMBC2SCipherKey\x00"), ss.preauthIntegrityHashValue)
 	}
 
 	ss.connection.mu.Lock()
@@ -196,7 +225,7 @@ func (ss *session) sign(buf []byte) {
 		switch ss.connection.negotiateDialect {
 		case smb2.SMB_DIALECT_202, smb2.SMB_DIALECT_21:
 			signer = hmac.New(sha256.New, ss.sessionKey)
-		case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302:
+		case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302, smb2.SMB_DIALECT_311:
 			ciph, err := aes.NewCipher(ss.signingKey)
 			if err != nil {
 				panic(err)
@@ -229,7 +258,7 @@ func (ss *session) validateRequest(req *smb2.Request) bool {
 	switch ss.connection.negotiateDialect {
 	case smb2.SMB_DIALECT_202, smb2.SMB_DIALECT_21:
 		verifier = hmac.New(sha256.New, ss.sessionKey)
-	case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302:
+	case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302, smb2.SMB_DIALECT_311:
 		ciph, err := aes.NewCipher(ss.signingKey)
 		if err != nil {
 			panic(err)
@@ -248,7 +277,18 @@ func (ss *session) encrypt(buf []byte) []byte {
 	if err != nil {
 		panic(err)
 	}
-	encrypter, err := ccm.NewCCMWithNonceAndTagSizes(ciph, 11, 16)
+	var encrypter cipher.AEAD
+	switch ss.connection.negotiateDialect {
+	case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302:
+		encrypter, err = ccm.NewCCMWithNonceAndTagSizes(ciph, 11, 16)
+	case smb2.SMB_DIALECT_311:
+		switch ss.connection.cipherID {
+		case smb2.AES_128_CCM:
+			encrypter, err = ccm.NewCCMWithNonceAndTagSizes(ciph, 11, 16)
+		case smb2.AES_128_GCM:
+			encrypter, err = cipher.NewGCMWithNonceSize(ciph, 12)
+		}
+	}
 	if err != nil {
 		panic(err)
 	}
@@ -273,7 +313,18 @@ func (ss *session) decrypt(buf []byte) []byte {
 	if err != nil {
 		panic(err)
 	}
-	decrypter, err := ccm.NewCCMWithNonceAndTagSizes(ciph, 11, 16)
+	var decrypter cipher.AEAD
+	switch ss.connection.negotiateDialect {
+	case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302:
+		decrypter, err = ccm.NewCCMWithNonceAndTagSizes(ciph, 11, 16)
+	case smb2.SMB_DIALECT_311:
+		switch ss.connection.cipherID {
+		case smb2.AES_128_CCM:
+			decrypter, err = ccm.NewCCMWithNonceAndTagSizes(ciph, 11, 16)
+		case smb2.AES_128_GCM:
+			decrypter, err = cipher.NewGCMWithNonceSize(ciph, 12)
+		}
+	}
 	if err != nil {
 		panic(err)
 	}

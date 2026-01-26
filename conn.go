@@ -345,10 +345,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			c.preauthIntegrityHashID = supportedHashAlgos[0]
 			switch c.preauthIntegrityHashID {
 			case smb2.SHA_512:
-				preAuth := sha512.New()
-				preAuth.Write(c.preauthIntegrityHashValue)
-				preAuth.Write(req.Header()) // The entire request message
-				c.preauthIntegrityHashValue = preAuth.Sum(c.preauthIntegrityHashValue[:0])
+				c.preauthIntegrityHashValue = make([]byte, 64)
+				h := sha512.New()
+				h.Write(c.preauthIntegrityHashValue)
+				h.Write(req.Header()) // The entire request message
+				c.preauthIntegrityHashValue = h.Sum(c.preauthIntegrityHashValue[:0])
 			}
 
 			ciphers, err := smb2.GetEncryptionCapabilities(ncs)
@@ -378,7 +379,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, nil, nil
 			}
 			if signingAlgos != nil {
-				c.signingAlgorithmID = signingAlgos[0]
+				c.signingAlgorithmID = smb2.AES_CMAC // TODO use signingAlgos[0] when GMAC is implemented
 			}
 
 			var blobs [][]byte
@@ -408,10 +409,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 			switch c.preauthIntegrityHashID {
 			case smb2.SHA_512:
-				preAuth := sha512.New()
-				preAuth.Write(c.preauthIntegrityHashValue)
-				preAuth.Write(resp.Header()) // The entire response message
-				c.preauthIntegrityHashValue = preAuth.Sum(c.preauthIntegrityHashValue[:0])
+				h := sha512.New()
+				h.Write(c.preauthIntegrityHashValue)
+				h.Write(resp.Encode())
+				c.preauthIntegrityHashValue = h.Sum(c.preauthIntegrityHashValue[:0])
 			}
 		}
 
@@ -527,7 +528,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			default:
 			}
 		}
-		if ss.encryptData {
+		if c.negotiateDialect != smb2.SMB_DIALECT_311 && ss.encryptData {
 			flags |= smb2.SESSION_FLAG_ENCRYPT_DATA
 		}
 
@@ -536,6 +537,16 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		resp.Generate(ss.sessionID, flags, token, found)
 		if !found {
 			resp.Header().SetCreditResponse(1) // Only one credit if the process is incomplete
+
+			if c.negotiateDialect == smb2.SMB_DIALECT_311 {
+				switch ss.connection.preauthIntegrityHashID {
+				case smb2.SHA_512:
+					h := sha512.New()
+					h.Write(ss.preauthIntegrityHashValue)
+					h.Write(resp.Encode())
+					ss.preauthIntegrityHashValue = h.Sum(ss.preauthIntegrityHashValue[:0])
+				}
+			}
 		}
 
 		return resp, ss, nil
