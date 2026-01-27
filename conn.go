@@ -379,7 +379,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, nil, nil
 			}
 			if signingAlgos != nil {
-				c.signingAlgorithmID = smb2.AES_CMAC // TODO use signingAlgos[0] when GMAC is implemented
+				c.signingAlgorithmID = signingAlgos[0]
 			}
 
 			var blobs [][]byte

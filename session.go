@@ -17,6 +17,7 @@ import (
 
 	"github.com/mike76-dev/siasmb/internal/ccm"
 	"github.com/mike76-dev/siasmb/internal/cmac"
+	"github.com/mike76-dev/siasmb/internal/gmac"
 	"github.com/mike76-dev/siasmb/kdf"
 	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/smb2"
@@ -225,12 +226,33 @@ func (ss *session) sign(buf []byte) {
 		switch ss.connection.negotiateDialect {
 		case smb2.SMB_DIALECT_202, smb2.SMB_DIALECT_21:
 			signer = hmac.New(sha256.New, ss.sessionKey)
-		case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302, smb2.SMB_DIALECT_311:
+		case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302:
 			ciph, err := aes.NewCipher(ss.signingKey)
 			if err != nil {
 				panic(err)
 			}
 			signer = cmac.New(ciph)
+		case smb2.SMB_DIALECT_311:
+			switch ss.connection.signingAlgorithmID {
+			case smb2.AES_CMAC:
+				ciph, err := aes.NewCipher(ss.signingKey)
+				if err != nil {
+					panic(err)
+				}
+				signer = cmac.New(ciph)
+			case smb2.AES_GMAC:
+				nonce := make([]byte, 12)
+				binary.LittleEndian.PutUint64(nonce[:8], smb2.Header(buf[off:]).MessageID())
+				nonce[8] |= 1 // Server-side
+				if smb2.Header(buf[off:]).Command() == smb2.SMB2_CANCEL {
+					nonce[8] |= 2
+				}
+				var err error
+				signer, err = gmac.New(ss.signingKey, nonce)
+				if err != nil {
+					panic(err)
+				}
+			}
 		}
 		signer.Reset()
 		if next == 0 { // Last response in the chain
@@ -258,12 +280,32 @@ func (ss *session) validateRequest(req *smb2.Request) bool {
 	switch ss.connection.negotiateDialect {
 	case smb2.SMB_DIALECT_202, smb2.SMB_DIALECT_21:
 		verifier = hmac.New(sha256.New, ss.sessionKey)
-	case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302, smb2.SMB_DIALECT_311:
+	case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302:
 		ciph, err := aes.NewCipher(ss.signingKey)
 		if err != nil {
 			panic(err)
 		}
 		verifier = cmac.New(ciph)
+	case smb2.SMB_DIALECT_311:
+		switch ss.connection.signingAlgorithmID {
+		case smb2.AES_CMAC:
+			ciph, err := aes.NewCipher(ss.signingKey)
+			if err != nil {
+				panic(err)
+			}
+			verifier = cmac.New(ciph)
+		case smb2.AES_GMAC:
+			nonce := make([]byte, 12)
+			binary.LittleEndian.PutUint64(nonce[:8], req.Header().MessageID())
+			if req.Header().Command() == smb2.SMB2_CANCEL {
+				nonce[8] |= 2
+			}
+			var err error
+			verifier, err = gmac.New(ss.signingKey, nonce)
+			if err != nil {
+				panic(err)
+			}
+		}
 	}
 	verifier.Reset()
 	verifier.Write(req.Header())
