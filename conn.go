@@ -379,7 +379,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, nil, nil
 			}
 			if signingAlgos != nil {
-				c.signingAlgorithmID = signingAlgos[0]
+				c.signingAlgorithmID = utils.FirstMatch(signingAlgos, supportedSigningAlgos)
 			}
 
 			var blobs [][]byte

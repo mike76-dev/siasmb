@@ -103,3 +103,24 @@ func Subset[T comparable](a, b []T) []T {
 
 	return c
 }
+
+// FirstMatch returns the first occurence in a that is present in b.
+func FirstMatch[T comparable](a, b []T) T {
+	var c T
+	if len(a) == 0 || len(b) == 0 {
+		return c
+	}
+
+	set := make(map[T]struct{}, len(b))
+	for _, v := range b {
+		set[v] = struct{}{}
+	}
+
+	for _, v := range a {
+		if _, ok := set[v]; ok {
+			return v
+		}
+	}
+
+	return c
+}

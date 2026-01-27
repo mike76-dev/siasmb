@@ -47,11 +47,12 @@ const (
 	HashEnableShare
 )
 
-// Supported hash algorithms.
-var supportedHashAlgos = []uint16{smb2.SHA_512}
-
-// Supported compression algorithms.
-var supportedCompressionAlgos = []uint16{}
+var (
+	// Supported algorithms.
+	supportedHashAlgos        = []uint16{smb2.SHA_512}
+	supportedCompressionAlgos = []uint16{}
+	supportedSigningAlgos     = []uint16{smb2.HMAC_SHA256, smb2.AES_CMAC, smb2.AES_GMAC}
+)
 
 // server is the implementation of an SMB server.
 type server struct {
