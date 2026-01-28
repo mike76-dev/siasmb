@@ -528,7 +528,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			default:
 			}
 		}
-		if c.negotiateDialect != smb2.SMB_DIALECT_311 && ss.encryptData {
+		if smb2.Is3X(c.negotiateDialect) && ss.encryptData && c.clientCapabilities&smb2.GLOBAL_CAP_ENCRYPTION != 0 {
 			flags |= smb2.SESSION_FLAG_ENCRYPT_DATA
 		}
 
