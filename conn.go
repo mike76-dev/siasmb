@@ -358,7 +358,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, nil, nil
 			}
 			if ciphers != nil {
-				c.cipherID = ciphers[0]
+				c.cipherID = utils.FirstMatch(ciphers, supportedEncryptionAlgos)
 				c.serverCapabilities |= smb2.GLOBAL_CAP_ENCRYPTION
 			}
 

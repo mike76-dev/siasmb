@@ -50,6 +50,7 @@ const (
 var (
 	// Supported algorithms.
 	supportedHashAlgos        = []uint16{smb2.SHA_512}
+	supportedEncryptionAlgos  = []uint16{smb2.AES_128_CCM, smb2.AES_128_GCM}
 	supportedCompressionAlgos = []uint16{}
 	supportedSigningAlgos     = []uint16{smb2.HMAC_SHA256, smb2.AES_CMAC, smb2.AES_GMAC}
 )
