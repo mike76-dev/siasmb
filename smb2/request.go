@@ -12,6 +12,7 @@ var (
 	ErrRelatedRequests   = errors.New("first request in a chain cannot be related")
 	ErrMixedRequests     = errors.New("wrong usage of the related flag")
 	ErrUnalignedRequests = errors.New("chained requests must be aligned to a 8-byte boundary")
+	ErrWrongSecurity     = errors.New("request is neither signed nor encrypted")
 )
 
 const (

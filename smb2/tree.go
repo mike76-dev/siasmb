@@ -121,6 +121,13 @@ func (tcr TreeConnectRequest) Validate(supportsMultiCredit bool, dialect uint16)
 		}
 	}
 
+	// Validate signature or encryption.
+	if dialect == SMB_DIALECT_311 {
+		if !Header(tcr.data).IsFlagSet(FLAGS_SIGNED) && !tcr.isEncrypted {
+			return ErrWrongSecurity
+		}
+	}
+
 	return nil
 }
 
