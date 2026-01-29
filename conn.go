@@ -1497,11 +1497,16 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			} else {
 				if ir.CtlCode() == smb2.FSCTL_VALIDATE_NEGOTIATE_INFO {
 					if smb2.Is3X(c.negotiateDialect) {
+						if c.negotiateDialect == smb2.SMB_DIALECT_311 {
+							return nil, nil, smb2.ErrInvalidParameter
+						}
 						if ir.MaxOutputResponse() < 24 {
 							return nil, nil, smb2.ErrWrongLength
 						}
-						caps, guid, sm, _, err := ir.ValidateNegotiateInfo()
+						caps, guid, sm, dialects, err := ir.ValidateNegotiateInfo()
 						if err != nil {
+							return nil, nil, smb2.ErrInvalidParameter
+						} else if smb2.MaxSupportedDialect == smb2.SMB_DIALECT_311 && (!utils.Equal(dialects, c.clientDialects) || utils.MaxCommon(dialects, c.clientDialects) != c.negotiateDialect) {
 							return nil, nil, smb2.ErrInvalidParameter
 						} else if !bytes.Equal(guid, c.clientGuid) {
 							return nil, nil, smb2.ErrInvalidParameter
