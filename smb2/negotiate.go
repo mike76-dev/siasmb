@@ -20,9 +20,9 @@ const (
 )
 
 const (
-	MaxTransactSize = 1048576 * 4 // 4MiB
-	MaxReadSize     = 1048576 * 4 // 4MiB
-	MaxWriteSize    = 1048576 * 4 // 4MiB
+	MaxTransactSize = 1048576 * 8 // 8MiB
+	MaxReadSize     = 1048576 * 8 // 8MiB
+	MaxWriteSize    = 1048576 * 8 // 8MiB
 )
 
 const (
