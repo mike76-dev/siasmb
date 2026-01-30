@@ -1324,6 +1324,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				op.pendingUpload.pending[offset] = &uploadChunk{offset, data}
 				var err error
 				for {
+					select {
+					case <-op.ctx.Done():
+						return
+					default:
+					}
 					off := op.pendingUpload.nextOffset
 					chunk, ok := op.pendingUpload.pending[off]
 					if !ok {
