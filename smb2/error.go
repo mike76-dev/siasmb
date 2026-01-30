@@ -15,6 +15,7 @@ const (
 	STATUS_PENDING                               = 0x00000103
 	STATUS_NOTIFY_CLEANUP                        = 0x0000010b
 	STATUS_NOTIFY_ENUM_DIR                       = 0x0000010c
+	STATUS_BUFFER_OVERFLOW                       = 0x80000005
 	STATUS_NO_MORE_FILES                         = 0x80000006
 	STATUS_INFO_LENGTH_MISMATCH                  = 0xc0000004
 	STATUS_INVALID_HANDLE                        = 0xc0000008
@@ -24,6 +25,7 @@ const (
 	STATUS_END_OF_FILE                           = 0xc0000011
 	STATUS_MORE_PROCESSING_REQUIRED              = 0xc0000016
 	STATUS_ACCESS_DENIED                         = 0xc0000022
+	STATUS_BUFFER_TOO_SMALL                      = 0xc0000023
 	STATUS_OBJECT_NAME_NOT_FOUND                 = 0xc0000034
 	STATUS_OBJECT_NAME_COLLISION                 = 0xc0000035
 	STATUS_DATA_ERROR                            = 0xc000003e
@@ -65,6 +67,11 @@ func (er *ErrorResponse) SetErrorData(data []byte) {
 	}
 }
 
+// SetErrorContextCount sets the ErrorContextCount of the SMB2_ERROR response.
+func (er *ErrorResponse) SetErrorContextCount(count uint8) {
+	er.data[SMB2HeaderSize+2] = count
+}
+
 // NegotiateErrorResponse generates an SMB2_ERROR response to an SMB_COM_NEGOTIATE request.
 func NegotiateErrorResponse(status uint32) *ErrorResponse {
 	er := &ErrorResponse{}
@@ -90,13 +97,22 @@ func (er *ErrorResponse) FromRequest(req GenericRequest) {
 }
 
 // NewErrorResponse generates an SMB2_ERROR response with the specified parameters.
-func NewErrorResponse(req GenericRequest, status uint32, data []byte) *ErrorResponse {
+func NewErrorResponse(req GenericRequest, status uint32, count uint8, data []byte) *ErrorResponse {
 	er := &ErrorResponse{}
 	er.FromRequest(req)
 	Header(er.data).SetStatus(status)
 	if status == STATUS_PENDING {
 		Header(er.data).SetCreditResponse(0)
 	}
+	er.SetErrorContextCount(count)
 	er.SetErrorData(data)
 	return er
+}
+
+// ErrorContextData generates an ErrorContextData blob.
+func ErrorContextData(eid uint32, ecd []byte) []byte {
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[:4], uint32(len(ecd)))
+	binary.LittleEndian.PutUint32(data[4:], eid)
+	return append(data, ecd...)
 }
