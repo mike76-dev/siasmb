@@ -621,7 +621,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		resp := &smb2.TreeConnectResponse{}
 		resp.FromRequest(tcr)
-		resp.Generate(tc.treeID, uint8(tc.share.shareType), tc.maximalAccess, tc.share.encryptData)
+		resp.Generate(tc.treeID, uint8(tc.share.shareType), tc.maximalAccess, tc.share.encryptData, tc.share.compressData)
 
 		return resp, ss, nil
 
