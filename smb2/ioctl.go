@@ -47,7 +47,7 @@ type IoctlRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (ir IoctlRequest) Validate(supportsMultiCredit bool, _ uint16) error {
+func (ir IoctlRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(ir.data).Validate(); err != nil {
 		return err
 	}

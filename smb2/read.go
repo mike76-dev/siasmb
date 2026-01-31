@@ -22,7 +22,7 @@ type ReadRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (rr ReadRequest) Validate(supportsMultiCredit bool, _ uint16) error {
+func (rr ReadRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(rr.data).Validate(); err != nil {
 		return err
 	}

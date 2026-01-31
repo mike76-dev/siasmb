@@ -96,7 +96,7 @@ type TreeConnectRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (tcr TreeConnectRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
+func (tcr TreeConnectRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(tcr.data).Validate(); err != nil {
 		return err
 	}
@@ -118,13 +118,6 @@ func (tcr TreeConnectRequest) Validate(supportsMultiCredit bool, dialect uint16)
 			}
 		} else if tcr.Header().CreditCharge() < uint16((sps-1)/65536)+1 {
 			return ErrInvalidParameter
-		}
-	}
-
-	// Validate signature or encryption.
-	if dialect == SMB_DIALECT_311 {
-		if !Header(tcr.data).IsFlagSet(FLAGS_SIGNED) && !tcr.isEncrypted {
-			return ErrWrongSecurity
 		}
 	}
 
@@ -203,7 +196,7 @@ type TreeDisconnectRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (tdr TreeDisconnectRequest) Validate(_ bool, _ uint16) error {
+func (tdr TreeDisconnectRequest) Validate(_ bool) error {
 	if err := Header(tdr.data).Validate(); err != nil {
 		return err
 	}

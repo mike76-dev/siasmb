@@ -26,7 +26,7 @@ type CloseRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (cr CloseRequest) Validate(_ bool, _ uint16) error {
+func (cr CloseRequest) Validate(_ bool) error {
 	if err := Header(cr.data).Validate(); err != nil {
 		return err
 	}

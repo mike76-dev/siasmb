@@ -147,7 +147,7 @@ type CreateRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (cr CreateRequest) Validate(supportsMultiCredit bool, _ uint16) error {
+func (cr CreateRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(cr.data).Validate(); err != nil {
 		return err
 	}

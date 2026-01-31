@@ -22,7 +22,7 @@ type WriteRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (wr WriteRequest) Validate(supportsMultiCredit bool, _ uint16) error {
+func (wr WriteRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(wr.data).Validate(); err != nil {
 		return err
 	}

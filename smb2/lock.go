@@ -31,7 +31,7 @@ type Lock struct {
 }
 
 // Validate implements GenericRequest interface.
-func (lr LockRequest) Validate(supportsMultiCredit bool, _ uint16) error {
+func (lr LockRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(lr.data).Validate(); err != nil {
 		return err
 	}

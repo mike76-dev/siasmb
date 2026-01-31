@@ -28,7 +28,7 @@ const (
 
 // GenericRequest implements a few common methods of SMB2 requests.
 type GenericRequest interface {
-	Validate(bool, uint16) error
+	Validate(bool) error
 	Header() Header
 	Len() int
 	CancelRequestID() uint64
@@ -134,7 +134,7 @@ func GetRequests(data []byte, cid uint64, tsid uint64) (reqs []*Request, err err
 }
 
 // Validate returns an error if the request is malformed, nil otherwise.
-func (req Request) Validate(_ bool, _ uint16) error {
+func (req Request) Validate(_ bool) error {
 	return req.Header().Validate()
 }
 
@@ -325,7 +325,7 @@ type CancelRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (cr CancelRequest) Validate(_ bool, _ uint16) error {
+func (cr CancelRequest) Validate(_ bool) error {
 	if err := Header(cr.data).Validate(); err != nil {
 		return err
 	}
@@ -347,7 +347,7 @@ type EchoRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (er EchoRequest) Validate(_ bool, _ uint16) error {
+func (er EchoRequest) Validate(_ bool) error {
 	if err := Header(er.data).Validate(); err != nil {
 		return err
 	}

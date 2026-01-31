@@ -21,7 +21,7 @@ type SetInfoRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (sir SetInfoRequest) Validate(supportsMultiCredit bool, _ uint16) error {
+func (sir SetInfoRequest) Validate(supportsMultiCredit bool) error {
 	if err := Header(sir.data).Validate(); err != nil {
 		return err
 	}
