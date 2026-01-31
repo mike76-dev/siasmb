@@ -912,7 +912,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		resp := &smb2.CreateResponse{}
 		resp.FromRequest(cr)
 		resp.Generate(
-			op.oplockLevel,
+			smb2.OPLOCK_LEVEL_NONE,
 			result,
 			op.size,
 			op.allocated,

@@ -56,7 +56,6 @@ type session struct {
 	decryptionKey             []byte
 	applicationKey            []byte
 	preauthIntegrityHashValue []byte
-	fullSessionKey            []byte
 
 	mu sync.Mutex
 }
@@ -119,16 +118,9 @@ func (s *server) deregisterSession(connection *connection, sid uint64) (*session
 
 	ss.mu.Lock()
 	for _, op := range ss.openTable {
-		if op.isDurable {
-			op.session = nil
-			op.connection = nil
-			op.treeConnect = nil
-			op.durableOpenScavengerTimeout = time.Now().Add(op.durableOpenTimeout)
-		} else {
-			s.mu.Lock()
-			delete(ss.connection.server.globalOpenTable, op.durableFileID)
-			s.mu.Unlock()
-		}
+		s.mu.Lock()
+		delete(ss.connection.server.globalOpenTable, op.durableFileID)
+		s.mu.Unlock()
 		op.cancel()
 	}
 	ss.mu.Unlock()

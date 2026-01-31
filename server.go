@@ -57,25 +57,18 @@ var (
 
 // server is the implementation of an SMB server.
 type server struct {
-	enabled                         bool
-	stats                           serverStats
-	shareList                       map[string]*share
-	globalOpenTable                 map[uint64]*open
-	globalSessionTable              map[uint64]*session
-	connectionList                  map[string]*connection
-	serverGuid                      [16]byte
-	isDfsCapable                    bool
-	serverSideCopyMaxNumberOfChunks uint64
-	serverSideCopyMaxChunkSize      uint64
-	serverSideCopyMaxDataSize       uint64
-	serverHashLevel                 int
-	serverCapabilities              uint32
-	globalClientTable               map[[16]byte]*smbClient
-	encryptData                     bool
-	rejectUnencryptedAccess         bool
-	allowAnonymousAccess            bool
-	compressionSupported            bool
-	chainedCompressionSupported     bool
+	enabled                     bool
+	stats                       serverStats
+	shareList                   map[string]*share
+	globalOpenTable             map[uint64]*open
+	globalSessionTable          map[uint64]*session
+	connectionList              map[string]*connection
+	serverGuid                  [16]byte
+	serverCapabilities          uint32
+	globalClientTable           map[[16]byte]*smbClient
+	encryptData                 bool
+	compressionSupported        bool
+	chainedCompressionSupported bool
 
 	// Auxiliary fields.
 	listener        net.Listener
@@ -88,21 +81,17 @@ type server struct {
 // newServer returns an initialized SMB server.
 func newServer(l net.Listener, st Store, debug bool) *server {
 	s := &server{
-		enabled:                         true,
-		serverGuid:                      uuid.New(),
-		serverSideCopyMaxNumberOfChunks: 256,
-		serverSideCopyMaxChunkSize:      2 >> 10, // 1MiB
-		serverSideCopyMaxDataSize:       2 >> 14, // 16MiB
-		serverHashLevel:                 HashDisableAll,
-		shareList:                       make(map[string]*share),
-		connectionList:                  make(map[string]*connection),
-		globalOpenTable:                 make(map[uint64]*open),
-		globalSessionTable:              make(map[uint64]*session),
-		globalClientTable:               make(map[[16]byte]*smbClient),
-		listener:                        l,
-		connectionCount:                 make(map[string]int),
-		store:                           st,
-		debug:                           debug,
+		enabled:            true,
+		serverGuid:         uuid.New(),
+		shareList:          make(map[string]*share),
+		connectionList:     make(map[string]*connection),
+		globalOpenTable:    make(map[uint64]*open),
+		globalSessionTable: make(map[uint64]*session),
+		globalClientTable:  make(map[[16]byte]*smbClient),
+		listener:           l,
+		connectionCount:    make(map[string]int),
+		store:              st,
+		debug:              debug,
 	}
 	s.stats.start = time.Now()
 	return s
