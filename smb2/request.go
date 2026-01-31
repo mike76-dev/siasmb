@@ -60,7 +60,7 @@ func (req Request) structureSize() uint16 {
 }
 
 // GetRequests parses the message body for SMB/SMB2 requests.
-func GetRequests(data []byte, cid uint64, dialect uint16, tsid uint64) (reqs []*Request, err error) {
+func GetRequests(data []byte, cid uint64, tsid uint64) (reqs []*Request, err error) {
 	req := &Request{
 		cancelRequestID:    cid,
 		data:               data,
@@ -68,7 +68,7 @@ func GetRequests(data []byte, cid uint64, dialect uint16, tsid uint64) (reqs []*
 		transformSessionID: tsid,
 	}
 
-	if err := req.Header().Validate(dialect); err != nil {
+	if err := req.Header().Validate(); err != nil {
 		return nil, err
 	}
 
@@ -113,7 +113,7 @@ func GetRequests(data []byte, cid uint64, dialect uint16, tsid uint64) (reqs []*
 			transformSessionID: tsid,
 		}
 
-		if err := req.Header().Validate(dialect); err != nil {
+		if err := req.Header().Validate(); err != nil {
 			return nil, err
 		}
 
@@ -134,8 +134,8 @@ func GetRequests(data []byte, cid uint64, dialect uint16, tsid uint64) (reqs []*
 }
 
 // Validate returns an error if the request is malformed, nil otherwise.
-func (req Request) Validate(_ bool, dialect uint16) error {
-	return req.Header().Validate(dialect)
+func (req Request) Validate(_ bool, _ uint16) error {
+	return req.Header().Validate()
 }
 
 // Header casts the request to the Header type.
@@ -325,8 +325,8 @@ type CancelRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (cr CancelRequest) Validate(_ bool, dialect uint16) error {
-	if err := Header(cr.data).Validate(dialect); err != nil {
+func (cr CancelRequest) Validate(_ bool, _ uint16) error {
+	if err := Header(cr.data).Validate(); err != nil {
 		return err
 	}
 
@@ -347,8 +347,8 @@ type EchoRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (er EchoRequest) Validate(_ bool, dialect uint16) error {
-	if err := Header(er.data).Validate(dialect); err != nil {
+func (er EchoRequest) Validate(_ bool, _ uint16) error {
+	if err := Header(er.data).Validate(); err != nil {
 		return err
 	}
 

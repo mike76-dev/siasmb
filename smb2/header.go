@@ -93,7 +93,7 @@ func (h Header) IsSmb2() bool {
 }
 
 // Validate returns an error if the header is malformed, nil otherwise.
-func (h Header) Validate(dialect uint16) error {
+func (h Header) Validate() error {
 	if len(h) < 4 {
 		return ErrWrongLength
 	}
@@ -116,9 +116,9 @@ func (h Header) Validate(dialect uint16) error {
 		}
 
 		id := h.ProtocolID()
-		if id == PROTOCOL_SMB2_ENCRYPTED && !Is3X(dialect) {
+		if id == PROTOCOL_SMB2_ENCRYPTED {
 			return ErrEncryptedMessage
-		} else if id == PROTOCOL_SMB2_COMPRESSED && dialect != SMB_DIALECT_311 {
+		} else if id == PROTOCOL_SMB2_COMPRESSED {
 			return ErrCompressedMessage
 		} else if binary.LittleEndian.Uint16(h[4:6]) != SMB2HeaderStructureSize {
 			return ErrWrongFormat

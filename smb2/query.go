@@ -126,8 +126,8 @@ type QueryDirectoryRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (qdr QueryDirectoryRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
-	if err := Header(qdr.data).Validate(dialect); err != nil {
+func (qdr QueryDirectoryRequest) Validate(supportsMultiCredit bool, _ uint16) error {
+	if err := Header(qdr.data).Validate(); err != nil {
 		return err
 	}
 
@@ -721,8 +721,8 @@ type QueryInfoRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (qir QueryInfoRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
-	if err := Header(qir.data).Validate(dialect); err != nil {
+func (qir QueryInfoRequest) Validate(supportsMultiCredit bool, _ uint16) error {
+	if err := Header(qir.data).Validate(); err != nil {
 		return err
 	}
 

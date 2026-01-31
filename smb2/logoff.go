@@ -18,8 +18,8 @@ type LogoffRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (lr LogoffRequest) Validate(_ bool, dialect uint16) error {
-	if err := Header(lr.data).Validate(dialect); err != nil {
+func (lr LogoffRequest) Validate(_ bool, _ uint16) error {
+	if err := Header(lr.data).Validate(); err != nil {
 		return err
 	}
 

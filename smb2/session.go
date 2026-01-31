@@ -25,8 +25,8 @@ type SessionSetupRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (ssr SessionSetupRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
-	if err := Header(ssr.data).Validate(dialect); err != nil {
+func (ssr SessionSetupRequest) Validate(supportsMultiCredit bool, _ uint16) error {
+	if err := Header(ssr.data).Validate(); err != nil {
 		return err
 	}
 

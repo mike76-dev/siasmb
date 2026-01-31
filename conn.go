@@ -144,7 +144,7 @@ func (c *connection) acceptRequest(msg []byte) error {
 		}
 	}
 
-	reqs, err := smb2.GetRequests(msg, binary.LittleEndian.Uint64(cid), c.negotiateDialect, tsid)
+	reqs, err := smb2.GetRequests(msg, binary.LittleEndian.Uint64(cid), tsid)
 	if err != nil {
 		return err
 	}
@@ -152,7 +152,7 @@ func (c *connection) acceptRequest(msg []byte) error {
 	var ss *session
 	var found bool
 	for i, req := range reqs {
-		if err := req.Header().Validate(c.negotiateDialect); err != nil {
+		if err := req.Header().Validate(); err != nil {
 			return err
 		}
 

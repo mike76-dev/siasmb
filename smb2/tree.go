@@ -97,7 +97,7 @@ type TreeConnectRequest struct {
 
 // Validate implements GenericRequest interface.
 func (tcr TreeConnectRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
-	if err := Header(tcr.data).Validate(dialect); err != nil {
+	if err := Header(tcr.data).Validate(); err != nil {
 		return err
 	}
 
@@ -203,8 +203,8 @@ type TreeDisconnectRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (tdr TreeDisconnectRequest) Validate(_ bool, dialect uint16) error {
-	if err := Header(tdr.data).Validate(dialect); err != nil {
+func (tdr TreeDisconnectRequest) Validate(_ bool, _ uint16) error {
+	if err := Header(tdr.data).Validate(); err != nil {
 		return err
 	}
 
