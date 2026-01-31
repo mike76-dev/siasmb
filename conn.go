@@ -367,10 +367,14 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				resp := smb2.NewErrorResponse(nr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 				return resp, nil, nil
 			}
-			c.compressionIDs = compAlgos
+			if utils.Equal(utils.Subset(compAlgos, supportedCompressionAlgos), compAlgos) {
+				c.compressionIDs = compAlgos
+			}
 			if c.server.chainedCompressionSupported && flags&smb2.COMPRESSION_CAPABILITIES_FLAG_CHAINED != 0 {
 				flags = smb2.COMPRESSION_CAPABILITIES_FLAG_CHAINED
 				c.supportsChainedCompression = true
+			} else {
+				flags = smb2.COMPRESSION_CAPABILITIES_FLAG_NONE
 			}
 
 			signingAlgos, err := smb2.GetSigningCapabilities(ncs)
