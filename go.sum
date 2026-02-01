@@ -18,6 +18,8 @@ github.com/gotd/contrib v0.21.0/go.mod h1:ENoUh75IhHGxfz/puVJg8BU4ZF89yrL6Q47Tyo
 github.com/hashicorp/go-uuid v1.0.2/go.mod h1:6SBZvOh/SIDV7/2o3Jml5SYk/TvGqwFJ/bN7x4byOro=
 github.com/hashicorp/go-uuid v1.0.3 h1:2gKiV6YVmrJ1i2CKKa9obLvRieoRGviZFL26PcT/Co8=
 github.com/hashicorp/go-uuid v1.0.3/go.mod h1:6SBZvOh/SIDV7/2o3Jml5SYk/TvGqwFJ/bN7x4byOro=
+github.com/hvislyset/lz77 v0.0.0-20220728134553-ae0756cd4a38 h1:gYCriVduzXHkFxwBTQrK2IFRdVWTo1EIuVw3bKFVAEg=
+github.com/hvislyset/lz77 v0.0.0-20220728134553-ae0756cd4a38/go.mod h1:CO2e9TOssLMs2HLevhxZ/KPJcYr66rP39plDk2IeBgw=
 github.com/indece-official/go-ebcdic v1.2.0 h1:nKCubkNoXrGvBp3MSYuplOQnhANCDEY512Ry5Mwr4a0=
 github.com/indece-official/go-ebcdic v1.2.0/go.mod h1:RBddVJt0Ks0eDLRG5dhPwBDRiTNA7n+yv0dVFpSs46Q=
 github.com/jackc/pgpassfile v1.0.0 h1:/6Hmqy13Ss2zCq62VdNG8tM1wchn8zjSGOBJ6icpsIM=
@@ -66,6 +68,8 @@ github.com/oiweiwei/go-smb2.fork v1.0.0 h1:xHq/eYPM8hQEO/nwCez8YwHWHC8mlcsgw/Neu
 github.com/oiweiwei/go-smb2.fork v1.0.0/go.mod h1:h0CzLVvGAmq39izdYVHKyI5cLv6aHdbQAMKEe4dz4N8=
 github.com/oiweiwei/gokrb5.fork/v9 v9.0.4 h1:zHeZ/qjAAWrvsY1QltduANZLQ023APBYkPFJoHLA0ik=
 github.com/oiweiwei/gokrb5.fork/v9 v9.0.4/go.mod h1:KEnkAYUYqZ5VwzxLFbv3JHlRhCvdFahjrdjjssMJJkI=
+github.com/pierrec/lz4/v4 v4.1.25 h1:kocOqRffaIbU5djlIBr7Wh+cx82C0vtFb0fOurZHqD0=
+github.com/pierrec/lz4/v4 v4.1.25/go.mod h1:EoQMVJgeeEOMsCqCzqFm2O0cJvljX2nGZjcRIPL34O4=
 github.com/pkg/errors v0.9.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=

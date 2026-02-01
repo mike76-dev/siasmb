@@ -17,6 +17,7 @@ require (
 require (
 	github.com/gotd/contrib v0.21.0 // indirect
 	github.com/hashicorp/go-uuid v1.0.3 // indirect
+	github.com/hvislyset/lz77 v0.0.0-20220728134553-ae0756cd4a38 // indirect
 	github.com/indece-official/go-ebcdic v1.2.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
@@ -36,6 +37,7 @@ require (
 	github.com/montanaflynn/stats v0.7.1 // indirect
 	github.com/oiweiwei/go-smb2.fork v1.0.0 // indirect
 	github.com/oiweiwei/gokrb5.fork/v9 v9.0.4 // indirect
+	github.com/pierrec/lz4/v4 v4.1.25 // indirect
 	github.com/rs/zerolog v1.32.0 // indirect
 	go.sia.tech/coreutils v0.18.0 // indirect
 	go.sia.tech/jape v0.14.0 // indirect
