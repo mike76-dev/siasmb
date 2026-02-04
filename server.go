@@ -51,7 +51,7 @@ var (
 	// Supported algorithms.
 	supportedHashAlgos        = []uint16{smb2.SHA_512}
 	supportedEncryptionAlgos  = []uint16{smb2.AES_128_CCM, smb2.AES_128_GCM}
-	supportedCompressionAlgos = []uint16{}
+	supportedCompressionAlgos = []uint16{smb2.COMPRESSION_LZ4, smb2.COMPRESSION_LZ77, smb2.COMPRESSION_LZ77_HUFFMAN, smb2.COMPRESSION_LZNT1, smb2.COMPRESSION_PATTERN_V1}
 	supportedSigningAlgos     = []uint16{smb2.HMAC_SHA256, smb2.AES_CMAC, smb2.AES_GMAC}
 )
 

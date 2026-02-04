@@ -96,6 +96,7 @@ func main() {
 	}
 	if smb2.MaxSupportedDialect == smb2.SMB_DIALECT_311 {
 		server.compressionSupported = true
+		server.chainedCompressionSupported = true
 	}
 
 	// Start a thread to watch for the stop signal.

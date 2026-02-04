@@ -144,6 +144,15 @@ func (c *connection) acceptRequest(msg []byte) error {
 		}
 	}
 
+	if smb2.Header(msg).ProtocolID() == smb2.PROTOCOL_SMB2_COMPRESSED {
+		var err error
+		msg, err = c.decompress(msg)
+		if err != nil {
+			log.Printf("couldn't decompress message: %v", err)
+			return errDecompressionError
+		}
+	}
+
 	reqs, err := smb2.GetRequests(msg, binary.LittleEndian.Uint64(cid), tsid)
 	if err != nil {
 		return err
