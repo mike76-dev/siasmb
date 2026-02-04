@@ -5,7 +5,7 @@ import (
 	"compress/flate"
 	"io"
 
-	"github.com/hvislyset/lz77"
+	"github.com/mike76-dev/siasmb/compress/lz77"
 	"github.com/mike76-dev/siasmb/compress/lznt1"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/pierrec/lz4/v4"
@@ -63,10 +63,10 @@ func (c *Compressor) Compress(src []byte) ([]byte, error) {
 }
 
 // Decompress decompresses the provided input.
-func (c *Compressor) Decompress(src []byte) ([]byte, error) {
+func (c *Compressor) Decompress(src []byte, limit int) ([]byte, error) {
 	switch c.algorithm {
 	case smb2.COMPRESSION_LZ77:
-		return lz77.Decompress(src), nil
+		return lz77.Decompress(src, limit)
 
 	case smb2.COMPRESSION_LZ77_HUFFMAN:
 		r := flate.NewReader(bytes.NewReader(src))
