@@ -60,12 +60,13 @@ func (req Request) structureSize() uint16 {
 }
 
 // GetRequests parses the message body for SMB/SMB2 requests.
-func GetRequests(data []byte, cid uint64, tsid uint64) (reqs []*Request, err error) {
+func GetRequests(data []byte, cid uint64, tsid uint64, compressed bool) (reqs []*Request, err error) {
 	req := &Request{
 		cancelRequestID:    cid,
 		data:               data,
 		isEncrypted:        tsid != 0,
 		transformSessionID: tsid,
+		compressReply:      compressed,
 	}
 
 	if err := req.Header().Validate(); err != nil {
@@ -111,6 +112,7 @@ func GetRequests(data []byte, cid uint64, tsid uint64) (reqs []*Request, err err
 			data:               data[off:],
 			isEncrypted:        tsid != 0,
 			transformSessionID: tsid,
+			compressReply:      compressed,
 		}
 
 		if err := req.Header().Validate(); err != nil {
@@ -216,6 +218,7 @@ type GenericResponse interface {
 	SetOpenID(id []byte)
 	Append(newResp GenericResponse)
 	ShouldEncrypt() bool
+	MayCompress() bool
 }
 
 // Response is the representation of an SMB2 response.
@@ -226,6 +229,7 @@ type Response struct {
 	treeID        uint32
 	openID        []byte
 	shouldEncrypt bool
+	mayCompress   bool
 }
 
 // EncodedLength returns the length of the response body.
@@ -290,6 +294,7 @@ func (resp *Response) FromRequest(req GenericRequest) {
 	}
 	resp.groupID = req.GroupID()
 	resp.shouldEncrypt = req.IsEncrypted()
+	resp.mayCompress = req.CompressReply()
 }
 
 // Append adds a new response to the chain.
@@ -317,6 +322,11 @@ func (resp *Response) Append(newResp GenericResponse) {
 // ShouldEncrypt returns true if the response should be encrypted.
 func (resp Response) ShouldEncrypt() bool {
 	return resp.shouldEncrypt
+}
+
+// MayCompress returns true if the response may be compressed before sending.
+func (resp Response) MayCompress() bool {
+	return resp.mayCompress
 }
 
 // CancelRequest represents an SMB2_CANCEL request.
