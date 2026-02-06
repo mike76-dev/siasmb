@@ -1094,6 +1094,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return nil, nil, err
 		}
 
+		if c.server.compressionSupported && len(c.compressionIDs) != 0 && rr.Flags()&smb2.READFLAG_REQUEST_COMPRESSED != 0 {
+			rr.SetCompressReply(true)
+		}
+
 		c.mu.Lock()
 		ss, found := c.sessionTable[rr.Header().SessionID()]
 		c.mu.Unlock()

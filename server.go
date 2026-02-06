@@ -165,9 +165,15 @@ func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResp
 	if ss != nil && ss.state == sessionValid { // A session exists, sign if required
 		if resp.ShouldEncrypt() {
 			wipeSignatures(buf)
+			if resp.MayCompress() {
+				buf = c.compress(buf)
+			}
 			buf = ss.encrypt(buf)
 		} else if resp.Header().Command() != smb2.SMB2_SESSION_SETUP && ss.encryptData {
 			wipeSignatures(buf)
+			if resp.MayCompress() {
+				buf = c.compress(buf)
+			}
 			buf = ss.encrypt(buf)
 		} else if resp.Header().Command() == smb2.SMB2_SESSION_SETUP || resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
 			ss.sign(buf)
