@@ -59,9 +59,13 @@ var (
 )
 
 const (
-	SMBHeaderSize           = 32
-	SMB2HeaderSize          = 64
-	SMB2TransformHeaderSize = 52
+	SMBHeaderSize  = 32
+	SMB2HeaderSize = 64
+
+	SMB2TransformHeaderSize            = 52
+	SMB2CompressionTransformHeaderSize = 16
+	SMB2CompressionPayloadHeaderOffset = 8
+	SMB2CompressionPayloadHeaderSize   = 8
 
 	SMB2HeaderStructureSize = 64
 )
@@ -93,7 +97,7 @@ func (h Header) IsSmb2() bool {
 }
 
 // Validate returns an error if the header is malformed, nil otherwise.
-func (h Header) Validate(dialect uint16) error {
+func (h Header) Validate() error {
 	if len(h) < 4 {
 		return ErrWrongLength
 	}
@@ -116,9 +120,9 @@ func (h Header) Validate(dialect uint16) error {
 		}
 
 		id := h.ProtocolID()
-		if id == PROTOCOL_SMB2_ENCRYPTED && !Is3X(dialect) {
+		if id == PROTOCOL_SMB2_ENCRYPTED {
 			return ErrEncryptedMessage
-		} else if id == PROTOCOL_SMB2_COMPRESSED && dialect != SMB_DIALECT_311 {
+		} else if id == PROTOCOL_SMB2_COMPRESSED {
 			return ErrCompressedMessage
 		} else if binary.LittleEndian.Uint16(h[4:6]) != SMB2HeaderStructureSize {
 			return ErrWrongFormat
@@ -343,4 +347,112 @@ func (h Header) ProtocolID() uint32 {
 // SetProtocolID sets the ProtocolID of the header.
 func (h Header) SetProtocolID(id uint32) {
 	binary.LittleEndian.PutUint32(h[:4], id)
+}
+
+// OriginalCompressedSegmentSize returns the OriginalCompressedSegmentSize field of
+// the SMB2_COMPRESSION_TRANSFORM_HEADER.
+func (h Header) OriginalCompressedSegmentSize() uint32 {
+	return binary.LittleEndian.Uint32(h[4:8])
+}
+
+// SetOriginalCompressedSegmentSize sets the OriginalCompressedSegmentSize field of
+// the SMB2_COMPRESSION_TRANSFORM_HEADER.
+func (h Header) SetOriginalCompressedSegmentSize(size uint32) {
+	binary.LittleEndian.PutUint32(h[4:8], size)
+}
+
+// CompressionAlgorithm returns the CompressionAlgorithm field of the
+// SMB2_COMPRESSION_TRANSFORM_HEADER_UNCHAINED.
+func (h Header) CompressionAlgorithm() uint16 {
+	return binary.LittleEndian.Uint16(h[8:10])
+}
+
+// SetCompressionAlgorithm sets the CompressionAlgorithm field of the
+// SMB2_COMPRESSION_TRANSFORM_HEADER_UNCHAINED.
+func (h Header) SetCompressionAlgorithm(algo uint16) {
+	binary.LittleEndian.PutUint16(h[8:10], algo)
+}
+
+// CompressionFlags returns the Flags field of the
+// SMB2_COMPRESSION_TRANSFORM_HEADER_UNCHAINED.
+func (h Header) CompressionFlags() uint16 {
+	return binary.LittleEndian.Uint16(h[10:12])
+}
+
+// SetCompressionFlags sets the Flags field of the
+// SMB2_COMPRESSION_TRANSFORM_HEADER_UNCHAINED.
+func (h Header) SetCompressionFlags(flags uint16) {
+	binary.LittleEndian.PutUint16(h[10:12], flags)
+}
+
+// Offset returns the Offset field of the
+// SMB2_COMPRESSION_TRANSFORM_HEADER_UNCHAINED.
+func (h Header) Offset() uint32 {
+	return binary.LittleEndian.Uint32(h[12:16])
+}
+
+// SetOffset sets the Offset field of the
+// SMB2_COMPRESSION_TRANSFORM_HEADER_UNCHAINED.
+func (h Header) SetOffset(off uint32) {
+	binary.LittleEndian.PutUint32(h[12:16], off)
+}
+
+// PayloadHeader is a typecast from SMB2_COMPRESSION_TRANSFORM_HEADER to
+// SMB2_COMPRESSION_CHAINED_PAYLOAD_HEADER.
+type PayloadHeader []byte
+
+// CompressionAlgorithm returns the CompressionAlgorithm field of the
+// SMB2_COMPRESSION_CHAINED_PAYLOAD_HEADER.
+func (ph PayloadHeader) CompressionAlgorithm() uint16 {
+	return binary.LittleEndian.Uint16(ph[:2])
+}
+
+// SetCompressionAlgorithm sets the CompressionAlgorithm field of the
+// SMB2_COMPRESSION_CHAINED_PAYLOAD_HEADER.
+func (ph PayloadHeader) SetCompressionAlgorithm(algo uint16) {
+	binary.LittleEndian.PutUint16(ph[:2], algo)
+}
+
+// Flags returns the Flags field of the SMB2_COMPRESSION_CHAINED_PAYLOAD_HEADER.
+func (ph PayloadHeader) Flags() uint16 {
+	return binary.LittleEndian.Uint16(ph[2:4])
+}
+
+// SetFlags sets the Flags field of the SMB2_COMPRESSION_CHAINED_PAYLOAD_HEADER.
+func (ph PayloadHeader) SetFlags(flags uint16) {
+	binary.LittleEndian.PutUint16(ph[2:4], flags)
+}
+
+// Length returns the Length field of the SMB2_COMPRESSION_CHAINED_PAYLOAD_HEADER.
+func (ph PayloadHeader) Length() uint32 {
+	return binary.LittleEndian.Uint32(ph[4:8])
+}
+
+// SetLength sets the Length field of the SMB2_COMPRESSION_CHAINED_PAYLOAD_HEADER.
+func (ph PayloadHeader) SetLength(length uint32) {
+	binary.LittleEndian.PutUint32(ph[4:8], length)
+}
+
+// PatternV1 represents a SMB2_COMPRESSION_PATTERN_PAYLOAD_V1 structure.
+type PatternV1 struct {
+	Pattern     uint8
+	Repetitions uint32
+}
+
+// Marshal converts a PatternV1 structure into a byte sequence.
+func (p PatternV1) Marshal() []byte {
+	b := make([]byte, 8)
+	b[0] = p.Pattern
+	binary.LittleEndian.PutUint32(b[4:8], p.Repetitions)
+	return b
+}
+
+// Unmarshal converts a byte sequence into a PatternV1 structure.
+func (p *PatternV1) Unmarshal(b []byte) error {
+	if len(b) < 8 {
+		return ErrWrongLength
+	}
+	p.Pattern = b[0]
+	p.Repetitions = binary.LittleEndian.Uint32(b[4:8])
+	return nil
 }

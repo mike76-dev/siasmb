@@ -24,23 +24,17 @@ var (
 
 // share represents a Share object.
 type share struct {
-	id                                types.Hash256
-	name                              string
-	serverName                        string
-	connectSecurity                   map[string]struct{}
-	fileSecurity                      map[string]uint32
-	cscFlags                          uint32
-	doAccessBasedDirectoryEnumeration bool
-	allowNamespaceCaching             bool
-	forceSharedDelete                 bool
-	restrictExclusiveOpens            bool
-	shareType                         uint8
-	remark                            string
-	maxUses                           int
-	currentUses                       int
-	forceLevel2Oplock                 bool
-	hashEnabled                       bool
-	encryptData                       bool
+	id              types.Hash256
+	name            string
+	serverName      string
+	connectSecurity map[string]struct{}
+	fileSecurity    map[string]uint32
+	shareType       uint8
+	remark          string
+	maxUses         int
+	currentUses     int
+	encryptData     bool
+	compressData    bool
 
 	// Auxiliary fields.
 	client    *client.Client
@@ -67,6 +61,7 @@ func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
 		connectSecurity: make(map[string]struct{}),
 		fileSecurity:    make(map[string]uint32),
 		encryptData:     s.encryptData,
+		compressData:    s.compressionSupported,
 	}
 
 	sh.client = client.New(ss.ServerName, ss.Password)

@@ -20,9 +20,9 @@ const (
 )
 
 const (
-	MaxTransactSize = 1048576 * 4 // 4MiB
-	MaxReadSize     = 1048576 * 4 // 4MiB
-	MaxWriteSize    = 1048576 * 4 // 4MiB
+	MaxTransactSize = 1048576 * 8 // 8MiB
+	MaxReadSize     = 1048576 * 8 // 8MiB
+	MaxWriteSize    = 1048576 * 8 // 8MiB
 )
 
 const (
@@ -46,7 +46,7 @@ const (
 	MinSupportedDialect = SMB_DIALECT_202
 
 	// MaxSupportedDialect is the maximum dialect that is supported by the server.
-	MaxSupportedDialect = SMB_DIALECT_302
+	MaxSupportedDialect = SMB_DIALECT_311
 )
 
 const (
@@ -67,6 +67,66 @@ const (
 	GLOBAL_CAP_NOTIFICATIONS      = 0x00000080
 )
 
+const (
+	// Negotiate context types.
+	PREAUTH_INTEGRITY_CAPABILITIES = 0x0001
+	ENCRYPTION_CAPABILITIES        = 0x0002
+	COMPRESSION_CAPABILITIES       = 0x0003
+	NETNAME_NEGOTIATE_CONTEXT_ID   = 0x0005
+	TRANSPORT_CAPABILITIES         = 0x0006
+	RDMA_TRANSFORM_CAPABILITIES    = 0x0007
+	SIGNING_CAPABILITIES           = 0x0008
+	CONTEXTTYPE_RESERVED           = 0x0100
+)
+
+const (
+	// Hash algorithms.
+	SHA_512 = 0x0001
+)
+
+const (
+	// Encryption ciphers.
+	AES_128_CCM = 0x0001
+	AES_128_GCM = 0x0002
+	AES_256_CCM = 0x0003
+	AES_256_GCM = 0x0004
+)
+
+const (
+	// Compression capabilities.
+	COMPRESSION_CAPABILITIES_FLAG_NONE    = 0x00000000
+	COMPRESSION_CAPABILITIES_FLAG_CHAINED = 0x00000001
+)
+
+const (
+	// Compression algorithms.
+	COMPRESSION_NONE         = 0x0000
+	COMPRESSION_LZNT1        = 0x0001
+	COMPRESSION_LZ77         = 0x0002
+	COMPRESSION_LZ77_HUFFMAN = 0x0003
+	COMPRESSION_PATTERN_V1   = 0x0004
+	COMPRESSION_LZ4          = 0x0005
+)
+
+const (
+	// Transport capabilities.
+	ACCEPT_TRANSPORT_LEVEL_SECURITY = 0x00000001
+)
+
+const (
+	// RDMA transform capabilities.
+	RDMA_TRANSFORM_NONE       = 0x0000
+	RDMA_TRANSFORM_ENCRYPTION = 0x0001
+	RDMA_TRANSFORM_SIGNING    = 0x0002
+)
+
+const (
+	// Signing capabilities.
+	HMAC_SHA256 = 0x0000
+	AES_CMAC    = 0x0001
+	AES_GMAC    = 0x0002
+)
+
 var (
 	ErrDialectNotSupported = errors.New("dialect not supported")
 	ErrInvalidParameter    = errors.New("wrong parameter supplied")
@@ -83,8 +143,8 @@ type NegotiateRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (nr NegotiateRequest) Validate(supportsMultiCredit bool, dialect uint16) error {
-	if err := Header(nr.data).Validate(dialect); err != nil {
+func (nr NegotiateRequest) Validate(supportsMultiCredit bool) error {
+	if err := Header(nr.data).Validate(); err != nil {
 		return err
 	}
 
@@ -225,6 +285,186 @@ func (nr NegotiateRequest) MaxCommonDialect() uint16 {
 	return max
 }
 
+// Dialects returns the Dialects field of the SMB2_NEGOTIATE request.
+func (nr NegotiateRequest) Dialects() []uint16 {
+	dialectCount := binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+2 : SMB2HeaderSize+4])
+	var dialects []uint16
+	for i := range dialectCount {
+		dialects = append(dialects, binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+SMB2NegotiateRequestMinSize+i*2:SMB2HeaderSize+SMB2NegotiateRequestMinSize+i*2+2]))
+	}
+	return dialects
+}
+
+// NegotiateContexts returns a list of NEGOTIATE_CONTEXT values.
+func (nr NegotiateRequest) NegotiateContexts() []NegotiateContext {
+	offset := binary.LittleEndian.Uint32(nr.data[SMB2HeaderSize+28 : SMB2HeaderSize+32])
+	count := binary.LittleEndian.Uint16(nr.data[SMB2HeaderSize+32 : SMB2HeaderSize+34])
+	var ncs []NegotiateContext
+	for range count {
+		if len(nr.data) < int(offset)+4 {
+			return ncs
+		}
+		t := binary.LittleEndian.Uint16(nr.data[offset : offset+2])
+		l := binary.LittleEndian.Uint16(nr.data[offset+2 : offset+4])
+		if len(nr.data) < int(offset)+int(l)+8 {
+			return ncs
+		}
+		data := make([]byte, l)
+		copy(data, nr.data[offset+8:offset+uint32(l)+8])
+		ncs = append(ncs, NegotiateContext{t, data})
+		offset += uint32(utils.Roundup(int(l), 8)) + 8
+	}
+	return ncs
+}
+
+// NegotiateContext represents a NEGOTIATE_CONTEXT value.
+type NegotiateContext struct {
+	ContextType uint16
+	Data        []byte
+}
+
+// GetPreauthIntegrityCapabilities returns the SMB2_PREAUTH_INTEGRITY_CAPABILITIES context,
+// if present.
+func GetPreauthIntegrityCapabilities(ncs []NegotiateContext) (hashAlgos []uint16, salt []byte, err error) {
+	for _, nc := range ncs {
+		if nc.ContextType == PREAUTH_INTEGRITY_CAPABILITIES {
+			if len(hashAlgos) != 0 {
+				return nil, nil, ErrInvalidParameter // Exactly one context is allowed
+			}
+			if len(nc.Data) < 6 { // At least one HashAlgorithmID must be present
+				return nil, nil, ErrInvalidParameter
+			}
+			count := binary.LittleEndian.Uint16(nc.Data[:2])
+			length := binary.LittleEndian.Uint16(nc.Data[2:4])
+			if count == 0 || len(nc.Data) < int(2*count+length+4) {
+				return nil, nil, ErrInvalidParameter
+			}
+			salt = make([]byte, length)
+			copy(salt, nc.Data[4+2*count:4+2*count+length])
+			for i := range count {
+				hashAlgos = append(hashAlgos, binary.LittleEndian.Uint16(nc.Data[4+i*2:6+i*2]))
+			}
+		}
+	}
+	if len(hashAlgos) == 0 {
+		return nil, nil, ErrInvalidParameter // Exactly one context is allowed
+	}
+	return
+}
+
+// GetEncryptionCapabilities returns the SMB2_ENCRYPTION_CAPABILITIES context, if present.
+func GetEncryptionCapabilities(ncs []NegotiateContext) (ciphers []uint16, err error) {
+	for _, nc := range ncs {
+		if nc.ContextType == ENCRYPTION_CAPABILITIES {
+			if len(ciphers) != 0 {
+				return nil, ErrInvalidParameter // Maximum one context is allowed
+			}
+			if len(nc.Data) < 4 {
+				return nil, ErrInvalidParameter
+			}
+			count := binary.LittleEndian.Uint16(nc.Data[:2])
+			if count == 0 || len(nc.Data) < int(2*count+2) {
+				return nil, ErrInvalidParameter
+			}
+			for i := range count {
+				ciphers = append(ciphers, binary.LittleEndian.Uint16(nc.Data[2+i*2:4+i*2]))
+			}
+		}
+	}
+	return
+}
+
+// GetCompressionCapabilities returns the SMB2_COMPRESSION_CAPABILITIES context, if present.
+func GetCompressionCapabilities(ncs []NegotiateContext) (flags uint32, algos []uint16, err error) {
+	for _, nc := range ncs {
+		if nc.ContextType == COMPRESSION_CAPABILITIES {
+			if len(algos) != 0 {
+				return 0, nil, ErrInvalidParameter // Maximum one context is allowed
+			}
+			if len(nc.Data) < 8 {
+				return 0, nil, ErrInvalidParameter
+			}
+			count := binary.LittleEndian.Uint16(nc.Data[:2])
+			if count == 0 || len(nc.Data) < int(2*count+8) {
+				return 0, nil, ErrInvalidParameter
+			}
+			flags = binary.LittleEndian.Uint32(nc.Data[4:8])
+			for i := range count {
+				algos = append(algos, binary.LittleEndian.Uint16(nc.Data[8+i*2:10+i*2]))
+			}
+		}
+	}
+	return
+}
+
+// NetName returns the SMB2_NETNAME_NEGOTIATE_CONTEXT_ID context, if present.
+func NetName(ncs []NegotiateContext) string {
+	for _, nc := range ncs {
+		if nc.ContextType == NETNAME_NEGOTIATE_CONTEXT_ID {
+			return utils.DecodeToString(nc.Data)
+		}
+	}
+	return ""
+}
+
+// TransportCapabilities returns the SMB2_TRANSPORT_CAPABILITIES context, if present.
+func TransportCapabilities(ncs []NegotiateContext) (flags uint32, err error) {
+	for _, nc := range ncs {
+		if nc.ContextType == TRANSPORT_CAPABILITIES {
+			if len(nc.Data) < 4 {
+				return 0, ErrInvalidParameter
+			}
+			return binary.LittleEndian.Uint32(nc.Data[:4]), nil
+		}
+	}
+	return 0, nil
+}
+
+// RDMATransformCapabilities returns the SMB2_RDMA_TRANSFORM_CAPABILITIES context,
+// if present.
+func RDMATransformCapabilities(ncs []NegotiateContext) (ids []uint16, err error) {
+	for _, nc := range ncs {
+		if nc.ContextType == RDMA_TRANSFORM_CAPABILITIES {
+			if len(ids) != 0 {
+				return nil, ErrInvalidParameter // Maximum one context is allowed
+			}
+			if len(nc.Data) < 10 { // At least one ID must be present
+				return nil, ErrInvalidParameter
+			}
+			count := binary.LittleEndian.Uint16(nc.Data[:2])
+			if count == 0 || len(nc.Data) < int(2*count+8) {
+				return nil, ErrInvalidParameter
+			}
+			for i := range count {
+				ids = append(ids, binary.LittleEndian.Uint16(nc.Data[8+i*2:10+i*2]))
+			}
+		}
+	}
+	return
+}
+
+// GetSigningCapabilities returns the SMB2_SIGNING_CAPABILITIES context, if present.
+func GetSigningCapabilities(ncs []NegotiateContext) (algos []uint16, err error) {
+	for _, nc := range ncs {
+		if nc.ContextType == SIGNING_CAPABILITIES {
+			if len(algos) != 0 {
+				return nil, ErrInvalidParameter // Maximum one context is allowed
+			}
+			if len(nc.Data) < 4 { // At least one algo must be present
+				return nil, ErrInvalidParameter
+			}
+			count := binary.LittleEndian.Uint16(nc.Data[:2])
+			if count == 0 || len(nc.Data) < int(2*count+2) {
+				return nil, ErrInvalidParameter
+			}
+			for i := range count {
+				algos = append(algos, binary.LittleEndian.Uint16(nc.Data[2+i*2:4+i*2]))
+			}
+		}
+	}
+	return
+}
+
 // NegotiateResponse represents an SMB2_NEGOTIATE response.
 type NegotiateResponse struct {
 	Response
@@ -337,4 +577,77 @@ func (nr *NegotiateResponse) Generate(serverGuid []byte, ns *ntlm.Server, dialec
 	nr.SetSystemTime(time.Now())
 
 	nr.SetSecurityBuffer(token)
+}
+
+// AddNegotiateContexts appends a list of marshalled negotiate contexts to the response.
+// A security buffer needs to be added already.
+func (nr *NegotiateResponse) AddNegotiateContexts(blobs [][]byte) {
+	var ncs []byte
+	for i := range blobs {
+		blob := blobs[i]
+		size := len(blob)
+		if i < len(blobs)-1 {
+			size = utils.Roundup(size, 8)
+		}
+		paddedBlob := make([]byte, size)
+		copy(paddedBlob, blob)
+		ncs = append(ncs, paddedBlob...)
+	}
+	padding := make([]byte, utils.Roundup(len(nr.data), 8)-len(nr.data))
+	nr.data = append(nr.data, padding...)
+	binary.LittleEndian.PutUint16(nr.data[SMB2HeaderSize+6:SMB2HeaderSize+8], uint16(len(blobs)))
+	binary.LittleEndian.PutUint32(nr.data[SMB2HeaderSize+60:SMB2HeaderSize+64], uint32(len(nr.data)))
+	nr.data = append(nr.data, ncs...)
+}
+
+// PreauthIntegrityCapabilities forms an SMB2_PREAUTH_INTEGRITY_CAPABILITIES
+// response context.
+func PreauthIntegrityCapabilities(salt []byte) []byte {
+	data := make([]byte, 6+len(salt))
+	binary.LittleEndian.PutUint16(data[:2], 1)
+	binary.LittleEndian.PutUint16(data[2:4], uint16(len(salt)))
+	binary.LittleEndian.PutUint16(data[4:6], SHA_512)
+	if len(salt) > 0 {
+		copy(data[6:], salt)
+	}
+	ctx := make([]byte, 8)
+	binary.LittleEndian.PutUint16(ctx[:2], PREAUTH_INTEGRITY_CAPABILITIES)
+	binary.LittleEndian.PutUint16(ctx[2:4], uint16(len(data)))
+	return append(ctx, data...)
+}
+
+// EncryptionCapabilities forms an SMB2_ENCRYPTION_CAPABILITIES response context.
+func EncryptionCapabilities(cipher uint16) []byte {
+	data := make([]byte, 4)
+	binary.LittleEndian.PutUint16(data[:2], 1)
+	binary.LittleEndian.PutUint16(data[2:4], cipher)
+	ctx := make([]byte, 8)
+	binary.LittleEndian.PutUint16(ctx[:2], ENCRYPTION_CAPABILITIES)
+	binary.LittleEndian.PutUint16(ctx[2:4], uint16(len(data)))
+	return append(ctx, data...)
+}
+
+// CompressionCapabilities forms an SMB2_COMPRESSION_CAPABILITIES response context.
+func CompressionCapabilities(flags uint32, algos []uint16) []byte {
+	data := make([]byte, 8+2*len(algos))
+	binary.LittleEndian.PutUint16(data[:2], uint16(len(algos)))
+	binary.LittleEndian.PutUint32(data[4:8], flags)
+	for i, algo := range algos {
+		binary.LittleEndian.PutUint16(data[8+i*2:10+i*2], algo)
+	}
+	ctx := make([]byte, 8)
+	binary.LittleEndian.PutUint16(ctx[:2], COMPRESSION_CAPABILITIES)
+	binary.LittleEndian.PutUint16(ctx[2:4], uint16(len(data)))
+	return append(ctx, data...)
+}
+
+// SigningCapabilities forms an SMB2_SIGNING_CAPABILITIES response context.
+func SigningCapabilities(algo uint16) []byte {
+	data := make([]byte, 4)
+	binary.LittleEndian.PutUint16(data[:2], 1)
+	binary.LittleEndian.PutUint16(data[2:4], algo)
+	ctx := make([]byte, 8)
+	binary.LittleEndian.PutUint16(ctx[:2], SIGNING_CAPABILITIES)
+	binary.LittleEndian.PutUint16(ctx[2:4], uint16(len(data)))
+	return append(ctx, data...)
 }

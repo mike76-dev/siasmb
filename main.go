@@ -21,7 +21,7 @@ import (
 	"github.com/mike76-dev/siasmb/stores"
 )
 
-const version = "2.1.0-alpha"
+const version = "2.1.0-beta"
 
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
 
@@ -93,7 +93,10 @@ func main() {
 	if smb2.Is3X(smb2.MaxSupportedDialect) {
 		server.serverCapabilities |= smb2.GLOBAL_CAP_ENCRYPTION
 		server.encryptData = true
-		server.rejectUnencryptedAccess = true
+	}
+	if smb2.MaxSupportedDialect == smb2.SMB_DIALECT_311 {
+		server.compressionSupported = true
+		server.chainedCompressionSupported = true
 	}
 
 	// Start a thread to watch for the stop signal.
@@ -138,9 +141,7 @@ func main() {
 	}()
 
 	for {
-		if conn, err := l.Accept(); err != nil {
-			log.Println(err)
-		} else {
+		if conn, err := l.Accept(); err == nil {
 			// Check if the remote host is on the ban list.
 			host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 			banned, _, err := db.IsBanned(host)
@@ -176,9 +177,10 @@ func main() {
 					if err != nil && strings.Contains(err.Error(), "EOF") {
 						time.Sleep(100 * time.Millisecond)
 						continue
-					}
-					if err != nil {
-						log.Println("Error reading message:", err)
+					} else if err != nil {
+						if !strings.Contains(err.Error(), "use of closed network connection") {
+							log.Println("Error reading message:", err)
+						}
 						server.closeConnection(c)
 						return
 					}

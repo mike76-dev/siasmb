@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"cmp"
 	"math"
 	"strings"
 )
@@ -53,4 +54,131 @@ func FindMaxKey[T any](m map[uint64]T) (key uint64, value T) {
 		}
 	}
 	return
+}
+
+// IsOverlapped returns true if there's at least one match between the two slices.
+func IsOverlapped[T comparable](a, b []T) bool {
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+
+	set := make(map[T]struct{}, len(a))
+	for _, v := range a {
+		set[v] = struct{}{}
+	}
+
+	for _, v := range b {
+		if _, ok := set[v]; ok {
+			return true
+		}
+	}
+
+	return false
+}
+
+// Subset returns the largest common subset of both slices.
+func Subset[T comparable](a, b []T) []T {
+	if len(a) == 0 || len(b) == 0 {
+		return nil
+	}
+
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+
+	set := make(map[T]struct{}, len(a))
+	for _, v := range a {
+		set[v] = struct{}{}
+	}
+
+	var c []T
+	for _, v := range b {
+		if _, ok := set[v]; ok {
+			c = append(c, v)
+		}
+	}
+
+	return c
+}
+
+// FirstMatch returns the first occurence in a that is present in b.
+func FirstMatch[T comparable](a, b []T) T {
+	var c T
+	if len(a) == 0 || len(b) == 0 {
+		return c
+	}
+
+	set := make(map[T]struct{}, len(b))
+	for _, v := range b {
+		set[v] = struct{}{}
+	}
+
+	for _, v := range a {
+		if _, ok := set[v]; ok {
+			return v
+		}
+	}
+
+	return c
+}
+
+// Equal returns true if two slices are equal, which means they contain
+// sets of the same elements, no matter in which order.
+func Equal[T comparable](a, b []T) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+
+	if len(a) == 0 || len(b) == 0 {
+		return false
+	}
+
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+
+	set := make(map[T]struct{}, len(a))
+	for _, v := range a {
+		set[v] = struct{}{}
+	}
+
+	for _, v := range b {
+		if _, ok := set[v]; !ok {
+			return false
+		}
+	}
+
+	return true
+}
+
+// MaxCommon returns the greatest common element of the two slices.
+// Only positive values can be compared this way.
+func MaxCommon[T cmp.Ordered](a, b []T) T {
+	var c T
+	if len(a) == 0 || len(b) == 0 {
+		return c
+	}
+
+	if len(a) > len(b) {
+		a, b = b, a
+	}
+
+	set := make(map[T]struct{}, len(a))
+	for _, v := range a {
+		set[v] = struct{}{}
+	}
+
+	for _, v := range b {
+		if _, ok := set[v]; ok {
+			if v > c {
+				c = v
+			}
+		}
+	}
+
+	return c
 }

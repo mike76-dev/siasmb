@@ -48,29 +48,20 @@ type upload struct {
 type open struct {
 	// The handle is what uniquely identifies the file within a share.
 	// It is deterministically derived from the path of the object.
-	handle                      uint64
-	fileID                      uint64
-	durableFileID               uint64
-	session                     *session
-	treeConnect                 *treeConnect
-	connection                  *connection
-	grantedAccess               uint32
-	oplockLevel                 uint8
-	oplockState                 int
-	oplockTimeout               time.Duration
-	isDurable                   bool
-	durableOpenTimeout          time.Duration
-	durableOpenScavengerTimeout time.Time
-	durableOwner                string
-	currentEaIndex              uint32
-	currentQuotaIndex           uint32
-	lockCount                   int
-	pathName                    string
-	resumeKey                   []byte
-	fileName                    string
-	createOptions               uint32
-	fileAttributes              uint32
-	createGuid                  [16]byte
+	handle                     uint64
+	fileID                     uint64
+	durableFileID              uint64
+	session                    *session
+	treeConnect                *treeConnect
+	connection                 *connection
+	grantedAccess              uint32
+	pathName                   string
+	resumeKey                  []byte
+	fileName                   string
+	createOptions              uint32
+	fileAttributes             uint32
+	createGuid                 [16]byte
+	applicationInstanceVersion [16]byte
 
 	// Since renterd has no idea about such attributes of the most operating systems as
 	// CreationTime, LastWriteTime, LastAccessTime, and ChangeTime, we can only operate
@@ -169,32 +160,27 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 	fid := make([]byte, 16)
 	rand.Read(fid)
 	op := &open{
-		handle:            binary.LittleEndian.Uint64(id[:8]),
-		fileID:            binary.LittleEndian.Uint64(fid[:8]),
-		durableFileID:     binary.LittleEndian.Uint64(fid[8:]),
-		session:           ss,
-		connection:        ss.connection,
-		treeConnect:       tc,
-		oplockLevel:       smb2.OPLOCK_LEVEL_NONE,
-		oplockState:       smb2.OplockNone,
-		durableOwner:      ss.userName,
-		grantedAccess:     access,
-		currentEaIndex:    1,
-		currentQuotaIndex: 1,
-		fileName:          filename,
-		pathName:          filepath,
-		resumeKey:         id[:24],
-		createOptions:     cr.CreateOptions(),
-		fileAttributes:    smb2.FILE_ATTRIBUTE_NORMAL,
-		lastModified:      time.Time(info.ModTime),
-		size:              uint64(info.Size),
-		allocated:         uint64(info.Size),
-		ctx:               ctx,
-		cancel:            cancel,
-		lsaFrames:         make(map[uint32]*rpc.Frame),
-		buffer:            make(map[uint64][]byte),
-		chunkSize:         smb2.BytesPerSector * 4,
-		maxCacheSize:      4,
+		handle:         binary.LittleEndian.Uint64(id[:8]),
+		fileID:         binary.LittleEndian.Uint64(fid[:8]),
+		durableFileID:  binary.LittleEndian.Uint64(fid[8:]),
+		session:        ss,
+		connection:     ss.connection,
+		treeConnect:    tc,
+		grantedAccess:  access,
+		fileName:       filename,
+		pathName:       filepath,
+		resumeKey:      id[:24],
+		createOptions:  cr.CreateOptions(),
+		fileAttributes: smb2.FILE_ATTRIBUTE_NORMAL,
+		lastModified:   time.Time(info.ModTime),
+		size:           uint64(info.Size),
+		allocated:      uint64(info.Size),
+		ctx:            ctx,
+		cancel:         cancel,
+		lsaFrames:      make(map[uint32]*rpc.Frame),
+		buffer:         make(map[uint64][]byte),
+		chunkSize:      smb2.BytesPerSector * 4,
+		maxCacheSize:   4,
 	}
 
 	if isDir {

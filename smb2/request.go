@@ -12,6 +12,7 @@ var (
 	ErrRelatedRequests   = errors.New("first request in a chain cannot be related")
 	ErrMixedRequests     = errors.New("wrong usage of the related flag")
 	ErrUnalignedRequests = errors.New("chained requests must be aligned to a 8-byte boundary")
+	ErrWrongSecurity     = errors.New("request is neither signed nor encrypted")
 )
 
 const (
@@ -27,7 +28,7 @@ const (
 
 // GenericRequest implements a few common methods of SMB2 requests.
 type GenericRequest interface {
-	Validate(bool, uint16) error
+	Validate(bool) error
 	Header() Header
 	Len() int
 	CancelRequestID() uint64
@@ -35,6 +36,7 @@ type GenericRequest interface {
 	OpenID() []byte
 	IsEncrypted() bool
 	TransformSessionID() uint64
+	CompressReply() bool
 }
 
 // Request is the representation of an SMB2 request.
@@ -45,6 +47,7 @@ type Request struct {
 	openID             []byte
 	isEncrypted        bool
 	transformSessionID uint64
+	compressReply      bool
 }
 
 // structureSize returns the StructureSize field of an SMB2 request.
@@ -57,15 +60,16 @@ func (req Request) structureSize() uint16 {
 }
 
 // GetRequests parses the message body for SMB/SMB2 requests.
-func GetRequests(data []byte, cid uint64, dialect uint16, tsid uint64) (reqs []*Request, err error) {
+func GetRequests(data []byte, cid uint64, tsid uint64, compressed bool) (reqs []*Request, err error) {
 	req := &Request{
 		cancelRequestID:    cid,
 		data:               data,
 		isEncrypted:        tsid != 0,
 		transformSessionID: tsid,
+		compressReply:      compressed,
 	}
 
-	if err := req.Header().Validate(dialect); err != nil {
+	if err := req.Header().Validate(); err != nil {
 		return nil, err
 	}
 
@@ -108,9 +112,10 @@ func GetRequests(data []byte, cid uint64, dialect uint16, tsid uint64) (reqs []*
 			data:               data[off:],
 			isEncrypted:        tsid != 0,
 			transformSessionID: tsid,
+			compressReply:      compressed,
 		}
 
-		if err := req.Header().Validate(dialect); err != nil {
+		if err := req.Header().Validate(); err != nil {
 			return nil, err
 		}
 
@@ -131,8 +136,8 @@ func GetRequests(data []byte, cid uint64, dialect uint16, tsid uint64) (reqs []*
 }
 
 // Validate returns an error if the request is malformed, nil otherwise.
-func (req Request) Validate(_ bool, dialect uint16) error {
-	return req.Header().Validate(dialect)
+func (req Request) Validate(_ bool) error {
+	return req.Header().Validate()
 }
 
 // Header casts the request to the Header type.
@@ -176,6 +181,17 @@ func (req *Request) SetEncrypted(enc bool) {
 	req.isEncrypted = enc
 }
 
+// CompressReply returns true if the response to this request is eligible
+// for compression.
+func (req Request) CompressReply() bool {
+	return req.compressReply
+}
+
+// SetCompressReply changes the response compression eligibility of the request.
+func (req *Request) SetCompressReply(cr bool) {
+	req.compressReply = cr
+}
+
 // TransformSessionID returns the SessionID sent by the client in the
 // SMB2 TRANSFORM_HEADER, if the request is encrypted.
 func (req Request) TransformSessionID() uint64 {
@@ -202,6 +218,7 @@ type GenericResponse interface {
 	SetOpenID(id []byte)
 	Append(newResp GenericResponse)
 	ShouldEncrypt() bool
+	MayCompress() bool
 }
 
 // Response is the representation of an SMB2 response.
@@ -212,6 +229,7 @@ type Response struct {
 	treeID        uint32
 	openID        []byte
 	shouldEncrypt bool
+	mayCompress   bool
 }
 
 // EncodedLength returns the length of the response body.
@@ -276,6 +294,7 @@ func (resp *Response) FromRequest(req GenericRequest) {
 	}
 	resp.groupID = req.GroupID()
 	resp.shouldEncrypt = req.IsEncrypted()
+	resp.mayCompress = req.CompressReply()
 }
 
 // Append adds a new response to the chain.
@@ -305,14 +324,19 @@ func (resp Response) ShouldEncrypt() bool {
 	return resp.shouldEncrypt
 }
 
+// MayCompress returns true if the response may be compressed before sending.
+func (resp Response) MayCompress() bool {
+	return resp.mayCompress
+}
+
 // CancelRequest represents an SMB2_CANCEL request.
 type CancelRequest struct {
 	Request
 }
 
 // Validate implements GenericRequest interface.
-func (cr CancelRequest) Validate(_ bool, dialect uint16) error {
-	if err := Header(cr.data).Validate(dialect); err != nil {
+func (cr CancelRequest) Validate(_ bool) error {
+	if err := Header(cr.data).Validate(); err != nil {
 		return err
 	}
 
@@ -333,8 +357,8 @@ type EchoRequest struct {
 }
 
 // Validate implements GenericRequest interface.
-func (er EchoRequest) Validate(_ bool, dialect uint16) error {
-	if err := Header(er.data).Validate(dialect); err != nil {
+func (er EchoRequest) Validate(_ bool) error {
+	if err := Header(er.data).Validate(); err != nil {
 		return err
 	}
 

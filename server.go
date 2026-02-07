@@ -47,25 +47,28 @@ const (
 	HashEnableShare
 )
 
+var (
+	// Supported algorithms.
+	supportedHashAlgos        = []uint16{smb2.SHA_512}
+	supportedEncryptionAlgos  = []uint16{smb2.AES_128_CCM, smb2.AES_128_GCM}
+	supportedCompressionAlgos = []uint16{smb2.COMPRESSION_LZ4, smb2.COMPRESSION_LZ77, smb2.COMPRESSION_LZ77_HUFFMAN, smb2.COMPRESSION_LZNT1, smb2.COMPRESSION_PATTERN_V1}
+	supportedSigningAlgos     = []uint16{smb2.HMAC_SHA256, smb2.AES_CMAC, smb2.AES_GMAC}
+)
+
 // server is the implementation of an SMB server.
 type server struct {
-	enabled                         bool
-	stats                           serverStats
-	shareList                       map[string]*share
-	globalOpenTable                 map[uint64]*open
-	globalSessionTable              map[uint64]*session
-	connectionList                  map[string]*connection
-	serverGuid                      [16]byte
-	isDfsCapable                    bool
-	serverSideCopyMaxNumberOfChunks uint64
-	serverSideCopyMaxChunkSize      uint64
-	serverSideCopyMaxDataSize       uint64
-	serverHashLevel                 int
-	serverCapabilities              uint32
-	globalClientTable               map[[16]byte]*smbClient
-	encryptData                     bool
-	rejectUnencryptedAccess         bool
-	allowAnonymousAccess            bool
+	enabled                     bool
+	stats                       serverStats
+	shareList                   map[string]*share
+	globalOpenTable             map[uint64]*open
+	globalSessionTable          map[uint64]*session
+	connectionList              map[string]*connection
+	serverGuid                  [16]byte
+	serverCapabilities          uint32
+	globalClientTable           map[[16]byte]*smbClient
+	encryptData                 bool
+	compressionSupported        bool
+	chainedCompressionSupported bool
 
 	// Auxiliary fields.
 	listener        net.Listener
@@ -78,21 +81,17 @@ type server struct {
 // newServer returns an initialized SMB server.
 func newServer(l net.Listener, st Store, debug bool) *server {
 	s := &server{
-		enabled:                         true,
-		serverGuid:                      uuid.New(),
-		serverSideCopyMaxNumberOfChunks: 256,
-		serverSideCopyMaxChunkSize:      2 >> 10, // 1MiB
-		serverSideCopyMaxDataSize:       2 >> 14, // 16MiB
-		serverHashLevel:                 HashDisableAll,
-		shareList:                       make(map[string]*share),
-		connectionList:                  make(map[string]*connection),
-		globalOpenTable:                 make(map[uint64]*open),
-		globalSessionTable:              make(map[uint64]*session),
-		globalClientTable:               make(map[[16]byte]*smbClient),
-		listener:                        l,
-		connectionCount:                 make(map[string]int),
-		store:                           st,
-		debug:                           debug,
+		enabled:            true,
+		serverGuid:         uuid.New(),
+		shareList:          make(map[string]*share),
+		connectionList:     make(map[string]*connection),
+		globalOpenTable:    make(map[uint64]*open),
+		globalSessionTable: make(map[uint64]*session),
+		globalClientTable:  make(map[[16]byte]*smbClient),
+		listener:           l,
+		connectionCount:    make(map[string]int),
+		store:              st,
+		debug:              debug,
 	}
 	s.stats.start = time.Now()
 	return s
@@ -166,9 +165,15 @@ func (s *server) writeResponse(c *connection, ss *session, resp smb2.GenericResp
 	if ss != nil && ss.state == sessionValid { // A session exists, sign if required
 		if resp.ShouldEncrypt() {
 			wipeSignatures(buf)
+			if resp.MayCompress() {
+				buf = c.compress(buf)
+			}
 			buf = ss.encrypt(buf)
 		} else if resp.Header().Command() != smb2.SMB2_SESSION_SETUP && ss.encryptData {
 			wipeSignatures(buf)
+			if resp.MayCompress() {
+				buf = c.compress(buf)
+			}
 			buf = ss.encrypt(buf)
 		} else if resp.Header().Command() == smb2.SMB2_SESSION_SETUP || resp.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
 			ss.sign(buf)
