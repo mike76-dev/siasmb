@@ -8,7 +8,6 @@ How to set up a `renterd` node is described here: [https://github.com/SiaFoundat
 * The SMB port 445 needs to be open on the machine where the server is running.
 
 ## Limitations
-* At this moment, only the SMB dialects 2.0.2, 2.1, 3.0, and 3.0.2 are supported. Newer dialects will potentially be supported in the future.
 * Guest or anonymous access is not supported.
 
 ## Installing PostgreSQL
@@ -156,7 +155,7 @@ sudo chown $USER:$USER /mnt/sia
 ```
 3. Mount the share with
 ```
-sudo mount -t cifs //<SERVER_NET_ADDRESS>/<SHARE_NAME> /mnt/sia -o username=<USERNAME>,workgroup=<WORKGROUP>,password=<PASSWORD>,vers=2.0
+sudo mount -t cifs //<SERVER_NET_ADDRESS>/<SHARE_NAME> /mnt/sia -o username=<USERNAME>,workgroup=<WORKGROUP>,password=<PASSWORD>
 ```
 4. To unmount, type
 ```
