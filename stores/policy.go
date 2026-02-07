@@ -119,11 +119,11 @@ func (db *Database) ClearAccessRights(acc Account) error {
 func FlagsFromAccessRights(ar AccessRights) uint32 {
 	var flags uint32
 	if ar.ReadAccess {
-		flags |= 0x00120089 // FILE_READ_DATA | FILE_READ_EA | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE
+		flags |= 0x80120089 // FILE_READ_DATA | FILE_READ_EA | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE | GENERIC_READ
 	}
 
 	if ar.WriteAccess {
-		flags |= 0x000c0116 // FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | WRITE_DAC | WRITE_OWNER
+		flags |= 0x400c0116 // FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE
 	}
 
 	if ar.DeleteAccess {
@@ -131,7 +131,11 @@ func FlagsFromAccessRights(ar AccessRights) uint32 {
 	}
 
 	if ar.ExecuteAccess {
-		flags |= 0x00000020 // FILE_EXECUTE
+		flags |= 0x20000020 // FILE_EXECUTE | GENERIC_EXECUTE
+	}
+
+	if ar.ReadAccess && ar.WriteAccess && ar.DeleteAccess && ar.ExecuteAccess {
+		flags |= 0x12000000 // GENERIC_ALL | MAXIMUM_ALLOWED
 	}
 
 	return flags
