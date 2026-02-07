@@ -244,6 +244,12 @@ func (ss *session) sign(buf []byte) {
 				if err != nil {
 					panic(err)
 				}
+			default:
+				ciph, err := aes.NewCipher(ss.signingKey)
+				if err != nil {
+					panic(err)
+				}
+				signer = cmac.New(ciph)
 			}
 		}
 		signer.Reset()
