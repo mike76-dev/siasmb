@@ -21,7 +21,7 @@ import (
 	"github.com/mike76-dev/siasmb/stores"
 )
 
-const version = "2.1.0-alpha"
+const version = "2.1.0-beta"
 
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
 
