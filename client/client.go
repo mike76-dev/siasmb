@@ -271,7 +271,7 @@ func (c *Client) UsedStorage(ctx context.Context, bucket string) (us uint64, err
 	if err != nil {
 		return
 	}
-	return osr.TotalUploadedSize * rhpv4.SectorSize, nil
+	return osr.TotalUploadedSize, nil
 }
 
 // ReadObject downloads a file from the Sia network.
