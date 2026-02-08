@@ -303,6 +303,12 @@ func (ss *session) validateRequest(req *smb2.Request) bool {
 			if err != nil {
 				panic(err)
 			}
+		default:
+			ciph, err := aes.NewCipher(ss.signingKey)
+			if err != nil {
+				panic(err)
+			}
+			verifier = cmac.New(ciph)
 		}
 	}
 	verifier.Reset()
