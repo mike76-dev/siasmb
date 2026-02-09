@@ -2279,6 +2279,20 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					return resp, ss, nil
 				}
 
+			case smb2.FileAllocationInformation:
+				if op.grantedAccess&smb2.FILE_WRITE_DATA == 0 {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_ACCESS_DENIED, 0, nil)
+					return resp, ss, nil
+				}
+
+				buf := sir.Buffer()
+				if len(buf) != 8 {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, 0, nil)
+					return resp, ss, nil
+				}
+
+				op.allocated = binary.LittleEndian.Uint64(buf)
+
 			default:
 				resp := smb2.NewErrorResponse(sir, smb2.STATUS_NOT_SUPPORTED, 0, nil)
 				return resp, ss, nil
