@@ -420,6 +420,30 @@ func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan stru
 		return
 	}
 
+	found := make(map[string]struct{})
+	for _, entry := range objs {
+		if entry.Key == "" {
+			continue
+		}
+		if strings.HasPrefix(entry.Key[1:], op.pathName) {
+			found[entry.Key[1:]] = struct{}{}
+		}
+	}
+
+	tc := op.treeConnect
+	tc.mu.Lock()
+	for path, o := range tc.persistedOpens {
+		if _, ok := found[path]; ok {
+			continue
+		}
+		objs = append(objs, api.ObjectMetadata{
+			Bucket:  tc.share.bucket,
+			Key:     "/" + path,
+			ModTime: api.TimeRFC3339(o.lastModified),
+		})
+	}
+	tc.mu.Unlock()
+
 	snapshot := makeSnapshot(objs)
 	for {
 		select {
@@ -432,6 +456,30 @@ func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan stru
 		if err != nil {
 			continue
 		}
+
+		found := make(map[string]struct{})
+		for _, entry := range objs {
+			if entry.Key == "" {
+				continue
+			}
+			if strings.HasPrefix(entry.Key[1:], op.pathName) {
+				found[entry.Key[1:]] = struct{}{}
+			}
+		}
+
+		tc := op.treeConnect
+		tc.mu.Lock()
+		for path, o := range tc.persistedOpens {
+			if _, ok := found[path]; ok {
+				continue
+			}
+			objs = append(objs, api.ObjectMetadata{
+				Bucket:  tc.share.bucket,
+				Key:     "/" + path,
+				ModTime: api.TimeRFC3339(o.lastModified),
+			})
+		}
+		tc.mu.Unlock()
 
 		newSnapshot := makeSnapshot(objs)
 		if !bytes.Equal(newSnapshot, snapshot) {
