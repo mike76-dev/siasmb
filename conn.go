@@ -2441,16 +2441,14 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 		return err
 	}
 
-	var ss *session
-	var found bool
+	ss, found := c.sessionTable[cr.Header().SessionID()]
 	if cr.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
-		ss, found = c.sessionTable[cr.Header().SessionID()]
-		if !found {
+		if found {
+			if !ss.validateRequest(req) {
+				return errInvalidSignature
+			}
+		} else {
 			return errSessionNotFound
-		}
-
-		if !ss.validateRequest(req) {
-			return errInvalidSignature
 		}
 	}
 
@@ -2459,7 +2457,14 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 	if cr.Header().IsFlagSet(smb2.FLAGS_ASYNC_COMMAND) {
 		target, found = c.asyncCommandList[cr.Header().AsyncID()]
 	} else {
-		target, found = c.requestList[cr.Header().MessageID()]
+		mid := cr.Header().MessageID()
+		for _, r := range c.asyncCommandList {
+			if r.Header().MessageID() == mid {
+				target = r
+				found = true
+				break
+			}
+		}
 	}
 
 	if !found {
@@ -2486,21 +2491,21 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 		}
 	}
 
+	if cr.IsEncrypted() {
+		target.SetEncrypted(true)
+	}
+
 	resp := smb2.NewErrorResponse(target, smb2.STATUS_CANCELLED, 0, nil)
 	resp.Header().ClearFlag(smb2.FLAGS_RELATED_OPERATIONS)
-	if cr.Header().IsFlagSet(smb2.FLAGS_ASYNC_COMMAND) {
+	if target.Header().IsFlagSet(smb2.FLAGS_ASYNC_COMMAND) {
 		resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
 		resp.Header().SetCreditResponse(0)
-		resp.Header().SetAsyncID(cr.Header().AsyncID())
+		resp.Header().SetAsyncID(target.Header().AsyncID())
 	}
 
 	c.server.writeResponse(c, ss, resp)
 
-	if cr.Header().IsFlagSet(smb2.FLAGS_ASYNC_COMMAND) {
-		delete(c.asyncCommandList, cr.Header().AsyncID())
-	} else {
-		delete(c.requestList, cr.Header().MessageID())
-	}
+	delete(c.asyncCommandList, target.Header().AsyncID())
 
 	ch, ok := c.stopChans[target.CancelRequestID()]
 	if ok {
