@@ -2261,22 +2261,42 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					return resp, ss, nil
 				}
 
+				if strings.Contains(fri.FileName, "/") || strings.Contains(fri.FileName, "\\") {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_NOT_SUPPORTED, 0, nil)
+					return resp, ss, nil
+				}
+
 				if fri.RootDirectory != 0 {
 					resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 					return resp, ss, nil
 				}
 
 				// Rename the file or the directory.
-				if err := tc.share.client.RenameObject(
-					op.ctx,
-					tc.share.bucket,
-					op.pathName,
-					fri.FileName,
-					op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
-					fri.ReplaceIfExists,
-				); err != nil {
-					resp := smb2.NewErrorResponse(sir, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
-					return resp, ss, nil
+				if op.size == 0 {
+					tc.mu.Lock()
+					_, found := tc.persistedOpens[fri.FileName]
+					if found {
+						tc.mu.Unlock()
+						resp := smb2.NewErrorResponse(sir, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
+						return resp, ss, nil
+					}
+					tc.persistedOpens[fri.FileName] = op
+					delete(tc.persistedOpens, op.pathName)
+					op.pathName = fri.FileName
+					op.lastModified = time.Now()
+					tc.mu.Unlock()
+				} else {
+					if err := tc.share.client.RenameObject(
+						op.ctx,
+						tc.share.bucket,
+						op.pathName,
+						fri.FileName,
+						op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
+						fri.ReplaceIfExists,
+					); err != nil {
+						resp := smb2.NewErrorResponse(sir, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
+						return resp, ss, nil
+					}
 				}
 
 			case smb2.FileAllocationInformation:
