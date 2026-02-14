@@ -1120,6 +1120,20 @@ func (fnoi FileNetworkOpenInfo) Encode() []byte {
 	return buf
 }
 
+// FileNormalizedNameInfo is the output buffer structure for the FileNormalizedNameInformation info class.
+type FileNormalizedNameInfo struct {
+	Filename string
+}
+
+// Encode marshals the FileNormalizedNameInfo structure into a byte sequence.
+func (fnni FileNormalizedNameInfo) Encode() []byte {
+	fn := utils.EncodeStringToBytes(fnni.Filename)
+	buf := make([]byte, len(fn)+4)
+	binary.LittleEndian.PutUint32(buf[:4], uint32(len(fn)))
+	copy(buf[4:], fn)
+	return buf
+}
+
 // FileStreamInfo is the output buffer structure for the FileStreamInformation info class.
 type FileStreamInfo struct {
 	StreamName           string

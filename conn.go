@@ -2003,6 +2003,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				info = op.fileStandardInformation()
 			case smb2.FileNetworkOpenInformation:
 				info = op.fileNetworkOpenInformation()
+			case smb2.FileNormalizedNameInformation:
+				info = op.fileNormalizedNameInformation()
+			case smb2.FileEaInformation:
+				info = op.fileEaInformation()
 			case smb2.FileStreamInformation:
 				info = op.fileStreamInformation()
 			default: // Other classes are not supported yet

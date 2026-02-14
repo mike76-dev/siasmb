@@ -382,6 +382,22 @@ func (op *open) fileNetworkOpenInformation() []byte {
 	return fnoi.Encode()
 }
 
+// fileNormalizedNameInformation genereates a FileNormalizedNameInfo structure.
+func (op *open) fileNormalizedNameInformation() []byte {
+	fnni := smb2.FileNormalizedNameInfo{
+		Filename: op.pathName,
+	}
+	return fnni.Encode()
+}
+
+// fileEaInformation genereates a FileEaInfo structure.
+func (op *open) fileEaInformation() []byte {
+	feai := smb2.FileEaInfo{
+		EaSize: 0,
+	}
+	return feai.Encode()
+}
+
 // fileStreamInformation generates a FileStreamInfo structure.
 func (op *open) fileStreamInformation() []byte {
 	fsi := smb2.FileStreamInfo{
