@@ -707,7 +707,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		path := cr.Filename()
+		path := strings.ReplaceAll(cr.Filename(), "\\", "/")
 		co := cr.CreateOptions()
 		if co&smb2.FILE_DELETE_ON_CLOSE > 0 && (tc.maximalAccess&(smb2.DELETE|smb2.GENERIC_ALL|smb2.GENERIC_EXECUTE|smb2.GENERIC_READ|smb2.GENERIC_WRITE) == 0) {
 			resp := smb2.NewErrorResponse(cr, smb2.STATUS_ACCESS_DENIED, 0, nil)
@@ -904,7 +904,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 		}
 
-		if result == smb2.FILE_CREATED { // Persist the file for any future requests
+		if result == smb2.FILE_CREATED && op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // Persist the file for any future requests
 			tc.mu.Lock()
 			tc.persistedOpens[path] = op
 			tc.mu.Unlock()
@@ -2265,28 +2265,25 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					return resp, ss, nil
 				}
 
-				if strings.Contains(fri.FileName, "/") || strings.Contains(fri.FileName, "\\") {
-					resp := smb2.NewErrorResponse(sir, smb2.STATUS_NOT_SUPPORTED, 0, nil)
-					return resp, ss, nil
-				}
-
 				if fri.RootDirectory != 0 {
 					resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 					return resp, ss, nil
 				}
 
 				// Rename the file or the directory.
+				newName := strings.ReplaceAll(fri.FileName, "\\", "/")
 				if op.size == 0 && op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
 					tc.mu.Lock()
-					_, found := tc.persistedOpens[fri.FileName]
+					_, found := tc.persistedOpens[newName]
 					if found {
 						tc.mu.Unlock()
 						resp := smb2.NewErrorResponse(sir, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
 						return resp, ss, nil
 					}
-					tc.persistedOpens[fri.FileName] = op
+					tc.persistedOpens[newName] = op
 					delete(tc.persistedOpens, op.pathName)
-					op.pathName = fri.FileName
+					op.pathName = newName
+					op.fileName = utils.TrimPath(op.pathName)
 					op.lastModified = time.Now()
 					tc.mu.Unlock()
 				} else {
@@ -2294,7 +2291,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						op.ctx,
 						tc.share.bucket,
 						op.pathName,
-						fri.FileName,
+						newName,
 						op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
 						fri.ReplaceIfExists,
 					); err != nil {

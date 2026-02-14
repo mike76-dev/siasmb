@@ -253,11 +253,11 @@ func (op *open) queryDirectory(pattern string) error {
 	var results []api.ObjectMetadata
 	found := make(map[string]struct{})
 	for _, entry := range objs {
-		_, name, _ := utils.ExtractFilename(entry.Key)
+		path, name, _ := utils.ExtractFilename(entry.Key)
 		match, _ := filepath.Match(pattern, name)
 		if match {
 			results = append(results, entry)
-			found[name] = struct{}{}
+			found[path] = struct{}{}
 		}
 	}
 
@@ -268,7 +268,10 @@ func (op *open) queryDirectory(pattern string) error {
 		if _, ok := found[path]; ok {
 			continue
 		}
-		match, _ := filepath.Match(pattern, path)
+		if utils.TrimName(path) != op.pathName {
+			continue
+		}
+		match, _ := filepath.Match(pattern, utils.TrimPath(path))
 		if match {
 			results = append(results, api.ObjectMetadata{
 				Bucket:  tc.share.bucket,
