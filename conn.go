@@ -2276,7 +2276,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				}
 
 				// Rename the file or the directory.
-				if op.size == 0 {
+				if op.size == 0 && op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
 					tc.mu.Lock()
 					_, found := tc.persistedOpens[fri.FileName]
 					if found {
