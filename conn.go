@@ -769,13 +769,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 			info, err = tc.share.client.GetObjectInfo(ctx, tc.share.bucket, path)
-			if err != nil {
-				log.Printf("Error getting object info (bucket: %s, path: %s): %v\n", tc.share.bucket, path, err)
-				if errors.Is(err, context.DeadlineExceeded) {
-					cancel()
-					resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, 0, nil)
-					return resp, ss, nil
-				}
+			if err != nil && errors.Is(err, context.DeadlineExceeded) {
+				cancel()
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, 0, nil)
+				return resp, ss, nil
 			}
 
 			switch cr.CreateDisposition() {
