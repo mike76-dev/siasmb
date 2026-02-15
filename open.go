@@ -597,7 +597,7 @@ func (op *open) read(offset, length uint64) []byte {
 
 			data, err := readData(chunkOffset, toRead)
 			if err != nil {
-				log.Println("Error reading object:", err)
+				log.Printf("Error reading object: %s: %v", op.pathName, err)
 				return nil
 			}
 
