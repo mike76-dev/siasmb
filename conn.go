@@ -104,9 +104,6 @@ func (c *connection) grantCredits(mid uint64, numCredits uint16) error {
 
 // acceptRequest processes an SMB message into one or more requests and puts them in the queue.
 func (c *connection) acceptRequest(msg []byte) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if uint64(len(msg)) > c.maxTransactSize+256 {
 		return errLongRequest
 	}
@@ -131,10 +128,13 @@ func (c *connection) acceptRequest(msg []byte) error {
 		}
 		tsid = smb2.Header(msg).TransformSessionID()
 		size = smb2.Header(msg).OriginalMessageSize()
+		c.mu.Lock()
 		ss, ok := c.sessionTable[tsid]
 		if !ok {
+			c.mu.Unlock()
 			return errSessionNotFound
 		}
+		c.mu.Unlock()
 		if ss.isAnonymous || ss.isGuest {
 			return errAccessDenied
 		}
@@ -174,7 +174,9 @@ func (c *connection) acceptRequest(msg []byte) error {
 			if c.negotiateDialect != smb2.SMB_DIALECT_UNKNOWN || len(reqs) > 1 {
 				return smb2.ErrWrongProtocol
 			}
+			c.mu.Lock()
 			c.grantCredits(mid, 1) // Grant just one credit
+			c.mu.Unlock()
 		} else {
 			if c.supportsMultiCredit {
 				if req.Header().Command() != smb2.SMB2_READ &&
@@ -198,7 +200,9 @@ func (c *connection) acceptRequest(msg []byte) error {
 				credits = 1
 			}
 
+			c.mu.Lock()
 			c.grantCredits(mid, credits)
+			c.mu.Unlock()
 			if req.Header().Command() == smb2.SMB2_CANCEL { // SMB2_CANCEL requests are handled separately
 				if err := c.cancelRequest(req); err != nil {
 					log.Printf("Couldn't cancel request %d:, %v\n", req.Header().Command(), err)
@@ -208,10 +212,13 @@ func (c *connection) acceptRequest(msg []byte) error {
 			}
 		}
 
+		c.mu.Lock()
 		_, ok := c.commandSequenceWindow[mid]
 		if !ok {
+			c.mu.Unlock()
 			return errRequestNotWithinWindow
 		}
+		c.mu.Unlock()
 
 		if mid == math.MaxUint64 {
 			return errCommandSecuenceWindowExceeded
@@ -220,7 +227,9 @@ func (c *connection) acceptRequest(msg []byte) error {
 		// If this is the first request in a chain of related requests, or if the requests are unrelated,
 		// find the associated session.
 		if i == 0 || req.GroupID() == 0 {
+			c.mu.Lock()
 			ss, found = c.sessionTable[req.Header().SessionID()]
+			c.mu.Unlock()
 		}
 
 		if found && !ss.validateRequest(req) {
@@ -228,6 +237,7 @@ func (c *connection) acceptRequest(msg []byte) error {
 		}
 
 		// Request processed; this message ID is not allowed anymore.
+		c.mu.Lock()
 		if c.negotiateDialect == smb2.SMB_DIALECT_202 || !c.supportsMultiCredit {
 			delete(c.commandSequenceWindow, mid)
 		} else { // Remove as many IDs as the CreditCharge field
@@ -245,6 +255,7 @@ func (c *connection) acceptRequest(msg []byte) error {
 
 		// Put request in the queue.
 		c.requestList[mid] = req
+		c.mu.Unlock()
 	}
 
 	return nil
@@ -2462,7 +2473,9 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 		return err
 	}
 
+	c.mu.Lock()
 	ss, found := c.sessionTable[cr.Header().SessionID()]
+	c.mu.Unlock()
 	if cr.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
 		if found {
 			if !ss.validateRequest(req) {
@@ -2475,6 +2488,7 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 
 	// The provided request is an SMB2_CANCEL request; we need to find the target request.
 	var target *smb2.Request
+	c.mu.Lock()
 	if cr.Header().IsFlagSet(smb2.FLAGS_ASYNC_COMMAND) {
 		target, found = c.asyncCommandList[cr.Header().AsyncID()]
 	} else {
@@ -2487,6 +2501,7 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 			}
 		}
 	}
+	c.mu.Unlock()
 
 	if !found {
 		return nil
@@ -2526,6 +2541,7 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 
 	c.server.writeResponse(c, ss, resp)
 
+	c.mu.Lock()
 	delete(c.asyncCommandList, target.Header().AsyncID())
 
 	ch, ok := c.stopChans[target.CancelRequestID()]
@@ -2533,6 +2549,7 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 		close(ch)
 		delete(c.stopChans, target.CancelRequestID())
 	}
+	c.mu.Unlock()
 
 	return nil
 }
