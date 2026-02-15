@@ -1018,6 +1018,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					op.size = op.pendingUpload.totalSize
 					op.allocated = op.pendingUpload.totalSize
 					op.pendingUpload = nil
+					tc.mu.Lock()
+					delete(tc.persistedOpens, op.pathName)
+					tc.mu.Unlock()
 				}
 			} else {
 				if err := op.treeConnect.share.client.AbortUpload(
@@ -1415,6 +1418,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 							op.size = size
 							op.allocated = size
 							op.pendingUpload = nil
+							tc.mu.Lock()
+							delete(tc.persistedOpens, op.pathName)
+							tc.mu.Unlock()
 						}
 					} else {
 						// If we don't know the file size, wait 10 minutes, then flush anyway.
@@ -1435,6 +1441,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 									op.size = size
 									op.allocated = size
 									op.pendingUpload = nil
+									tc.mu.Lock()
+									delete(tc.persistedOpens, op.pathName)
+									tc.mu.Unlock()
 								}
 							}
 						}(size)
@@ -2189,6 +2198,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						if err == nil && len(buf) >= 8 {
 							op.handle = binary.LittleEndian.Uint64(buf[:8])
 						}
+						tc.mu.Lock()
+						delete(tc.persistedOpens, op.pathName)
+						tc.mu.Unlock()
 					}
 
 					op.size = size
@@ -2248,6 +2260,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						if err == nil && len(buf) >= 8 {
 							op.handle = binary.LittleEndian.Uint64(buf[:8])
 						}
+						tc.mu.Lock()
+						delete(tc.persistedOpens, op.pathName)
+						tc.mu.Unlock()
 					}
 
 					op.size = size
