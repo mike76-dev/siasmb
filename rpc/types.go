@@ -37,7 +37,7 @@ func (sid *SyntaxID) Encode(w io.Writer) {
 	w.Write(buf)
 }
 
-// Decoder is an interface for decoding inbound MS-RPC packets.
+// Decode implements Decoder interface.
 func (sid *SyntaxID) Decode(r io.Reader) {
 	buf := make([]byte, 20)
 	_, err := r.Read(buf)
@@ -69,7 +69,7 @@ func (c *Context) Encode(w io.Writer) {
 	}
 }
 
-// Decoder is an interface for decoding inbound MS-RPC packets.
+// Decode implements Decoder interface.
 func (c *Context) Decode(r io.Reader) {
 	buf := make([]byte, 4)
 	_, err := r.Read(buf)
@@ -108,7 +108,7 @@ func (b *Bind) Encode(w io.Writer) {
 	}
 }
 
-// Decoder is an interface for decoding inbound MS-RPC packets.
+// Decode implements Decoder interface.
 func (b *Bind) Decode(r io.Reader) {
 	buf := make([]byte, 12)
 	_, err := r.Read(buf)
@@ -142,7 +142,7 @@ func (res *Result) Encode(w io.Writer) {
 	res.TransferSyntax.Encode(w)
 }
 
-// Decoder is an interface for decoding inbound MS-RPC packets.
+// Decode implements Decoder interface.
 func (res *Result) Decode(r io.Reader) {
 	buf := make([]byte, 4)
 	_, err := r.Read(buf)
@@ -184,7 +184,7 @@ func (ba *BindAck) Encode(w io.Writer) {
 	}
 }
 
-// Decoder is an interface for decoding inbound MS-RPC packets.
+// Decode implements Decoder interface.
 func (ba *BindAck) Decode(r io.Reader) {
 	buf := make([]byte, 10)
 	_, err := r.Read(buf)
@@ -243,7 +243,7 @@ func (req *Request) Encode(w io.Writer) {
 	w.Write(buf)
 }
 
-// Decoder is an interface for decoding inbound MS-RPC packets.
+// Decode implements Decoder interface.
 func (req *Request) Decode(r io.Reader) {
 	buf := make([]byte, 8)
 	_, err := r.Read(buf)
@@ -281,7 +281,7 @@ func (resp *Response) Encode(w io.Writer) {
 	w.Write(buf)
 }
 
-// Decoder is an interface for decoding inbound MS-RPC packets.
+// Decode implements Decoder interface.
 func (resp *Response) Decode(r io.Reader) {
 	buf := make([]byte, 8)
 	_, err := r.Read(buf)

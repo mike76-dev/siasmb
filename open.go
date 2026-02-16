@@ -251,13 +251,36 @@ func (op *open) queryDirectory(pattern string) error {
 	}
 
 	var results []api.ObjectMetadata
+	found := make(map[string]struct{})
 	for _, entry := range objs {
-		_, name, _ := utils.ExtractFilename(entry.Key)
+		path, name, _ := utils.ExtractFilename(entry.Key)
 		match, _ := filepath.Match(pattern, name)
 		if match {
 			results = append(results, entry)
+			found[path] = struct{}{}
 		}
 	}
+
+	// Search persisted Opens, too.
+	tc := op.treeConnect
+	tc.mu.Lock()
+	for path, o := range tc.persistedOpens {
+		if _, ok := found[path]; ok {
+			continue
+		}
+		if utils.TrimName(path) != op.pathName {
+			continue
+		}
+		match, _ := filepath.Match(pattern, utils.TrimPath(path))
+		if match {
+			results = append(results, api.ObjectMetadata{
+				Bucket:  tc.share.bucket,
+				Key:     "/" + path,
+				ModTime: api.TimeRFC3339(o.lastModified),
+			})
+		}
+	}
+	tc.mu.Unlock()
 
 	op.lastSearch = pattern
 	op.searchResults = results
@@ -362,6 +385,22 @@ func (op *open) fileNetworkOpenInformation() []byte {
 	return fnoi.Encode()
 }
 
+// fileNormalizedNameInformation genereates a FileNormalizedNameInfo structure.
+func (op *open) fileNormalizedNameInformation() []byte {
+	fnni := smb2.FileNormalizedNameInfo{
+		Filename: op.pathName,
+	}
+	return fnni.Encode()
+}
+
+// fileEaInformation genereates a FileEaInfo structure.
+func (op *open) fileEaInformation() []byte {
+	feai := smb2.FileEaInfo{
+		EaSize: 0,
+	}
+	return feai.Encode()
+}
+
 // fileStreamInformation generates a FileStreamInfo structure.
 func (op *open) fileStreamInformation() []byte {
 	fsi := smb2.FileStreamInfo{
@@ -400,6 +439,30 @@ func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan stru
 		return
 	}
 
+	found := make(map[string]struct{})
+	for _, entry := range objs {
+		if entry.Key == "" {
+			continue
+		}
+		if strings.HasPrefix(entry.Key[1:], op.pathName) {
+			found[entry.Key[1:]] = struct{}{}
+		}
+	}
+
+	tc := op.treeConnect
+	tc.mu.Lock()
+	for path, o := range tc.persistedOpens {
+		if _, ok := found[path]; ok {
+			continue
+		}
+		objs = append(objs, api.ObjectMetadata{
+			Bucket:  tc.share.bucket,
+			Key:     "/" + path,
+			ModTime: api.TimeRFC3339(o.lastModified),
+		})
+	}
+	tc.mu.Unlock()
+
 	snapshot := makeSnapshot(objs)
 	for {
 		select {
@@ -412,6 +475,30 @@ func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan stru
 		if err != nil {
 			continue
 		}
+
+		found := make(map[string]struct{})
+		for _, entry := range objs {
+			if entry.Key == "" {
+				continue
+			}
+			if strings.HasPrefix(entry.Key[1:], op.pathName) {
+				found[entry.Key[1:]] = struct{}{}
+			}
+		}
+
+		tc := op.treeConnect
+		tc.mu.Lock()
+		for path, o := range tc.persistedOpens {
+			if _, ok := found[path]; ok {
+				continue
+			}
+			objs = append(objs, api.ObjectMetadata{
+				Bucket:  tc.share.bucket,
+				Key:     "/" + path,
+				ModTime: api.TimeRFC3339(o.lastModified),
+			})
+		}
+		tc.mu.Unlock()
 
 		newSnapshot := makeSnapshot(objs)
 		if !bytes.Equal(newSnapshot, snapshot) {
@@ -510,7 +597,7 @@ func (op *open) read(offset, length uint64) []byte {
 
 			data, err := readData(chunkOffset, toRead)
 			if err != nil {
-				log.Println("Error reading object:", err)
+				log.Printf("Error reading object: %s: %v", op.pathName, err)
 				return nil
 			}
 

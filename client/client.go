@@ -422,7 +422,6 @@ func (c *Client) UploadPart(ctx context.Context, r io.Reader, bucket, path, uplo
 // DeleteObject deletes a file or a directory.
 func (c *Client) DeleteObject(ctx context.Context, bucket, path string, batch bool) (err error) {
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
-	path = api.ObjectKeyEscape(path)
 	if batch {
 		err = c.doRequest(ctx, "POST", "/api/worker/objects/remove", api.ObjectsRemoveRequest{
 			Bucket: bucket,

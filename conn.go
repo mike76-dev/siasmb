@@ -104,9 +104,6 @@ func (c *connection) grantCredits(mid uint64, numCredits uint16) error {
 
 // acceptRequest processes an SMB message into one or more requests and puts them in the queue.
 func (c *connection) acceptRequest(msg []byte) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
 	if uint64(len(msg)) > c.maxTransactSize+256 {
 		return errLongRequest
 	}
@@ -131,10 +128,13 @@ func (c *connection) acceptRequest(msg []byte) error {
 		}
 		tsid = smb2.Header(msg).TransformSessionID()
 		size = smb2.Header(msg).OriginalMessageSize()
+		c.mu.Lock()
 		ss, ok := c.sessionTable[tsid]
 		if !ok {
+			c.mu.Unlock()
 			return errSessionNotFound
 		}
+		c.mu.Unlock()
 		if ss.isAnonymous || ss.isGuest {
 			return errAccessDenied
 		}
@@ -174,7 +174,9 @@ func (c *connection) acceptRequest(msg []byte) error {
 			if c.negotiateDialect != smb2.SMB_DIALECT_UNKNOWN || len(reqs) > 1 {
 				return smb2.ErrWrongProtocol
 			}
+			c.mu.Lock()
 			c.grantCredits(mid, 1) // Grant just one credit
+			c.mu.Unlock()
 		} else {
 			if c.supportsMultiCredit {
 				if req.Header().Command() != smb2.SMB2_READ &&
@@ -198,7 +200,9 @@ func (c *connection) acceptRequest(msg []byte) error {
 				credits = 1
 			}
 
+			c.mu.Lock()
 			c.grantCredits(mid, credits)
+			c.mu.Unlock()
 			if req.Header().Command() == smb2.SMB2_CANCEL { // SMB2_CANCEL requests are handled separately
 				if err := c.cancelRequest(req); err != nil {
 					log.Printf("Couldn't cancel request %d:, %v\n", req.Header().Command(), err)
@@ -208,10 +212,13 @@ func (c *connection) acceptRequest(msg []byte) error {
 			}
 		}
 
+		c.mu.Lock()
 		_, ok := c.commandSequenceWindow[mid]
 		if !ok {
+			c.mu.Unlock()
 			return errRequestNotWithinWindow
 		}
+		c.mu.Unlock()
 
 		if mid == math.MaxUint64 {
 			return errCommandSecuenceWindowExceeded
@@ -220,7 +227,9 @@ func (c *connection) acceptRequest(msg []byte) error {
 		// If this is the first request in a chain of related requests, or if the requests are unrelated,
 		// find the associated session.
 		if i == 0 || req.GroupID() == 0 {
+			c.mu.Lock()
 			ss, found = c.sessionTable[req.Header().SessionID()]
+			c.mu.Unlock()
 		}
 
 		if found && !ss.validateRequest(req) {
@@ -228,6 +237,7 @@ func (c *connection) acceptRequest(msg []byte) error {
 		}
 
 		// Request processed; this message ID is not allowed anymore.
+		c.mu.Lock()
 		if c.negotiateDialect == smb2.SMB_DIALECT_202 || !c.supportsMultiCredit {
 			delete(c.commandSequenceWindow, mid)
 		} else { // Remove as many IDs as the CreditCharge field
@@ -245,6 +255,7 @@ func (c *connection) acceptRequest(msg []byte) error {
 
 		// Put request in the queue.
 		c.requestList[mid] = req
+		c.mu.Unlock()
 	}
 
 	return nil
@@ -707,7 +718,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		path := cr.Filename()
+		path := strings.ReplaceAll(cr.Filename(), "\\", "/")
 		co := cr.CreateOptions()
 		if co&smb2.FILE_DELETE_ON_CLOSE > 0 && (tc.maximalAccess&(smb2.DELETE|smb2.GENERIC_ALL|smb2.GENERIC_EXECUTE|smb2.GENERIC_READ|smb2.GENERIC_WRITE) == 0) {
 			resp := smb2.NewErrorResponse(cr, smb2.STATUS_ACCESS_DENIED, 0, nil)
@@ -758,13 +769,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 			info, err = tc.share.client.GetObjectInfo(ctx, tc.share.bucket, path)
-			if err != nil {
-				log.Printf("Error getting object info (bucket: %s, path: %s): %v\n", tc.share.bucket, path, err)
-				if errors.Is(err, context.DeadlineExceeded) {
-					cancel()
-					resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, 0, nil)
-					return resp, ss, nil
-				}
+			if err != nil && errors.Is(err, context.DeadlineExceeded) {
+				cancel()
+				resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, 0, nil)
+				return resp, ss, nil
 			}
 
 			switch cr.CreateDisposition() {
@@ -904,7 +912,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 		}
 
-		if result == smb2.FILE_CREATED { // Persist the file for any future requests
+		if result == smb2.FILE_CREATED && op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // Persist the file for any future requests
 			tc.mu.Lock()
 			tc.persistedOpens[path] = op
 			tc.mu.Unlock()
@@ -1007,6 +1015,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					op.size = op.pendingUpload.totalSize
 					op.allocated = op.pendingUpload.totalSize
 					op.pendingUpload = nil
+					tc.mu.Lock()
+					delete(tc.persistedOpens, op.pathName)
+					tc.mu.Unlock()
 				}
 			} else {
 				if err := op.treeConnect.share.client.AbortUpload(
@@ -1404,6 +1415,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 							op.size = size
 							op.allocated = size
 							op.pendingUpload = nil
+							tc.mu.Lock()
+							delete(tc.persistedOpens, op.pathName)
+							tc.mu.Unlock()
 						}
 					} else {
 						// If we don't know the file size, wait 10 minutes, then flush anyway.
@@ -1424,6 +1438,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 									op.size = size
 									op.allocated = size
 									op.pendingUpload = nil
+									tc.mu.Lock()
+									delete(tc.persistedOpens, op.pathName)
+									tc.mu.Unlock()
 								}
 							}
 						}(size)
@@ -2003,6 +2020,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				info = op.fileStandardInformation()
 			case smb2.FileNetworkOpenInformation:
 				info = op.fileNetworkOpenInformation()
+			case smb2.FileNormalizedNameInformation:
+				info = op.fileNormalizedNameInformation()
+			case smb2.FileEaInformation:
+				info = op.fileEaInformation()
 			case smb2.FileStreamInformation:
 				info = op.fileStreamInformation()
 			default: // Other classes are not supported yet
@@ -2174,6 +2195,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						if err == nil && len(buf) >= 8 {
 							op.handle = binary.LittleEndian.Uint64(buf[:8])
 						}
+						tc.mu.Lock()
+						delete(tc.persistedOpens, op.pathName)
+						tc.mu.Unlock()
 					}
 
 					op.size = size
@@ -2233,6 +2257,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						if err == nil && len(buf) >= 8 {
 							op.handle = binary.LittleEndian.Uint64(buf[:8])
 						}
+						tc.mu.Lock()
+						delete(tc.persistedOpens, op.pathName)
+						tc.mu.Unlock()
 					}
 
 					op.size = size
@@ -2267,17 +2294,48 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				}
 
 				// Rename the file or the directory.
-				if err := tc.share.client.RenameObject(
-					op.ctx,
-					tc.share.bucket,
-					op.pathName,
-					fri.FileName,
-					op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
-					fri.ReplaceIfExists,
-				); err != nil {
-					resp := smb2.NewErrorResponse(sir, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
+				newName := strings.ReplaceAll(fri.FileName, "\\", "/")
+				if op.size == 0 && op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
+					tc.mu.Lock()
+					_, found := tc.persistedOpens[newName]
+					if found {
+						tc.mu.Unlock()
+						resp := smb2.NewErrorResponse(sir, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
+						return resp, ss, nil
+					}
+					tc.persistedOpens[newName] = op
+					delete(tc.persistedOpens, op.pathName)
+					op.pathName = newName
+					op.fileName = utils.TrimPath(op.pathName)
+					op.lastModified = time.Now()
+					tc.mu.Unlock()
+				} else {
+					if err := tc.share.client.RenameObject(
+						op.ctx,
+						tc.share.bucket,
+						op.pathName,
+						newName,
+						op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
+						fri.ReplaceIfExists,
+					); err != nil {
+						resp := smb2.NewErrorResponse(sir, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
+						return resp, ss, nil
+					}
+				}
+
+			case smb2.FileAllocationInformation:
+				if op.grantedAccess&smb2.FILE_WRITE_DATA == 0 {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_ACCESS_DENIED, 0, nil)
 					return resp, ss, nil
 				}
+
+				buf := sir.Buffer()
+				if len(buf) != 8 {
+					resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, 0, nil)
+					return resp, ss, nil
+				}
+
+				op.allocated = binary.LittleEndian.Uint64(buf)
 
 			default:
 				resp := smb2.NewErrorResponse(sir, smb2.STATUS_NOT_SUPPORTED, 0, nil)
@@ -2427,26 +2485,35 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 		return err
 	}
 
-	var ss *session
-	var found bool
+	c.mu.Lock()
+	ss, found := c.sessionTable[cr.Header().SessionID()]
+	c.mu.Unlock()
 	if cr.Header().IsFlagSet(smb2.FLAGS_SIGNED) {
-		ss, found = c.sessionTable[cr.Header().SessionID()]
-		if !found {
+		if found {
+			if !ss.validateRequest(req) {
+				return errInvalidSignature
+			}
+		} else {
 			return errSessionNotFound
-		}
-
-		if !ss.validateRequest(req) {
-			return errInvalidSignature
 		}
 	}
 
 	// The provided request is an SMB2_CANCEL request; we need to find the target request.
 	var target *smb2.Request
+	c.mu.Lock()
 	if cr.Header().IsFlagSet(smb2.FLAGS_ASYNC_COMMAND) {
 		target, found = c.asyncCommandList[cr.Header().AsyncID()]
 	} else {
-		target, found = c.requestList[cr.Header().MessageID()]
+		mid := cr.Header().MessageID()
+		for _, r := range c.asyncCommandList {
+			if r.Header().MessageID() == mid {
+				target = r
+				found = true
+				break
+			}
+		}
 	}
+	c.mu.Unlock()
 
 	if !found {
 		return nil
@@ -2472,27 +2539,29 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 		}
 	}
 
+	if cr.IsEncrypted() {
+		target.SetEncrypted(true)
+	}
+
 	resp := smb2.NewErrorResponse(target, smb2.STATUS_CANCELLED, 0, nil)
 	resp.Header().ClearFlag(smb2.FLAGS_RELATED_OPERATIONS)
-	if cr.Header().IsFlagSet(smb2.FLAGS_ASYNC_COMMAND) {
+	if target.Header().IsFlagSet(smb2.FLAGS_ASYNC_COMMAND) {
 		resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
 		resp.Header().SetCreditResponse(0)
-		resp.Header().SetAsyncID(cr.Header().AsyncID())
+		resp.Header().SetAsyncID(target.Header().AsyncID())
 	}
 
 	c.server.writeResponse(c, ss, resp)
 
-	if cr.Header().IsFlagSet(smb2.FLAGS_ASYNC_COMMAND) {
-		delete(c.asyncCommandList, cr.Header().AsyncID())
-	} else {
-		delete(c.requestList, cr.Header().MessageID())
-	}
+	c.mu.Lock()
+	delete(c.asyncCommandList, target.Header().AsyncID())
 
 	ch, ok := c.stopChans[target.CancelRequestID()]
 	if ok {
 		close(ch)
 		delete(c.stopChans, target.CancelRequestID())
 	}
+	c.mu.Unlock()
 
 	return nil
 }

@@ -33,6 +33,20 @@ func ExtractFilename(path string) (filepath string, filename string, isDir bool)
 	return
 }
 
+// TrimPath extracts the filename from an OS-specific path.
+func TrimPath(path string) string {
+	path = strings.ReplaceAll(path, "\\", "/")
+	parts := strings.Split(path, "/")
+	return parts[len(parts)-1]
+}
+
+// TrimName extracts the file path from an OS-specific path.
+func TrimName(path string) string {
+	path = strings.ReplaceAll(path, "\\", "/")
+	parts := strings.Split(path, "/")
+	return strings.Join(parts[:len(parts)-1], "/")
+}
+
 // FindMinKey finds a key-value pair with the smallest key in the map.
 func FindMinKey[T any](m map[uint64]T) (key uint64, value T) {
 	key = math.MaxUint64
