@@ -25,8 +25,6 @@ const version = "2.1.0-beta"
 
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
 
-var isIndexd bool // true if `indexd` mode is active
-
 func main() {
 	log.Printf("Starting SiaSMB v%s...\n", version)
 
@@ -44,7 +42,6 @@ func main() {
 	}
 
 	if cfg.Mode == "indexd" {
-		isIndexd = true
 		panic("indexd mode not supported yet")
 	} else if cfg.Mode != "renterd" {
 		panic("invalid mode")
@@ -86,7 +83,7 @@ func main() {
 	defer l.Close()
 
 	// Start the SMB server.
-	server := newServer(l, db, cfg.Debug)
+	server := newServer(l, db, cfg.Mode, cfg.Debug)
 	if smb2.MaxSupportedDialect != smb2.SMB_DIALECT_202 {
 		server.serverCapabilities |= smb2.GLOBAL_CAP_LARGE_MTU
 	}

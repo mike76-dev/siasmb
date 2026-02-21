@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/sha512"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"log"
 	"math"
@@ -15,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mike76-dev/siasmb/client"
 	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/rpc"
 	"github.com/mike76-dev/siasmb/smb2"
@@ -737,16 +737,15 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		cr.SetCreateOptions(co)
 
 		ctx, cancel := context.WithCancel(context.Background())
-		var info api.ObjectMetadata
+		var info client.ObjectInfo
 		var result uint32
 		var restored bool
 		var op *open
 		if tc.share.name == "ipc$" { // A named pipe is being created
 			switch strings.ToLower(path) {
 			case "srvsvc", "lsarpc", "mdssvc":
-				info = api.ObjectMetadata{
-					Bucket: tc.share.bucket,
-					Key:    path,
+				info = client.ObjectInfo{
+					Key: path,
 				}
 				result = smb2.FILE_OPENED
 			default: // Other named pipes are not supported
@@ -768,7 +767,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, ss, nil
 			}
 
-			info, err = tc.share.client.GetObjectInfo(ctx, tc.share.bucket, path)
+			info, err = tc.share.client.Object(ctx, tc.share.bucket, path)
 			if err != nil && errors.Is(err, context.DeadlineExceeded) {
 				cancel()
 				resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, 0, nil)
@@ -782,10 +781,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					op, restored = tc.persistedOpens[path]
 					tc.mu.Unlock()
 					if !restored {
-						info = api.ObjectMetadata{
-							Bucket:  tc.share.bucket,
-							Key:     "/" + path,
-							ModTime: api.TimeRFC3339(time.Now()),
+						info = client.ObjectInfo{
+							Key:        "/" + path,
+							CreatedAt:  time.Now(),
+							ModifiedAt: time.Now(),
 						}
 						result = smb2.FILE_CREATED
 					} else {
@@ -811,10 +810,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				}
 			case smb2.FILE_CREATE:
 				if err != nil {
-					info = api.ObjectMetadata{
-						Bucket:  tc.share.bucket,
-						Key:     "/" + path,
-						ModTime: api.TimeRFC3339(time.Now()),
+					info = client.ObjectInfo{
+						Key:        "/" + path,
+						CreatedAt:  time.Now(),
+						ModifiedAt: time.Now(),
 					}
 					result = smb2.FILE_CREATED
 					if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
@@ -836,10 +835,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					op, restored = tc.persistedOpens[path]
 					tc.mu.Unlock()
 					if !restored {
-						info = api.ObjectMetadata{
-							Bucket:  tc.share.bucket,
-							Key:     "/" + path,
-							ModTime: api.TimeRFC3339(time.Now()),
+						info = client.ObjectInfo{
+							Key:        "/" + path,
+							CreatedAt:  time.Now(),
+							ModifiedAt: time.Now(),
 						}
 						result = smb2.FILE_CREATED
 						if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
@@ -877,10 +876,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					op, restored = tc.persistedOpens[path]
 					tc.mu.Unlock()
 					if !restored {
-						info = api.ObjectMetadata{
-							Bucket:  tc.share.bucket,
-							Key:     "/" + path,
-							ModTime: api.TimeRFC3339(time.Now()),
+						info = client.ObjectInfo{
+							Key:        "/" + path,
+							CreatedAt:  time.Now(),
+							ModifiedAt: time.Now(),
 						}
 						result = smb2.FILE_CREATED
 						if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
@@ -1002,7 +1001,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			pending := len(op.pendingUpload.pending)
 			op.pendingUpload.mu.Unlock()
 			if pending == 0 {
-				_, err := op.treeConnect.share.client.FinishUpload(
+				err := op.treeConnect.share.client.FinishUpload(
 					op.ctx,
 					op.treeConnect.share.bucket,
 					op.pathName,
@@ -1035,7 +1034,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			tc.mu.Lock()
 			delete(tc.persistedOpens, op.pathName)
 			tc.mu.Unlock()
-			if err := tc.share.client.DeleteObject(op.ctx, tc.share.bucket, op.pathName, op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0); err != nil {
+			if err := tc.share.client.Delete(op.ctx, tc.share.bucket, op.pathName, op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0); err != nil {
 				log.Println("Error deleting object:", err)
 			}
 		}
@@ -1373,7 +1372,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					}
 					op.pendingUpload.partCount++
 					var eTag string
-					eTag, err = tc.share.client.UploadPart(
+					eTag, err = tc.share.client.Write(
 						op.ctx,
 						bytes.NewReader(chunk.data),
 						tc.share.bucket,
@@ -1401,7 +1400,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				if err == nil {
 					// If we know the file size, and if all parts have been uploaded, flush the upload.
 					if ((op.size > 0 && size >= op.size) || (op.allocated > 0 && size >= op.allocated)) && len(op.pendingUpload.pending) == 0 {
-						_, err = tc.share.client.FinishUpload(
+						err = tc.share.client.FinishUpload(
 							op.ctx,
 							tc.share.bucket,
 							op.pathName,
@@ -1425,7 +1424,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						go func(size uint64) {
 							<-time.After(10 * time.Minute)
 							if op != nil && op.pendingUpload != nil && op.pendingUpload.totalSize == size {
-								_, err = op.treeConnect.share.client.FinishUpload(
+								err = op.treeConnect.share.client.FinishUpload(
 									op.ctx,
 									op.treeConnect.share.bucket,
 									op.pathName,
@@ -1868,7 +1867,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 			// Send as many search results as the buffer length allows.
 			var num int
-			buf, num = smb2.QueryDirectoryBuffer(qdr.FileInformationClass(), op.searchResults, qdr.OutputBufferLength(), single, false, smb2.FileInfo{}, smb2.FileInfo{})
+			buf, num = smb2.QueryDirectoryBuffer(qdr.FileInformationClass(), op.searchResults, qdr.OutputBufferLength(), single, false, client.FileInfo{}, client.FileInfo{})
 			op.searchResults = op.searchResults[num:]
 		} else {
 			// Run a new search.
@@ -1882,7 +1881,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, ss, nil
 			}
 
-			dir, parentDir, err := tc.share.client.GetParentInfo(op.ctx, tc.share.bucket, searchPath)
+			dir, parentDir, err := tc.share.client.Parents(op.ctx, tc.share.bucket, searchPath)
 			if err != nil {
 				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_BAD_NETWORK_NAME, 0, nil)
 				return resp, ss, nil
@@ -2046,42 +2045,19 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			case smb2.FileFsAttributeInformation:
 				info = smb2.FileFsAttributeInfo()
 			case smb2.FileFsSizeInformation:
-				// To estimate the available storage on the Sia network is quite tricky.
-				// The workaround is to calculate the total remaining storage of all hosts
-				// that renterd has formed contracts with and give it as the available storage.
-				rs, err := tc.share.client.RemainingStorage(op.ctx)
+				si, err := tc.share.client.Storage(op.ctx, tc.share.bucket)
 				if err != nil {
-					log.Println("Error calculating remaining storage:", err)
+					log.Println("Error getting storage info:", err)
 				} else {
-					us, err := tc.share.client.UsedStorage(op.ctx, tc.share.bucket)
-					if err != nil {
-						log.Println("Error calculating used storage:", err)
-					} else {
-						red, err := tc.share.client.Redundancy(op.ctx)
-						if err != nil {
-							log.Println("Error getting redundancy settings:", err)
-						} else {
-							info = smb2.FileFsSizeInfo(rs+us, us, red)
-						}
-					}
+					info = smb2.FileFsSizeInfo(si)
 				}
 			case smb2.FileFsFullSizeInformation:
 				// Same as above.
-				rs, err := tc.share.client.RemainingStorage(op.ctx)
+				si, err := tc.share.client.Storage(op.ctx, tc.share.bucket)
 				if err != nil {
-					log.Println("Error calculating remaining storage:", err)
+					log.Println("Error getting storage info:", err)
 				} else {
-					us, err := tc.share.client.UsedStorage(op.ctx, tc.share.bucket)
-					if err != nil {
-						log.Println("Error calculating used storage:", err)
-					} else {
-						red, err := tc.share.client.Redundancy(op.ctx)
-						if err != nil {
-							log.Println("Error getting redundancy settings:", err)
-						} else {
-							info = smb2.FileFsFullSizeInfo(rs+us, us, red)
-						}
-					}
+					info = smb2.FileFsFullSizeInfo(si)
 				}
 			case smb2.FileFsDeviceInformation:
 				info = smb2.FileFsDeviceInfo()
@@ -2178,7 +2154,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				// Some clients set the EoF position of the file to indicate that it has been uploaded.
 				size := binary.LittleEndian.Uint64(sir.Buffer())
 				if op.pendingUpload != nil {
-					eTag, err := tc.share.client.FinishUpload(
+					err := tc.share.client.FinishUpload(
 						op.ctx,
 						tc.share.bucket,
 						op.pathName,
@@ -2191,10 +2167,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						return resp, ss, nil
 					} else {
 						op.pendingUpload = nil
-						buf, err := hex.DecodeString(eTag)
-						if err == nil && len(buf) >= 8 {
-							op.handle = binary.LittleEndian.Uint64(buf[:8])
-						}
 						tc.mu.Lock()
 						delete(tc.persistedOpens, op.pathName)
 						tc.mu.Unlock()
@@ -2240,7 +2212,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				// Some clients modify the FileBasicInfo to indicate that the file has been uploaded.
 				if op.pendingUpload != nil {
 					size := op.pendingUpload.totalSize
-					eTag, err := tc.share.client.FinishUpload(
+					err := tc.share.client.FinishUpload(
 						op.ctx,
 						tc.share.bucket,
 						op.pathName,
@@ -2253,10 +2225,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						return resp, ss, nil
 					} else {
 						op.pendingUpload = nil
-						buf, err := hex.DecodeString(eTag)
-						if err == nil && len(buf) >= 8 {
-							op.handle = binary.LittleEndian.Uint64(buf[:8])
-						}
 						tc.mu.Lock()
 						delete(tc.persistedOpens, op.pathName)
 						tc.mu.Unlock()
@@ -2310,7 +2278,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					op.lastModified = time.Now()
 					tc.mu.Unlock()
 				} else {
-					if err := tc.share.client.RenameObject(
+					if err := tc.share.client.Rename(
 						op.ctx,
 						tc.share.bucket,
 						op.pathName,

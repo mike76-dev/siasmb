@@ -5,11 +5,11 @@ import (
 	"encoding/binary"
 	"time"
 
+	"github.com/mike76-dev/siasmb/client"
 	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"github.com/oiweiwei/go-msrpc/ndr"
-	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
 
@@ -573,15 +573,8 @@ func (info fileIDAllExtdBothDirInfo) encode() []byte {
 	return buf
 }
 
-// FileInfo is a helper structure that combines the 64-bit and the 128-bit file IDs and the file creation time.
-type FileInfo struct {
-	ID64      uint64
-	ID        []byte
-	CreatedAt time.Time
-}
-
 // QueryDirectoryBuffer generates the query result depending on the provided parameters.
-func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uint32, single, root bool, dir, parent FileInfo) (buf []byte, num int) {
+func QueryDirectoryBuffer(class uint8, entries []client.ObjectInfo, bufSize uint32, single, root bool, dir, parent client.FileInfo) (buf []byte, num int) {
 	var info []dirInfo
 	size := uint32(224) // The minimal size of the buffer for safety
 	if bufSize < size {
@@ -592,9 +585,9 @@ func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uin
 		info = append(info,
 			dirInfo{
 				CreationTime:   dir.CreatedAt,
-				LastAccessTime: dir.CreatedAt,
-				LastWriteTime:  dir.CreatedAt,
-				ChangeTime:     dir.CreatedAt,
+				LastAccessTime: dir.ModifiedAt,
+				LastWriteTime:  dir.ModifiedAt,
+				ChangeTime:     dir.ModifiedAt,
 				FileAttributes: FILE_ATTRIBUTE_DIRECTORY,
 				FileID64:       dir.ID64,
 				FileID128:      dir.ID,
@@ -602,9 +595,9 @@ func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uin
 			},
 			dirInfo{
 				CreationTime:   parent.CreatedAt,
-				LastAccessTime: parent.CreatedAt,
-				LastWriteTime:  parent.CreatedAt,
-				ChangeTime:     parent.CreatedAt,
+				LastAccessTime: parent.ModifiedAt,
+				LastWriteTime:  parent.ModifiedAt,
+				ChangeTime:     parent.ModifiedAt,
 				FileAttributes: FILE_ATTRIBUTE_DIRECTORY,
 				FileID64:       parent.ID64,
 				FileID128:      parent.ID,
@@ -623,10 +616,10 @@ func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uin
 		}
 
 		di := dirInfo{
-			CreationTime:   time.Time(entry.ModTime),
-			LastAccessTime: time.Time(entry.ModTime),
-			LastWriteTime:  time.Time(entry.ModTime),
-			ChangeTime:     time.Time(entry.ModTime),
+			CreationTime:   entry.CreatedAt,
+			LastAccessTime: entry.ModifiedAt,
+			LastWriteTime:  entry.ModifiedAt,
+			ChangeTime:     entry.ModifiedAt,
 			FileName:       name,
 		}
 
@@ -634,8 +627,8 @@ func QueryDirectoryBuffer(class uint8, entries []api.ObjectMetadata, bufSize uin
 			di.FileAttributes = FILE_ATTRIBUTE_DIRECTORY
 		} else {
 			di.FileAttributes = FILE_ATTRIBUTE_NORMAL
-			di.EndOfFile = uint64(entry.Size)
-			di.AllocationSize = uint64(entry.Size)
+			di.EndOfFile = entry.Size
+			di.AllocationSize = entry.Size
 		}
 
 		hash := blake2b.Sum256([]byte(entry.Key))
@@ -862,31 +855,23 @@ func FileFsAttributeInfo() []byte {
 }
 
 // FileFsSizeInfo generates the output buffer for the FileFsSizeInformation info class.
-func FileFsSizeInfo(total, used uint64, redundancy api.RedundancySettings) []byte {
-	spu := uint32(1)
-	if redundancy.MinShards != 0 {
-		spu = uint32(redundancy.TotalShards / redundancy.MinShards)
-	}
-
+func FileFsSizeInfo(si client.StorageInfo) []byte {
+	spu := uint32(si.TotalShards / si.MinShards)
 	info := make([]byte, 24)
-	binary.LittleEndian.PutUint64(info[:8], total/BytesPerSector/uint64(spu))
-	binary.LittleEndian.PutUint64(info[8:16], (total-used)/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[:8], si.RemainingStorage+si.UsedStorage/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[8:16], si.RemainingStorage/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint32(info[16:20], spu)
 	binary.LittleEndian.PutUint32(info[20:24], uint32(BytesPerSector))
 	return info
 }
 
 // FileFsFullSizeInfo generates the output buffer for the FileFsFullSizeInformation info class.
-func FileFsFullSizeInfo(total, used uint64, redundancy api.RedundancySettings) []byte {
-	spu := uint32(1)
-	if redundancy.MinShards != 0 {
-		spu = uint32(redundancy.TotalShards / redundancy.MinShards)
-	}
-
+func FileFsFullSizeInfo(si client.StorageInfo) []byte {
+	spu := uint32(si.TotalShards / si.MinShards)
 	info := make([]byte, 32)
-	binary.LittleEndian.PutUint64(info[:8], total/BytesPerSector/uint64(spu))
-	binary.LittleEndian.PutUint64(info[8:16], (total-used)/BytesPerSector/uint64(spu))
-	binary.LittleEndian.PutUint64(info[16:24], (total-used)/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[:8], si.RemainingStorage+si.UsedStorage/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[8:16], si.RemainingStorage/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[16:24], si.RemainingStorage/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint32(info[24:28], spu)
 	binary.LittleEndian.PutUint32(info[28:32], uint32(BytesPerSector))
 	return info
