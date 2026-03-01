@@ -37,7 +37,7 @@ type share struct {
 	compressData    bool
 
 	// Auxiliary fields.
-	client    *client.Client
+	client    client.Client
 	bucket    string
 	createdAt time.Time
 	volumeID  uint64
@@ -46,7 +46,7 @@ type share struct {
 
 // registerShare adds a new share to the SMB server.
 func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
-	if isIndexd {
+	if s.mode == "indexd" {
 		return nil, nil // indexd is not supported yet.
 	}
 
@@ -64,12 +64,12 @@ func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
 		compressData:    s.compressionSupported,
 	}
 
-	sh.client = client.New(ss.ServerName, ss.Password)
+	sh.client = client.New(s.mode, ss.ServerName, ss.Password)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Get the bucket information and test the share at the same time.
-	bucket, err := sh.client.GetBucket(ctx, ss.Bucket)
+	// Get the share information and test the share at the same time.
+	info, err := sh.client.Info(ctx, ss.Bucket)
 	if err != nil {
 		return nil, errShareUnavailable
 	}
@@ -100,8 +100,8 @@ func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
 
 	vid := make([]byte, 8)
 	rand.Read(vid[:])
-	sh.bucket = bucket.Name
-	sh.createdAt = time.Time(bucket.CreatedAt)
+	sh.bucket = info.Bucket
+	sh.createdAt = time.Time(info.CreatedAt)
 	sh.volumeID = binary.LittleEndian.Uint64(vid)
 	s.mu.Lock()
 	s.shareList[string(sh.id[:])+"/"+sh.name] = sh

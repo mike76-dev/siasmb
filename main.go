@@ -25,8 +25,6 @@ const version = "2.1.0-beta"
 
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
 
-var isIndexd bool // true if `indexd` mode is active
-
 func main() {
 	log.Printf("Starting SiaSMB v%s...\n", version)
 
@@ -44,7 +42,6 @@ func main() {
 	}
 
 	if cfg.Mode == "indexd" {
-		isIndexd = true
 		panic("indexd mode not supported yet")
 	} else if cfg.Mode != "renterd" {
 		panic("invalid mode")
@@ -86,7 +83,7 @@ func main() {
 	defer l.Close()
 
 	// Start the SMB server.
-	server := newServer(l, db, cfg.Debug)
+	server := newServer(l, db, cfg.Mode, cfg.Debug)
 	if smb2.MaxSupportedDialect != smb2.SMB_DIALECT_202 {
 		server.serverCapabilities |= smb2.GLOBAL_CAP_LARGE_MTU
 	}
@@ -112,7 +109,10 @@ func main() {
 					// Reset the abuse protection.
 					server.mu.Lock()
 					server.connectionCount = make(map[string]int)
-					cl := server.connectionList
+					cl := make([]*connection, 0, len(server.connectionList))
+					for _, cn := range server.connectionList {
+						cl = append(cl, cn)
+					}
 					server.mu.Unlock()
 
 					// Drop unused connections.
@@ -127,11 +127,17 @@ func main() {
 
 		log.Println("Received interrupt signal, shutting down...")
 		server.mu.Lock()
-		defer server.mu.Unlock()
 		server.enabled = false
-		for addr, connection := range server.connectionList {
-			log.Printf("Closing connection from client %s\n", addr)
+		conns := make([]*connection, 0, len(server.connectionList))
+		for _, c := range server.connectionList {
+			conns = append(conns, c)
+		}
+		server.mu.Unlock()
+
+		for _, connection := range conns {
+			log.Printf("Closing connection from client %s\n", connection.clientName)
 			connection.conn.Close()
+			connection.once.Do(func() { close(connection.closeChan) })
 		}
 
 		apiSrv.Close()

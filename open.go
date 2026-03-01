@@ -12,12 +12,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mike76-dev/siasmb/client"
 	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/rpc"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
+	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
@@ -41,6 +43,8 @@ type upload struct {
 	totalSize  uint64
 	nextOffset uint64
 	pending    map[uint64]*uploadChunk
+	buf        []byte
+	bufOffset  uint64
 	mu         sync.Mutex
 }
 
@@ -63,9 +67,7 @@ type open struct {
 	createGuid                 [16]byte
 	applicationInstanceVersion [16]byte
 
-	// Since renterd has no idea about such attributes of the most operating systems as
-	// CreationTime, LastWriteTime, LastAccessTime, and ChangeTime, we can only operate
-	// with the lastModified property.
+	created      time.Time
 	lastModified time.Time
 
 	// size is how much space the file occupies.
@@ -81,7 +83,7 @@ type open struct {
 	// is a directory). It is needed, because it's common for the clients to send two consecutive
 	// SMB2_QUERY_DIRECTORY requests; the second one should be responded with the NO_MORE_FILES status.
 	lastSearch    string
-	searchResults []api.ObjectMetadata
+	searchResults []client.ObjectInfo
 
 	// if pendingUpload is not nil, it points to an active multipart upload.
 	pendingUpload *upload
@@ -102,6 +104,9 @@ type open struct {
 	srvsvcData []byte
 
 	mu sync.Mutex
+
+	inflight int
+	cond     *sync.Cond
 }
 
 // grantAccess returns true if the user's access rights are sufficient for performing the requested operation(s) on the file.
@@ -139,7 +144,7 @@ func grantAccess(cr smb2.CreateRequest, tc *treeConnect, ss *session) bool {
 }
 
 // registerOpen creates a new Open object and registers it with the server.
-func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api.ObjectMetadata, ctx context.Context, cancel context.CancelFunc) *open {
+func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info client.ObjectInfo, ctx context.Context, cancel context.CancelFunc) *open {
 	h, _ := blake2b.New256(nil)
 	h.Write([]byte(info.Key))
 	id := h.Sum(nil)
@@ -172,9 +177,10 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		resumeKey:      id[:24],
 		createOptions:  cr.CreateOptions(),
 		fileAttributes: smb2.FILE_ATTRIBUTE_NORMAL,
-		lastModified:   time.Time(info.ModTime),
-		size:           uint64(info.Size),
-		allocated:      uint64(info.Size),
+		created:        info.CreatedAt,
+		lastModified:   info.ModifiedAt,
+		size:           info.Size,
+		allocated:      info.Size,
 		ctx:            ctx,
 		cancel:         cancel,
 		lsaFrames:      make(map[uint32]*rpc.Frame),
@@ -182,6 +188,7 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info api
 		chunkSize:      smb2.BytesPerSector * 4,
 		maxCacheSize:   4,
 	}
+	op.cond = sync.NewCond(&op.mu)
 
 	if isDir {
 		op.fileAttributes |= smb2.FILE_ATTRIBUTE_DIRECTORY
@@ -245,18 +252,18 @@ func (op *open) queryDirectory(pattern string) error {
 	}
 
 	share := op.treeConnect.share
-	objs, err := share.client.GetObjects(op.ctx, share.bucket, op.pathName+"/")
+	ois, err := share.client.List(op.ctx, share.bucket, op.pathName+"/")
 	if err != nil {
 		return err
 	}
 
-	var results []api.ObjectMetadata
+	var results []client.ObjectInfo
 	found := make(map[string]struct{})
-	for _, entry := range objs {
-		path, name, _ := utils.ExtractFilename(entry.Key)
+	for _, oi := range ois {
+		path, name, _ := utils.ExtractFilename(oi.Key)
 		match, _ := filepath.Match(pattern, name)
 		if match {
-			results = append(results, entry)
+			results = append(results, oi)
 			found[path] = struct{}{}
 		}
 	}
@@ -273,10 +280,11 @@ func (op *open) queryDirectory(pattern string) error {
 		}
 		match, _ := filepath.Match(pattern, utils.TrimPath(path))
 		if match {
-			results = append(results, api.ObjectMetadata{
-				Bucket:  tc.share.bucket,
-				Key:     "/" + path,
-				ModTime: api.TimeRFC3339(o.lastModified),
+			results = append(results, client.ObjectInfo{
+				Key:        "/" + path,
+				CreatedAt:  o.lastModified,
+				ModifiedAt: o.lastModified,
+				Size:       o.size,
 			})
 		}
 	}
@@ -304,6 +312,7 @@ func (op *open) fileAllInformation() []byte {
 	var size, alloc uint64
 	var lc uint32
 	var pd bool
+	op.mu.Lock()
 	if strings.ToLower(op.fileName) == "srvsvc" {
 		alloc = 4096
 		lc = 1
@@ -340,6 +349,7 @@ func (op *open) fileAllInformation() []byte {
 			FileName: op.fileName,
 		},
 	}
+	op.mu.Unlock()
 	return fai.Encode()
 }
 
@@ -348,6 +358,7 @@ func (op *open) fileStandardInformation() []byte {
 	var size, alloc uint64
 	var lc uint32
 	var pd bool
+	op.mu.Lock()
 	if strings.ToLower(op.fileName) == "srvsvc" {
 		alloc = 4096
 		lc = 1
@@ -363,12 +374,14 @@ func (op *open) fileStandardInformation() []byte {
 		DeletePending:  pd,
 		Directory:      op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
 	}
+	op.mu.Unlock()
 	return fsi.Encode()
 }
 
 // fileNetworkOpenInformation genereates a FileNetworkOpenInfo structure.
 func (op *open) fileNetworkOpenInformation() []byte {
 	var size, alloc uint64
+	op.mu.Lock()
 	if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
 		size = op.size
 		alloc = op.allocated
@@ -382,14 +395,17 @@ func (op *open) fileNetworkOpenInformation() []byte {
 		EndOfFile:      size,
 		FileAttributes: op.fileAttributes,
 	}
+	op.mu.Unlock()
 	return fnoi.Encode()
 }
 
 // fileNormalizedNameInformation genereates a FileNormalizedNameInfo structure.
 func (op *open) fileNormalizedNameInformation() []byte {
+	op.mu.Lock()
 	fnni := smb2.FileNormalizedNameInfo{
 		Filename: op.pathName,
 	}
+	op.mu.Unlock()
 	return fnni.Encode()
 }
 
@@ -403,11 +419,13 @@ func (op *open) fileEaInformation() []byte {
 
 // fileStreamInformation generates a FileStreamInfo structure.
 func (op *open) fileStreamInformation() []byte {
+	op.mu.Lock()
 	fsi := smb2.FileStreamInfo{
 		StreamName:           "::$DATA",
 		StreamSize:           op.size,
 		StreamAllocationSize: op.allocated,
 	}
+	op.mu.Unlock()
 	return fsi.Encode()
 }
 
@@ -434,18 +452,18 @@ func (op *open) newLSAFrame(ctx ntlm.SecurityContext) *rpc.Frame {
 // checkForChanges monitors if any significant changes have occurred in the specified directory.
 // Significant changes include: file names, sizes, modify times, or contents.
 func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan struct{}) {
-	objs, err := op.treeConnect.share.client.GetObjects(op.ctx, op.treeConnect.share.bucket, op.pathName)
+	ois, err := op.treeConnect.share.client.List(op.ctx, op.treeConnect.share.bucket, op.pathName)
 	if err != nil {
 		return
 	}
 
 	found := make(map[string]struct{})
-	for _, entry := range objs {
-		if entry.Key == "" {
+	for _, oi := range ois {
+		if oi.Key == "" {
 			continue
 		}
-		if strings.HasPrefix(entry.Key[1:], op.pathName) {
-			found[entry.Key[1:]] = struct{}{}
+		if strings.HasPrefix(oi.Key[1:], op.pathName) {
+			found[oi.Key[1:]] = struct{}{}
 		}
 	}
 
@@ -455,15 +473,16 @@ func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan stru
 		if _, ok := found[path]; ok {
 			continue
 		}
-		objs = append(objs, api.ObjectMetadata{
-			Bucket:  tc.share.bucket,
-			Key:     "/" + path,
-			ModTime: api.TimeRFC3339(o.lastModified),
+		ois = append(ois, client.ObjectInfo{
+			Key:        "/" + path,
+			CreatedAt:  o.lastModified,
+			ModifiedAt: o.lastModified,
+			Size:       o.size,
 		})
 	}
 	tc.mu.Unlock()
 
-	snapshot := makeSnapshot(objs)
+	snapshot := makeSnapshot(ois)
 	for {
 		select {
 		case <-stopChan: // Execution terminated
@@ -471,18 +490,18 @@ func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan stru
 		case <-time.After(15 * time.Second): // Check every 15 seconds
 		}
 
-		objs, err := op.treeConnect.share.client.GetObjects(op.ctx, op.treeConnect.share.bucket, op.pathName)
+		ois, err := op.treeConnect.share.client.List(op.ctx, op.treeConnect.share.bucket, op.pathName)
 		if err != nil {
 			continue
 		}
 
 		found := make(map[string]struct{})
-		for _, entry := range objs {
-			if entry.Key == "" {
+		for _, oi := range ois {
+			if oi.Key == "" {
 				continue
 			}
-			if strings.HasPrefix(entry.Key[1:], op.pathName) {
-				found[entry.Key[1:]] = struct{}{}
+			if strings.HasPrefix(oi.Key[1:], op.pathName) {
+				found[oi.Key[1:]] = struct{}{}
 			}
 		}
 
@@ -492,15 +511,16 @@ func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan stru
 			if _, ok := found[path]; ok {
 				continue
 			}
-			objs = append(objs, api.ObjectMetadata{
-				Bucket:  tc.share.bucket,
-				Key:     "/" + path,
-				ModTime: api.TimeRFC3339(o.lastModified),
+			ois = append(ois, client.ObjectInfo{
+				Key:        "/" + path,
+				CreatedAt:  o.lastModified,
+				ModifiedAt: o.lastModified,
+				Size:       o.size,
 			})
 		}
 		tc.mu.Unlock()
 
-		newSnapshot := makeSnapshot(objs)
+		newSnapshot := makeSnapshot(ois)
 		if !bytes.Equal(newSnapshot, snapshot) {
 			// Normally, the server should monitor the changes according to the filter specified in each
 			// SMB2_CHANGE_NOTIFY request. If the WATCH_TREE flag is set, the server should also monitor
@@ -520,17 +540,17 @@ func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan stru
 }
 
 // makeSnapshot takes a snapshot of the directory.
-func makeSnapshot(entries []api.ObjectMetadata) []byte {
+func makeSnapshot(ois []client.ObjectInfo) []byte {
 	h, err := blake2b.New256(nil)
 	if err != nil {
 		return nil
 	}
 
-	for _, entry := range entries {
-		h.Write([]byte(entry.ETag))
-		h.Write([]byte(entry.ModTime.String()))
-		h.Write([]byte(entry.Key))
-		h.Write(binary.LittleEndian.AppendUint64(nil, uint64(entry.Size)))
+	for _, oi := range ois {
+		h.Write([]byte(oi.Key))
+		h.Write([]byte(oi.CreatedAt.String()))
+		h.Write([]byte(oi.ModifiedAt.String()))
+		h.Write(binary.LittleEndian.AppendUint64(nil, oi.Size))
 	}
 
 	return h.Sum(nil)
@@ -557,7 +577,7 @@ func (op *open) getObjectID() []byte {
 func (op *open) read(offset, length uint64) []byte {
 	readData := func(o, l uint64) ([]byte, error) {
 		var buf bytes.Buffer
-		err := op.treeConnect.share.client.ReadObject(op.ctx, op.treeConnect.share.bucket, op.pathName, o, l, &buf)
+		err := op.treeConnect.share.client.Read(op.ctx, op.treeConnect.share.bucket, op.pathName, o, l, &buf)
 		if err != nil {
 			return nil, err
 		}
@@ -617,4 +637,201 @@ func (op *open) read(offset, length uint64) []byte {
 	}
 
 	return result
+}
+
+// startUpload initiates a multipart upload.
+func (op *open) startUpload() error {
+	op.mu.Lock()
+	defer op.mu.Unlock()
+
+	if op.pendingUpload != nil {
+		return nil
+	}
+
+	id, err := op.treeConnect.share.client.StartUpload(op.ctx, op.treeConnect.share.bucket, op.pathName)
+	if err != nil {
+		return err
+	}
+
+	op.pendingUpload = &upload{
+		uploadID:   id,
+		pending:    make(map[uint64]*uploadChunk),
+		nextOffset: 0,
+		bufOffset:  0,
+	}
+
+	return nil
+}
+
+// write buffers contiguous chunks of data and uploads them as needed.
+func (op *open) write(offset uint64, data []byte) error {
+	op.mu.Lock()
+	u := op.pendingUpload
+	op.mu.Unlock()
+
+	if u == nil {
+		if err := op.startUpload(); err != nil {
+			return err
+		}
+		op.mu.Lock()
+		u = op.pendingUpload
+		op.mu.Unlock()
+	}
+
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	u.pending[offset] = &uploadChunk{offset: offset, data: buf}
+
+	for {
+		ch, ok := u.pending[u.nextOffset]
+		if !ok {
+			break
+		}
+
+		if len(u.buf) == 0 {
+			u.bufOffset = u.nextOffset
+		}
+
+		u.buf = append(u.buf, ch.data...)
+		u.totalSize += uint64(len(ch.data))
+		u.nextOffset += uint64(len(ch.data))
+		delete(u.pending, ch.offset)
+	}
+
+	for uint64(len(u.buf)) >= proto.SectorSize {
+		sector := u.buf[:proto.SectorSize]
+		partOffset := u.bufOffset
+
+		u.partCount++
+		eTag, err := op.treeConnect.share.client.Write(
+			op.ctx,
+			bytes.NewReader(sector),
+			op.treeConnect.share.bucket,
+			op.pathName,
+			u.uploadID,
+			u.partCount,
+			partOffset,
+			proto.SectorSize,
+		)
+		if err != nil {
+			return err
+		}
+
+		u.parts = append(u.parts, api.MultipartCompletedPart{
+			PartNumber: u.partCount,
+			ETag:       eTag,
+		})
+
+		u.buf = u.buf[proto.SectorSize:]
+		u.bufOffset += proto.SectorSize
+	}
+
+	return nil
+}
+
+// flush uploads the remaining part and finalizes the upload.
+func (op *open) flush() error {
+	op.mu.Lock()
+	u := op.pendingUpload
+	for u != nil && op.inflight > 0 {
+		op.cond.Wait()
+		u = op.pendingUpload
+	}
+	op.mu.Unlock()
+
+	if u == nil {
+		return nil
+	}
+
+	u.mu.Lock()
+
+	for {
+		ch, ok := u.pending[u.nextOffset]
+		if !ok {
+			break
+		}
+		if len(u.buf) == 0 {
+			u.bufOffset = u.nextOffset
+		}
+		u.buf = append(u.buf, ch.data...)
+		u.totalSize += uint64(len(ch.data))
+		u.nextOffset += uint64(len(ch.data))
+		delete(u.pending, ch.offset)
+	}
+
+	if len(u.pending) != 0 {
+		u.mu.Unlock()
+		return errors.New("flush: non-contiguous pending write data")
+	}
+
+	if len(u.buf) > 0 {
+		u.partCount++
+		partOffset := u.bufOffset
+		partSize := uint64(len(u.buf))
+		eTag, err := op.treeConnect.share.client.Write(
+			op.ctx,
+			bytes.NewReader(u.buf),
+			op.treeConnect.share.bucket,
+			op.pathName,
+			u.uploadID,
+			u.partCount,
+			partOffset,
+			partSize,
+		)
+		if err != nil {
+			u.mu.Unlock()
+			return err
+		}
+
+		u.parts = append(u.parts, api.MultipartCompletedPart{
+			PartNumber: u.partCount,
+			ETag:       eTag,
+		})
+		u.buf = nil
+	}
+
+	uploadID := u.uploadID
+	parts := append([]api.MultipartCompletedPart(nil), u.parts...)
+	finalSize := u.totalSize
+	u.mu.Unlock()
+
+	if err := op.treeConnect.share.client.FinishUpload(op.ctx, op.treeConnect.share.bucket, op.pathName, uploadID, parts); err != nil {
+		return err
+	}
+
+	op.mu.Lock()
+	if op.pendingUpload == u {
+		op.size = finalSize
+		op.allocated = finalSize
+		op.pendingUpload = nil
+		op.lastModified = time.Now()
+	}
+	op.mu.Unlock()
+
+	op.treeConnect.mu.Lock()
+	delete(op.treeConnect.persistedOpens, op.pathName)
+	op.treeConnect.mu.Unlock()
+
+	return nil
+}
+
+// cancelUpload aborts the running upload.
+func (op *open) cancelUpload() {
+	op.mu.Lock()
+	u := op.pendingUpload
+	op.pendingUpload = nil
+	op.mu.Unlock()
+
+	if u == nil {
+		return
+	}
+
+	u.mu.Lock()
+	uploadID := u.uploadID
+	u.mu.Unlock()
+
+	_ = op.treeConnect.share.client.AbortUpload(op.ctx, op.treeConnect.share.bucket, op.pathName, uploadID)
 }

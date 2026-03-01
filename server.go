@@ -58,6 +58,7 @@ var (
 // server is the implementation of an SMB server.
 type server struct {
 	enabled                     bool
+	mode                        string
 	stats                       serverStats
 	shareList                   map[string]*share
 	globalOpenTable             map[uint64]*open
@@ -79,9 +80,10 @@ type server struct {
 }
 
 // newServer returns an initialized SMB server.
-func newServer(l net.Listener, st Store, debug bool) *server {
+func newServer(l net.Listener, st Store, mode string, debug bool) *server {
 	s := &server{
 		enabled:            true,
+		mode:               mode,
 		serverGuid:         uuid.New(),
 		shareList:          make(map[string]*share),
 		connectionList:     make(map[string]*connection),
