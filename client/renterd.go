@@ -131,6 +131,25 @@ func (rc *renterdClient) usedStorage(ctx context.Context, bucket string) (us uin
 	return osr.TotalUploadedSize, nil
 }
 
+// IsEmpty returns true if the directory contains at least one object.
+func (rc *renterdClient) IsEmpty(ctx context.Context, bucket, path string) (bool, error) {
+	values := url.Values{}
+	api.ListObjectOptions{
+		Bucket:    bucket,
+		Delimiter: "/",
+		Limit:     1,
+	}.Apply(values)
+	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
+	path = api.ObjectKeyEscape(path)
+	path += "?" + values.Encode()
+	var res api.ObjectsResponse
+	if err := rc.doRequest(ctx, "GET", fmt.Sprintf("/api/bus/objects/%s", path), nil, &res); err != nil {
+		return false, err
+	}
+
+	return len(res.Objects) == 0, nil
+}
+
 // List lists the contents of a directory.
 func (rc *renterdClient) List(ctx context.Context, bucket, path string) (ois []ObjectInfo, err error) {
 	values := url.Values{}
