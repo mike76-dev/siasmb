@@ -37,6 +37,7 @@ const (
 	STATUS_NETWORK_NAME_DELETED                  = 0xc00000c9
 	STATUS_NETWORK_ACCESS_DENIED                 = 0xc00000ca
 	STATUS_BAD_NETWORK_NAME                      = 0xc00000cc
+	STATUS_DIRECTORY_NOT_EMPTY                   = 0xc0000101
 	STATUS_CANCELLED                             = 0xc0000120
 	STATUS_FILE_CLOSED                           = 0xc0000128
 	STATUS_USER_SESSION_DELETED                  = 0xc0000203

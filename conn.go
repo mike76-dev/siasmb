@@ -2070,7 +2070,59 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				}
 
 				if sir.Buffer()[0] == 1 { // Set the delete flag
-					op.createOptions |= smb2.FILE_DELETE_ON_CLOSE
+					if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY != 0 {
+						// We need to check if the directory is not empty. This can take some time.
+						aid := make([]byte, 8)
+						rand.Read(aid)
+						asyncID := binary.LittleEndian.Uint64(aid)
+						req.Header().SetAsyncID(asyncID)
+						req.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
+						c.mu.Lock()
+						c.asyncCommandList[asyncID] = req
+						ch := make(chan struct{})
+						c.stopChans[req.CancelRequestID()] = ch
+						c.mu.Unlock()
+
+						go func() {
+							var resp smb2.GenericResponse
+							empty, err := tc.share.client.IsEmpty(op.ctx, tc.share.bucket, op.pathName+"/")
+							if err != nil {
+								log.Printf("Error listing directory contents: %v", err)
+								resp = smb2.NewErrorResponse(sir, smb2.STATUS_NETWORK_NAME_DELETED, 0, nil)
+							} else {
+								if empty {
+									if op != nil {
+										op.createOptions |= smb2.FILE_DELETE_ON_CLOSE
+									}
+									resp = &smb2.SetInfoResponse{}
+									resp.FromRequest(sir)
+									resp.Header().SetAsyncID(asyncID)
+									resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
+								} else {
+									resp = smb2.NewErrorResponse(sir, smb2.STATUS_DIRECTORY_NOT_EMPTY, 0, nil)
+								}
+							}
+
+							c.mu.Lock()
+							delete(c.requestList, resp.Header().MessageID())
+							delete(c.asyncCommandList, asyncID)
+							c.mu.Unlock()
+
+							c.server.writeResponse(c, ss, resp)
+						}()
+
+						// Send an interim response.
+						resp := smb2.NewErrorResponse(sir, smb2.STATUS_PENDING, 0, nil)
+						resp.Header().SetAsyncID(asyncID)
+						resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
+						resp.Header().ClearFlag(smb2.FLAGS_RELATED_OPERATIONS)
+						resp.Header().ClearFlag(smb2.FLAGS_SIGNED)
+						resp.Header()[len(resp.Header())-1] = 0x21
+
+						return resp, ss, nil
+					} else {
+						op.createOptions |= smb2.FILE_DELETE_ON_CLOSE
+					}
 				}
 
 			case smb2.FileRenameInformation:

@@ -48,6 +48,7 @@ type ObjectInfo struct {
 type Client interface {
 	Info(ctx context.Context, bucket string) (GeneralInfo, error)
 	Storage(ctx context.Context, bucket string) (StorageInfo, error)
+	IsEmpty(ctx context.Context, bucket, path string) (bool, error)
 	List(ctx context.Context, bucket, path string) ([]ObjectInfo, error)
 	Object(ctx context.Context, bucket, path string) (ObjectInfo, error)
 	Parents(ctx context.Context, bucket, path string) (currentDir, parentDir FileInfo, err error)
