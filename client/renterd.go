@@ -347,7 +347,7 @@ func (rc *renterdClient) Read(ctx context.Context, bucket, path string, offset, 
 }
 
 // StartUpload initiates a multipart upload.
-func (rc *renterdClient) StartUpload(ctx context.Context, bucket, path string) (uploadID []byte, err error) {
+func (rc *renterdClient) StartUpload(ctx context.Context, bucket, path string) (uploadID string, err error) {
 	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
 		return
 	}
@@ -359,11 +359,11 @@ func (rc *renterdClient) StartUpload(ctx context.Context, bucket, path string) (
 	}, &resp); err != nil {
 		return
 	}
-	return []byte(resp.UploadID), nil
+	return resp.UploadID, nil
 }
 
 // AbortUpload aborts an initiated multipart upload.
-func (rc *renterdClient) AbortUpload(ctx context.Context, bucket, path string, uploadID []byte) (err error) {
+func (rc *renterdClient) AbortUpload(ctx context.Context, bucket, path string, uploadID string) (err error) {
 	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
 		return
 	}
@@ -371,13 +371,13 @@ func (rc *renterdClient) AbortUpload(ctx context.Context, bucket, path string, u
 	err = rc.doRequest(ctx, "POST", "/api/bus/multipart/abort", api.MultipartAbortRequest{
 		Bucket:   bucket,
 		Key:      "/" + path,
-		UploadID: string(uploadID),
+		UploadID: uploadID,
 	}, nil)
 	return
 }
 
 // FinishUpload completes a multipart upload.
-func (rc *renterdClient) FinishUpload(ctx context.Context, bucket, path string, uploadID []byte, parts []api.MultipartCompletedPart) error {
+func (rc *renterdClient) FinishUpload(ctx context.Context, bucket, path string, uploadID string, parts []api.MultipartCompletedPart) error {
 	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
 		return nil
 	}
@@ -389,13 +389,13 @@ func (rc *renterdClient) FinishUpload(ctx context.Context, bucket, path string, 
 	return rc.doRequest(ctx, "POST", "/api/bus/multipart/complete", api.MultipartCompleteRequest{
 		Bucket:   bucket,
 		Key:      "/" + path,
-		UploadID: string(uploadID),
+		UploadID: uploadID,
 		Parts:    parts,
 	}, &resp)
 }
 
 // Write uploads the provided chunk of data to the Sia network.
-func (rc *renterdClient) Write(ctx context.Context, r io.Reader, bucket, path string, uploadID []byte, partNumber int, offset, length uint64) (eTag string, err error) {
+func (rc *renterdClient) Write(ctx context.Context, r io.Reader, bucket, path string, uploadID string, partNumber int, offset, length uint64) (eTag string, err error) {
 	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
 		return
 	}
@@ -403,7 +403,7 @@ func (rc *renterdClient) Write(ctx context.Context, r io.Reader, bucket, path st
 	path = api.ObjectKeyEscape(path)
 	values := make(url.Values)
 	values.Set("bucket", bucket)
-	values.Set("uploadid", string(uploadID))
+	values.Set("uploadid", uploadID)
 	values.Set("partnumber", fmt.Sprint(partNumber))
 
 	off := int(offset)

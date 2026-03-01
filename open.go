@@ -19,6 +19,7 @@ import (
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
+	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
@@ -36,12 +37,14 @@ type uploadChunk struct {
 
 // upload holds the information about an active multipart upload.
 type upload struct {
-	uploadID   []byte
+	uploadID   string
 	partCount  int
 	parts      []api.MultipartCompletedPart
 	totalSize  uint64
 	nextOffset uint64
 	pending    map[uint64]*uploadChunk
+	buf        []byte
+	bufOffset  uint64
 	mu         sync.Mutex
 }
 
@@ -101,6 +104,9 @@ type open struct {
 	srvsvcData []byte
 
 	mu sync.Mutex
+
+	inflight int
+	cond     *sync.Cond
 }
 
 // grantAccess returns true if the user's access rights are sufficient for performing the requested operation(s) on the file.
@@ -182,6 +188,7 @@ func (ss *session) registerOpen(cr smb2.CreateRequest, tc *treeConnect, info cli
 		chunkSize:      smb2.BytesPerSector * 4,
 		maxCacheSize:   4,
 	}
+	op.cond = sync.NewCond(&op.mu)
 
 	if isDir {
 		op.fileAttributes |= smb2.FILE_ATTRIBUTE_DIRECTORY
@@ -305,6 +312,7 @@ func (op *open) fileAllInformation() []byte {
 	var size, alloc uint64
 	var lc uint32
 	var pd bool
+	op.mu.Lock()
 	if strings.ToLower(op.fileName) == "srvsvc" {
 		alloc = 4096
 		lc = 1
@@ -341,6 +349,7 @@ func (op *open) fileAllInformation() []byte {
 			FileName: op.fileName,
 		},
 	}
+	op.mu.Unlock()
 	return fai.Encode()
 }
 
@@ -349,6 +358,7 @@ func (op *open) fileStandardInformation() []byte {
 	var size, alloc uint64
 	var lc uint32
 	var pd bool
+	op.mu.Lock()
 	if strings.ToLower(op.fileName) == "srvsvc" {
 		alloc = 4096
 		lc = 1
@@ -364,12 +374,14 @@ func (op *open) fileStandardInformation() []byte {
 		DeletePending:  pd,
 		Directory:      op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
 	}
+	op.mu.Unlock()
 	return fsi.Encode()
 }
 
 // fileNetworkOpenInformation genereates a FileNetworkOpenInfo structure.
 func (op *open) fileNetworkOpenInformation() []byte {
 	var size, alloc uint64
+	op.mu.Lock()
 	if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
 		size = op.size
 		alloc = op.allocated
@@ -383,14 +395,17 @@ func (op *open) fileNetworkOpenInformation() []byte {
 		EndOfFile:      size,
 		FileAttributes: op.fileAttributes,
 	}
+	op.mu.Unlock()
 	return fnoi.Encode()
 }
 
 // fileNormalizedNameInformation genereates a FileNormalizedNameInfo structure.
 func (op *open) fileNormalizedNameInformation() []byte {
+	op.mu.Lock()
 	fnni := smb2.FileNormalizedNameInfo{
 		Filename: op.pathName,
 	}
+	op.mu.Unlock()
 	return fnni.Encode()
 }
 
@@ -404,11 +419,13 @@ func (op *open) fileEaInformation() []byte {
 
 // fileStreamInformation generates a FileStreamInfo structure.
 func (op *open) fileStreamInformation() []byte {
+	op.mu.Lock()
 	fsi := smb2.FileStreamInfo{
 		StreamName:           "::$DATA",
 		StreamSize:           op.size,
 		StreamAllocationSize: op.allocated,
 	}
+	op.mu.Unlock()
 	return fsi.Encode()
 }
 
@@ -620,4 +637,201 @@ func (op *open) read(offset, length uint64) []byte {
 	}
 
 	return result
+}
+
+// startUpload initiates a multipart upload.
+func (op *open) startUpload() error {
+	op.mu.Lock()
+	defer op.mu.Unlock()
+
+	if op.pendingUpload != nil {
+		return nil
+	}
+
+	id, err := op.treeConnect.share.client.StartUpload(op.ctx, op.treeConnect.share.bucket, op.pathName)
+	if err != nil {
+		return err
+	}
+
+	op.pendingUpload = &upload{
+		uploadID:   id,
+		pending:    make(map[uint64]*uploadChunk),
+		nextOffset: 0,
+		bufOffset:  0,
+	}
+
+	return nil
+}
+
+// write buffers contiguous chunks of data and uploads them as needed.
+func (op *open) write(offset uint64, data []byte) error {
+	op.mu.Lock()
+	u := op.pendingUpload
+	op.mu.Unlock()
+
+	if u == nil {
+		if err := op.startUpload(); err != nil {
+			return err
+		}
+		op.mu.Lock()
+		u = op.pendingUpload
+		op.mu.Unlock()
+	}
+
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	buf := make([]byte, len(data))
+	copy(buf, data)
+	u.pending[offset] = &uploadChunk{offset: offset, data: buf}
+
+	for {
+		ch, ok := u.pending[u.nextOffset]
+		if !ok {
+			break
+		}
+
+		if len(u.buf) == 0 {
+			u.bufOffset = u.nextOffset
+		}
+
+		u.buf = append(u.buf, ch.data...)
+		u.totalSize += uint64(len(ch.data))
+		u.nextOffset += uint64(len(ch.data))
+		delete(u.pending, ch.offset)
+	}
+
+	for uint64(len(u.buf)) >= proto.SectorSize {
+		sector := u.buf[:proto.SectorSize]
+		partOffset := u.bufOffset
+
+		u.partCount++
+		eTag, err := op.treeConnect.share.client.Write(
+			op.ctx,
+			bytes.NewReader(sector),
+			op.treeConnect.share.bucket,
+			op.pathName,
+			u.uploadID,
+			u.partCount,
+			partOffset,
+			proto.SectorSize,
+		)
+		if err != nil {
+			return err
+		}
+
+		u.parts = append(u.parts, api.MultipartCompletedPart{
+			PartNumber: u.partCount,
+			ETag:       eTag,
+		})
+
+		u.buf = u.buf[proto.SectorSize:]
+		u.bufOffset += proto.SectorSize
+	}
+
+	return nil
+}
+
+// flush uploads the remaining part and finalizes the upload.
+func (op *open) flush() error {
+	op.mu.Lock()
+	u := op.pendingUpload
+	for u != nil && op.inflight > 0 {
+		op.cond.Wait()
+		u = op.pendingUpload
+	}
+	op.mu.Unlock()
+
+	if u == nil {
+		return nil
+	}
+
+	u.mu.Lock()
+
+	for {
+		ch, ok := u.pending[u.nextOffset]
+		if !ok {
+			break
+		}
+		if len(u.buf) == 0 {
+			u.bufOffset = u.nextOffset
+		}
+		u.buf = append(u.buf, ch.data...)
+		u.totalSize += uint64(len(ch.data))
+		u.nextOffset += uint64(len(ch.data))
+		delete(u.pending, ch.offset)
+	}
+
+	if len(u.pending) != 0 {
+		u.mu.Unlock()
+		return errors.New("flush: non-contiguous pending write data")
+	}
+
+	if len(u.buf) > 0 {
+		u.partCount++
+		partOffset := u.bufOffset
+		partSize := uint64(len(u.buf))
+		eTag, err := op.treeConnect.share.client.Write(
+			op.ctx,
+			bytes.NewReader(u.buf),
+			op.treeConnect.share.bucket,
+			op.pathName,
+			u.uploadID,
+			u.partCount,
+			partOffset,
+			partSize,
+		)
+		if err != nil {
+			u.mu.Unlock()
+			return err
+		}
+
+		u.parts = append(u.parts, api.MultipartCompletedPart{
+			PartNumber: u.partCount,
+			ETag:       eTag,
+		})
+		u.buf = nil
+	}
+
+	uploadID := u.uploadID
+	parts := append([]api.MultipartCompletedPart(nil), u.parts...)
+	finalSize := u.totalSize
+	u.mu.Unlock()
+
+	if err := op.treeConnect.share.client.FinishUpload(op.ctx, op.treeConnect.share.bucket, op.pathName, uploadID, parts); err != nil {
+		return err
+	}
+
+	op.mu.Lock()
+	if op.pendingUpload == u {
+		op.size = finalSize
+		op.allocated = finalSize
+		op.pendingUpload = nil
+		op.lastModified = time.Now()
+	}
+	op.mu.Unlock()
+
+	op.treeConnect.mu.Lock()
+	delete(op.treeConnect.persistedOpens, op.pathName)
+	op.treeConnect.mu.Unlock()
+
+	return nil
+}
+
+// cancelUpload aborts the running upload.
+func (op *open) cancelUpload() {
+	op.mu.Lock()
+	u := op.pendingUpload
+	op.pendingUpload = nil
+	op.mu.Unlock()
+
+	if u == nil {
+		return
+	}
+
+	u.mu.Lock()
+	uploadID := u.uploadID
+	u.mu.Unlock()
+
+	_ = op.treeConnect.share.client.AbortUpload(op.ctx, op.treeConnect.share.bucket, op.pathName, uploadID)
 }

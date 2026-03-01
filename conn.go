@@ -22,7 +22,6 @@ import (
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
 	"github.com/oiweiwei/go-msrpc/ndr"
-	"go.sia.tech/renterd/v2/api"
 )
 
 const (
@@ -719,6 +718,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		path := strings.ReplaceAll(cr.Filename(), "\\", "/")
+		if strings.HasPrefix(path, ".") { // Hidden files of any sort are not supported
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_NOT_SUPPORTED, 0, nil)
+			return resp, ss, nil
+		}
+
 		co := cr.CreateOptions()
 		if co&smb2.FILE_DELETE_ON_CLOSE > 0 && (tc.maximalAccess&(smb2.DELETE|smb2.GENERIC_ALL|smb2.GENERIC_EXECUTE|smb2.GENERIC_READ|smb2.GENERIC_WRITE) == 0) {
 			resp := smb2.NewErrorResponse(cr, smb2.STATUS_ACCESS_DENIED, 0, nil)
@@ -997,36 +1001,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		}
 
 		if op.pendingUpload != nil { // This SMB2_CLOSE request is a sign for us to flush any active multipart upload
-			op.pendingUpload.mu.Lock()
-			pending := len(op.pendingUpload.pending)
-			op.pendingUpload.mu.Unlock()
-			if pending == 0 {
-				err := op.treeConnect.share.client.FinishUpload(
-					op.ctx,
-					op.treeConnect.share.bucket,
-					op.pathName,
-					op.pendingUpload.uploadID,
-					op.pendingUpload.parts,
-				)
-				if err != nil {
-					log.Println("Error completing write:", err)
-				} else {
-					op.size = op.pendingUpload.totalSize
-					op.allocated = op.pendingUpload.totalSize
-					op.pendingUpload = nil
-					tc.mu.Lock()
-					delete(tc.persistedOpens, op.pathName)
-					tc.mu.Unlock()
-				}
-			} else {
-				if err := op.treeConnect.share.client.AbortUpload(
-					op.ctx,
-					op.treeConnect.share.bucket,
-					op.pathName,
-					op.pendingUpload.uploadID,
-				); err != nil {
-					log.Println("Error aborting write:", err)
-				}
+			if err := op.flush(); err != nil {
+				op.cancelUpload()
+				log.Println("Error completing write:", err)
 			}
 		}
 
@@ -1254,15 +1231,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
-		ss.mu.Lock()
-		tc, found := ss.treeConnectTable[wr.Header().TreeID()]
-		ss.mu.Unlock()
-
-		if !found {
-			resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
-			return resp, ss, nil
-		}
-
 		ss.idleTime = time.Now()
 		length := uint64(len(wr.Buffer()))
 		if length > c.maxWriteSize {
@@ -1321,17 +1289,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		// Initiate a multipart upload if it hasn't been done yet.
-		if op.pendingUpload == nil {
-			id, err := tc.share.client.StartUpload(op.ctx, tc.share.bucket, op.pathName)
-			if err != nil {
-				resp := smb2.NewErrorResponse(wr, smb2.STATUS_DATA_ERROR, 0, nil)
-				return resp, ss, nil
-			}
-
-			op.pendingUpload = &upload{uploadID: id, pending: make(map[uint64]*uploadChunk)}
-		}
-
 		// An SMB2_WRITE request can take long enough, especially on the Sia network, for the client
 		// to drop the connection. We send an interim response and process the request asynchronously
 		// to prevent that.
@@ -1349,111 +1306,28 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		resp.Header().ClearFlag(smb2.FLAGS_SIGNED)
 		resp.Header()[len(resp.Header())-1] = 0x21
 
+		op.mu.Lock()
+		op.inflight++
+		op.mu.Unlock()
 		go func() {
+			defer func() {
+				op.mu.Lock()
+				op.inflight--
+				op.cond.Broadcast()
+				op.mu.Unlock()
+			}()
 			var resp smb2.GenericResponse
-			if op.pendingUpload == nil { // Should not happen
-				resp = smb2.NewErrorResponse(wr, smb2.STATUS_NOT_SUPPORTED, 0, nil)
-			} else {
-				offset := wr.Offset()
-				data := append([]byte{}, wr.Buffer()...)
-				op.pendingUpload.mu.Lock()
-				op.pendingUpload.pending[offset] = &uploadChunk{offset, data}
-				var err error
-				for {
-					select {
-					case <-op.ctx.Done():
-						return
-					default:
-					}
-					off := op.pendingUpload.nextOffset
-					chunk, ok := op.pendingUpload.pending[off]
-					if !ok {
-						break
-					}
-					op.pendingUpload.partCount++
-					var eTag string
-					eTag, err = tc.share.client.Write(
-						op.ctx,
-						bytes.NewReader(chunk.data),
-						tc.share.bucket,
-						op.pathName,
-						op.pendingUpload.uploadID,
-						op.pendingUpload.partCount,
-						chunk.offset,
-						uint64(len(chunk.data)),
-					)
-					if err != nil {
-						log.Println("Error writing data:", err)
-						resp = smb2.NewErrorResponse(wr, smb2.STATUS_DATA_ERROR, 0, nil)
-						break
-					} else {
-						op.pendingUpload.parts = append(op.pendingUpload.parts, api.MultipartCompletedPart{
-							PartNumber: op.pendingUpload.partCount,
-							ETag:       eTag,
-						})
-						op.pendingUpload.totalSize += uint64(len(chunk.data))
-						op.pendingUpload.nextOffset += uint64(len(chunk.data))
-						delete(op.pendingUpload.pending, chunk.offset)
-					}
-				}
-				size := op.pendingUpload.totalSize
-				if err == nil {
-					// If we know the file size, and if all parts have been uploaded, flush the upload.
-					if ((op.size > 0 && size >= op.size) || (op.allocated > 0 && size >= op.allocated)) && len(op.pendingUpload.pending) == 0 {
-						err = tc.share.client.FinishUpload(
-							op.ctx,
-							tc.share.bucket,
-							op.pathName,
-							op.pendingUpload.uploadID,
-							op.pendingUpload.parts,
-						)
-						if err != nil {
-							log.Println("Error completing write:", err)
-							resp = smb2.NewErrorResponse(wr, smb2.STATUS_DATA_ERROR, 0, nil)
-						} else {
-							op.size = size
-							op.allocated = size
-							op.pendingUpload = nil
-							tc.mu.Lock()
-							delete(tc.persistedOpens, op.pathName)
-							tc.mu.Unlock()
-						}
-					} else {
-						// If we don't know the file size, wait 10 minutes, then flush anyway.
-						size := op.pendingUpload.totalSize
-						go func(size uint64) {
-							<-time.After(10 * time.Minute)
-							if op != nil && op.pendingUpload != nil && op.pendingUpload.totalSize == size {
-								err = op.treeConnect.share.client.FinishUpload(
-									op.ctx,
-									op.treeConnect.share.bucket,
-									op.pathName,
-									op.pendingUpload.uploadID,
-									op.pendingUpload.parts,
-								)
-								if err != nil {
-									log.Println("Error completing write:", err)
-								} else {
-									op.size = size
-									op.allocated = size
-									op.pendingUpload = nil
-									tc.mu.Lock()
-									delete(tc.persistedOpens, op.pathName)
-									tc.mu.Unlock()
-								}
-							}
-						}(size)
-					}
 
-					resp = &smb2.WriteResponse{}
-					resp.FromRequest(wr)
-					resp.(*smb2.WriteResponse).Generate(uint32(len(wr.Buffer())))
-					resp.Header().SetAsyncID(asyncID)
-					resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
-				}
-				if op.pendingUpload != nil {
-					op.pendingUpload.mu.Unlock()
-				}
+			if err := op.write(wr.Offset(), wr.Buffer()); err != nil {
+				op.cancelUpload()
+				log.Println("Error writing data:", err)
+				resp = smb2.NewErrorResponse(wr, smb2.STATUS_DATA_ERROR, 0, nil)
+			} else {
+				resp = &smb2.WriteResponse{}
+				resp.FromRequest(wr)
+				resp.(*smb2.WriteResponse).Generate(uint32(len(wr.Buffer())))
+				resp.Header().SetAsyncID(asyncID)
+				resp.Header().SetFlag(smb2.FLAGS_ASYNC_COMMAND)
 			}
 
 			c.mu.Lock()
@@ -2151,30 +2025,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					return resp, ss, nil
 				}
 
-				// Some clients set the EoF position of the file to indicate that it has been uploaded.
 				size := binary.LittleEndian.Uint64(sir.Buffer())
-				if op.pendingUpload != nil {
-					err := tc.share.client.FinishUpload(
-						op.ctx,
-						tc.share.bucket,
-						op.pathName,
-						op.pendingUpload.uploadID,
-						op.pendingUpload.parts,
-					)
-					if err != nil {
-						log.Println("Error completing write:", err)
-						resp := smb2.NewErrorResponse(sir, smb2.STATUS_DATA_ERROR, 0, nil)
-						return resp, ss, nil
-					} else {
-						op.pendingUpload = nil
-						tc.mu.Lock()
-						delete(tc.persistedOpens, op.pathName)
-						tc.mu.Unlock()
-					}
-
-					op.size = size
-					op.allocated = size
-				}
+				op.mu.Lock()
+				op.allocated = size
+				op.mu.Unlock()
 
 			case smb2.FileBasicInformation:
 				if op.grantedAccess&smb2.FILE_WRITE_ATTRIBUTES == 0 {
@@ -2207,31 +2061,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 				if fbi.FileAttributes != 0 {
 					op.fileAttributes = fbi.FileAttributes
-				}
-
-				// Some clients modify the FileBasicInfo to indicate that the file has been uploaded.
-				if op.pendingUpload != nil {
-					size := op.pendingUpload.totalSize
-					err := tc.share.client.FinishUpload(
-						op.ctx,
-						tc.share.bucket,
-						op.pathName,
-						op.pendingUpload.uploadID,
-						op.pendingUpload.parts,
-					)
-					if err != nil {
-						log.Println("Error completing write:", err)
-						resp := smb2.NewErrorResponse(sir, smb2.STATUS_DATA_ERROR, 0, nil)
-						return resp, ss, nil
-					} else {
-						op.pendingUpload = nil
-						tc.mu.Lock()
-						delete(tc.persistedOpens, op.pathName)
-						tc.mu.Unlock()
-					}
-
-					op.size = size
-					op.allocated = size
 				}
 
 			case smb2.FileDispositionInformation:
@@ -2474,6 +2303,9 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 	} else {
 		mid := cr.Header().MessageID()
 		for _, r := range c.asyncCommandList {
+			if r == nil {
+				continue
+			}
 			if r.Header().MessageID() == mid {
 				target = r
 				found = true
@@ -2483,7 +2315,7 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 	}
 	c.mu.Unlock()
 
-	if !found {
+	if !found || target == nil {
 		return nil
 	}
 
@@ -2497,13 +2329,8 @@ func (c *connection) cancelRequest(req *smb2.Request) error {
 		ss.mu.Lock()
 		op, found = ss.openTable[fid]
 		ss.mu.Unlock()
-		if found && op.durableFileID == dfid && op.pendingUpload != nil {
-			tc := op.treeConnect
-			if err := tc.share.client.AbortUpload(op.ctx, tc.share.bucket, op.pathName, op.pendingUpload.uploadID); err != nil {
-				log.Println("Couldn't abort upload:", err)
-			} else {
-				op.pendingUpload = nil
-			}
+		if found && op.durableFileID == dfid {
+			op.cancelUpload()
 		}
 	}
 

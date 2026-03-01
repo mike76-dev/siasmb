@@ -52,10 +52,10 @@ type Client interface {
 	Object(ctx context.Context, bucket, path string) (ObjectInfo, error)
 	Parents(ctx context.Context, bucket, path string) (currentDir, parentDir FileInfo, err error)
 	Read(ctx context.Context, bucket, path string, offset, length uint64, buf io.Writer) error
-	StartUpload(ctx context.Context, bucket, path string) (uploadID []byte, err error)
-	AbortUpload(ctx context.Context, bucket, path string, uploadID []byte) (err error)
-	FinishUpload(ctx context.Context, bucket, path string, uploadID []byte, parts []api.MultipartCompletedPart) error
-	Write(ctx context.Context, r io.Reader, bucket, path string, uploadID []byte, partNumber int, offset, length uint64) (eTag string, err error)
+	StartUpload(ctx context.Context, bucket, path string) (uploadID string, err error)
+	AbortUpload(ctx context.Context, bucket, path string, uploadID string) (err error)
+	FinishUpload(ctx context.Context, bucket, path string, uploadID string, parts []api.MultipartCompletedPart) error
+	Write(ctx context.Context, r io.Reader, bucket, path string, uploadID string, partNumber int, offset, length uint64) (eTag string, err error)
 	Delete(ctx context.Context, bucket, path string, batch bool) error
 	Rename(ctx context.Context, bucket, oldName, newName string, isDir, force bool) error
 	MakeDirectory(ctx context.Context, bucket, path string) error
