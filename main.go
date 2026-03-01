@@ -109,7 +109,10 @@ func main() {
 					// Reset the abuse protection.
 					server.mu.Lock()
 					server.connectionCount = make(map[string]int)
-					cl := server.connectionList
+					cl := make([]*connection, 0, len(server.connectionList))
+					for _, cn := range server.connectionList {
+						cl = append(cl, cn)
+					}
 					server.mu.Unlock()
 
 					// Drop unused connections.
@@ -124,11 +127,17 @@ func main() {
 
 		log.Println("Received interrupt signal, shutting down...")
 		server.mu.Lock()
-		defer server.mu.Unlock()
 		server.enabled = false
-		for addr, connection := range server.connectionList {
-			log.Printf("Closing connection from client %s\n", addr)
+		conns := make([]*connection, 0, len(server.connectionList))
+		for _, c := range server.connectionList {
+			conns = append(conns, c)
+		}
+		server.mu.Unlock()
+
+		for _, connection := range conns {
+			log.Printf("Closing connection from client %s\n", connection.clientName)
 			connection.conn.Close()
+			connection.once.Do(func() { close(connection.closeChan) })
 		}
 
 		apiSrv.Close()
