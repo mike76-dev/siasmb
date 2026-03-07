@@ -13,23 +13,24 @@ import (
 
 // Share represents a renterd bucket, which is mounted as a remote share.
 type Share struct {
-	ID         types.Hash256
-	Name       string
-	ServerName string
-	Password   string
-	Bucket     string
-	Remark     string
-	CreatedAt  time.Time
+	Name       string           `json:"name"`
+	Type       string           `json:"type"`
+	ServerName string           `json:"serverName"`
+	Password   string           `json:"password,omitempty"`
+	Bucket     string           `json:"bucket,omitempty"`
+	Remark     string           `json:"remark,omitempty"`
+	CreatedAt  time.Time        `json:"createdAt,omitempty"`
+	AppKey     types.PrivateKey `json:"appKey,omitempty"`
 }
 
 // RegisterShare registers a new share in the database.
 func (db *Database) RegisterShare(s Share) error {
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
-			INSERT INTO shares (share_id, share_name, server_name, api_password, bucket, remark, created_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			INSERT INTO shares (share_name, share_type, server_name, api_password, bucket, remark, created_at, app_key)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		`
-		_, err := tx.Exec(ctx, query, s.ID[:], s.Name, s.ServerName, s.Password, s.Bucket, s.Remark, time.Now())
+		_, err := tx.Exec(ctx, query, s.Name, s.Type, s.ServerName, s.Password, s.Bucket, s.Remark, time.Now(), s.AppKey)
 		if err != nil {
 			return fmt.Errorf("failed to register share: %w", err)
 		} else {
@@ -39,18 +40,16 @@ func (db *Database) RegisterShare(s Share) error {
 }
 
 // UnregisterShare removes the share from the database.
-func (db *Database) UnregisterShare(id types.Hash256, name string) error {
-	if (id == types.Hash256{}) && name == "" {
+func (db *Database) UnregisterShare(name string) error {
+	if name == "" {
 		return nil
 	}
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
 			DELETE FROM shares
-			WHERE (share_id = '\x0000000000000000000000000000000000000000000000000000000000000000'
-			AND share_name = $1)
-			OR share_id = $2
+			WHERE share_name = $1
 		`
-		_, err := tx.Exec(ctx, query, name, id[:])
+		_, err := tx.Exec(ctx, query, name)
 		if err != nil {
 			return fmt.Errorf("failed to remove share: %w", err)
 		} else {
@@ -59,38 +58,35 @@ func (db *Database) UnregisterShare(id types.Hash256, name string) error {
 	})
 }
 
-// GetShare tries to retrieve the share information by its ID and/or name.
-// `renterd` doesn't support share IDs. On the other hand, `indexd` will
-// support multiple shares with the same name, so the ID will be the only way
-// to distinguish between the shares.
-func (db *Database) GetShare(id types.Hash256, name string) (s Share, err error) {
-	if (id == types.Hash256{}) && name == "" {
+// GetShare tries to retrieve the share information by its name.
+func (db *Database) GetShare(name string) (s Share, err error) {
+	if name == "" {
 		return Share{}, nil
 	}
 	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
-			SELECT share_name, server_name, api_password, bucket, remark, created_at
+			SELECT share_type, server_name, api_password, bucket, remark, created_at, app_key
 			FROM shares
-			WHERE (share_id = '\x0000000000000000000000000000000000000000000000000000000000000000'
-			AND share_name = $1)
-			OR share_id = $2
+			WHERE share_name = $1
 		`
-		var name, server, password, bucket, remark string
+		var backend, server, password, bucket, remark string
 		var created time.Time
-		err = tx.QueryRow(ctx, query, name, id[:]).Scan(&name, &server, &password, &bucket, &remark, &created)
+		var appKey types.PrivateKey
+		err = tx.QueryRow(ctx, query, name).Scan(&backend, &server, &password, &bucket, &remark, &created, &appKey)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		} else if err != nil {
 			return fmt.Errorf("failed to retrieve share: %w", err)
 		}
 		s = Share{
-			ID:         id,
 			Name:       name,
+			Type:       backend,
 			ServerName: server,
 			Password:   password,
 			Bucket:     bucket,
 			Remark:     remark,
 			CreatedAt:  created,
+			AppKey:     appKey,
 		}
 		return nil
 	})
@@ -101,11 +97,10 @@ func (db *Database) GetShare(id types.Hash256, name string) (s Share, err error)
 func (db *Database) GetShares(acc Account) (shares []Share, err error) {
 	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
-			SELECT DISTINCT s.share_id, s.share_name, s.server_name, s.api_password, s.bucket, s.remark, s.created_at
+			SELECT DISTINCT s.share_name, s.share_type, s.server_name, s.api_password, s.bucket, s.remark, s.created_at, s.app_key
 			FROM shares AS s
 			JOIN policies AS p
-			ON ((p.share_id <> '\x0000000000000000000000000000000000000000000000000000000000000000' AND p.share_id = s.share_id)
-			OR (p.share_id = '\x0000000000000000000000000000000000000000000000000000000000000000' AND p.share_name = s.share_name))
+			ON p.share_name = s.share_name
 			WHERE p.account = $1
 			AND (p.read_access
 			OR p.write_access
@@ -118,20 +113,21 @@ func (db *Database) GetShares(acc Account) (shares []Share, err error) {
 		}
 		defer rows.Close()
 		for rows.Next() {
-			id := make([]byte, 32)
-			var name, server, password, bucket, remark string
+			var name, backend, server, password, bucket, remark string
 			var created time.Time
-			if err := rows.Scan(&id, &name, &server, &password, &bucket, &remark, &created); err != nil {
+			var appKey types.PrivateKey
+			if err := rows.Scan(&name, &backend, &server, &password, &bucket, &remark, &created, &appKey); err != nil {
 				return fmt.Errorf("failed to retrieve share: %w", err)
 			}
 			shares = append(shares, Share{
-				ID:         types.Hash256(id),
 				Name:       name,
+				Type:       backend,
 				ServerName: server,
 				Password:   password,
 				Bucket:     bucket,
 				Remark:     remark,
 				CreatedAt:  created,
+				AppKey:     appKey,
 			})
 		}
 		return nil
@@ -141,18 +137,16 @@ func (db *Database) GetShares(acc Account) (shares []Share, err error) {
 
 // GetAccounts lists all the accounts that can connect to the specified share.
 func (db *Database) GetAccounts(sh Share) (ars []AccessRights, err error) {
-	if (sh.ID == types.Hash256{}) && sh.Name == "" {
+	if sh.Name == "" {
 		return nil, nil
 	}
 	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
 			SELECT account, read_access, write_access, delete_access, execute_access
 			FROM policies
-			WHERE (share_id = '\x0000000000000000000000000000000000000000000000000000000000000000'
-			AND share_name = $1)
-			OR share_id = $2
+			WHERE share_name = $1
 		`
-		rows, err := tx.Query(ctx, query, sh.Name, sh.ID[:])
+		rows, err := tx.Query(ctx, query, sh.Name)
 		if err != nil {
 			return fmt.Errorf("failed to retrieve policies: %w", err)
 		}
@@ -164,7 +158,6 @@ func (db *Database) GetAccounts(sh Share) (ars []AccessRights, err error) {
 				return fmt.Errorf("failed to retrieve policies: %w", err)
 			}
 			ars = append(ars, AccessRights{
-				ShareID:       sh.ID,
 				ShareName:     sh.Name,
 				AccountID:     accountID,
 				ReadAccess:    read,

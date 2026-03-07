@@ -10,7 +10,6 @@ import (
 	"github.com/mike76-dev/siasmb/rpc"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/stores"
-	"go.sia.tech/core/types"
 )
 
 // serverStats keeps track of the server statistics.
@@ -37,7 +36,7 @@ type Store interface {
 	BanHost(host, reason string) error
 	GetAccounts(sh stores.Share) (ars []stores.AccessRights, err error)
 	GetAccountByID(id int) (acc stores.Account, err error)
-	GetShare(id types.Hash256, name string) (s stores.Share, err error)
+	GetShare(name string) (s stores.Share, err error)
 }
 
 // ServerHashLevel values.
@@ -58,7 +57,6 @@ var (
 // server is the implementation of an SMB server.
 type server struct {
 	enabled                     bool
-	mode                        string
 	stats                       serverStats
 	shareList                   map[string]*share
 	globalOpenTable             map[uint64]*open
@@ -80,10 +78,9 @@ type server struct {
 }
 
 // newServer returns an initialized SMB server.
-func newServer(l net.Listener, st Store, mode string, debug bool) *server {
+func newServer(l net.Listener, st Store, debug bool) *server {
 	s := &server{
 		enabled:            true,
-		mode:               mode,
 		serverGuid:         uuid.New(),
 		shareList:          make(map[string]*share),
 		connectionList:     make(map[string]*connection),

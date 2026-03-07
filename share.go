@@ -24,7 +24,6 @@ var (
 
 // share represents a Share object.
 type share struct {
-	id              types.Hash256
 	name            string
 	serverName      string
 	connectSecurity map[string]struct{}
@@ -38,7 +37,9 @@ type share struct {
 
 	// Auxiliary fields.
 	client    client.Client
+	backend   string
 	bucket    string
+	appKey    types.PrivateKey
 	createdAt time.Time
 	volumeID  uint64
 	mu        sync.Mutex
@@ -46,25 +47,22 @@ type share struct {
 
 // registerShare adds a new share to the SMB server.
 func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
-	if s.mode == "indexd" {
-		return nil, nil // indexd is not supported yet.
-	}
-
 	sh := &share{
-		id:              ss.ID,
 		name:            ss.Name,
+		backend:         ss.Type,
 		serverName:      ss.ServerName,
 		shareType:       smb2.SHARE_TYPE_DISK,
 		maxUses:         maxShareUses,
 		bucket:          ss.Bucket,
 		remark:          ss.Remark,
+		appKey:          ss.AppKey,
 		connectSecurity: make(map[string]struct{}),
 		fileSecurity:    make(map[string]uint32),
 		encryptData:     s.encryptData,
 		compressData:    s.compressionSupported,
 	}
 
-	sh.client = client.New(s.mode, ss.ServerName, ss.Password)
+	sh.client = client.New(sh.backend, ss.ServerName, ss.Password)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -104,7 +102,7 @@ func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
 	sh.createdAt = time.Time(info.CreatedAt)
 	sh.volumeID = binary.LittleEndian.Uint64(vid)
 	s.mu.Lock()
-	s.shareList[string(sh.id[:])+"/"+sh.name] = sh
+	s.shareList[sh.name] = sh
 	s.mu.Unlock()
 
 	return sh, nil

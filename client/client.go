@@ -67,6 +67,8 @@ func New(clientType, addr, password string) Client {
 	switch clientType {
 	case "renterd":
 		return newRenterdClient(addr, password)
+	case "indexd":
+		return newIndexdClient(addr, password)
 	default:
 		return nil
 	}

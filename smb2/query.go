@@ -856,7 +856,12 @@ func FileFsAttributeInfo() []byte {
 
 // FileFsSizeInfo generates the output buffer for the FileFsSizeInformation info class.
 func FileFsSizeInfo(si client.StorageInfo) []byte {
-	spu := uint32(si.TotalShards / si.MinShards)
+	var spu uint32
+	if si.MinShards == 0 {
+		spu = 1
+	} else {
+		spu = uint32(si.TotalShards / si.MinShards)
+	}
 	info := make([]byte, 24)
 	binary.LittleEndian.PutUint64(info[:8], si.RemainingStorage+si.UsedStorage/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint64(info[8:16], si.RemainingStorage/BytesPerSector/uint64(spu))
@@ -867,7 +872,12 @@ func FileFsSizeInfo(si client.StorageInfo) []byte {
 
 // FileFsFullSizeInfo generates the output buffer for the FileFsFullSizeInformation info class.
 func FileFsFullSizeInfo(si client.StorageInfo) []byte {
-	spu := uint32(si.TotalShards / si.MinShards)
+	var spu uint32
+	if si.MinShards == 0 {
+		spu = 1
+	} else {
+		spu = uint32(si.TotalShards / si.MinShards)
+	}
 	info := make([]byte, 32)
 	binary.LittleEndian.PutUint64(info[:8], si.RemainingStorage+si.UsedStorage/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint64(info[8:16], si.RemainingStorage/BytesPerSector/uint64(spu))

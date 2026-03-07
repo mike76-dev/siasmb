@@ -29,13 +29,22 @@ func (dc DatabaseConfig) String() string {
 	return fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=%s", dc.Host, dc.Port, dc.User, dc.Password, dc.Database, dc.SSLMode)
 }
 
+// IndexdConfig lists all parameters required to connect to an `indexd` node.
+type IndexdConfig struct {
+	Name        string `yaml:"appName"`
+	Description string `yaml:"description"`
+	LogoURL     string `yaml:"logoURL"`
+	ServiceURL  string `yaml:"serviceURL"`
+	SeedPhrase  string `yaml:"seedPhrase"`
+}
+
 // Config lists the config fields.
 type Config struct {
 	Debug          bool           `yaml:"debug"`
-	Mode           string         `yaml:"mode"`
 	MaxConnections int            `yaml:"maxConnections"`
 	API            APIConfig      `yaml:"api"`
 	Database       DatabaseConfig `yaml:"database"`
+	Indexd         IndexdConfig   `yaml:"indexd,omitempty"`
 }
 
 // ReadConfig tries to read the config from the specified directory.
@@ -52,4 +61,26 @@ func ReadConfig(dir string) (cfg Config, err error) {
 
 	err = dec.Decode(&cfg)
 	return
+}
+
+// SaveConfig saves the config to the specified directory.
+func SaveConfig(cfg Config, dir string) error {
+	path := filepath.Join(dir, "siasmb.yml")
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	enc := yaml.NewEncoder(f)
+	enc.SetIndent(2)
+	if err := enc.Encode(cfg); err != nil {
+		return fmt.Errorf("failed to encode config file: %v", err)
+	} else if err := f.Sync(); err != nil {
+		return fmt.Errorf("failed to sync file: %v", err)
+	} else if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close file: %v", err)
+	}
+
+	return nil
 }

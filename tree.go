@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/mike76-dev/siasmb/smb2"
-	"go.sia.tech/core/types"
 )
 
 var (
@@ -90,7 +89,7 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 		sh, exists = c.server.shareList[name]
 		c.server.mu.Unlock()
 		if !exists {
-			s, err := c.server.store.GetShare(types.Hash256{}, name)
+			s, err := c.server.store.GetShare(name)
 			if err != nil {
 				return nil, errNoShare
 			}
