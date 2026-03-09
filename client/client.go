@@ -2,11 +2,7 @@ package client
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"io"
-	"net/http"
-	"strings"
 	"time"
 
 	"go.sia.tech/renterd/v2/api"
@@ -62,18 +58,6 @@ type Client interface {
 	MakeDirectory(ctx context.Context, bucket, path string) error
 }
 
-// New returns an initialized Client.
-func New(clientType, addr, password string) Client {
-	switch clientType {
-	case "renterd":
-		return newRenterdClient(addr, password)
-	case "indexd":
-		return newIndexdClient(addr, password)
-	default:
-		return nil
-	}
-}
-
 // sizeFromSeeker tries to find out the size of a file.
 func sizeFromSeeker(r io.Reader) (int64, error) {
 	s, ok := r.(io.Seeker)
@@ -89,49 +73,4 @@ func sizeFromSeeker(r io.Reader) (int64, error) {
 		return 0, err
 	}
 	return size, nil
-}
-
-// clientParams holds the basic params of a Client.
-type clientParams struct {
-	baseURL  string
-	password string
-}
-
-// doRequest does everything needed to send an HTTP request and receive a response.
-func (cp clientParams) doRequest(ctx context.Context, method, path string, body interface{}, resp interface{}) error {
-	var reqBody io.Reader
-	if body != nil {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return err
-		}
-		reqBody = strings.NewReader(string(data))
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, cp.baseURL+path, reqBody)
-	if err != nil {
-		return err
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	if cp.password != "" {
-		req.SetBasicAuth("", cp.password)
-	}
-
-	r, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer r.Body.Close()
-
-	if r.StatusCode < 200 || r.StatusCode >= 300 {
-		errMsg, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MiB limit
-		return fmt.Errorf("HTTP error: %s (status: %d)", string(errMsg), r.StatusCode)
-	}
-
-	if resp != nil {
-		return json.NewDecoder(r.Body).Decode(resp)
-	}
-
-	return nil
 }

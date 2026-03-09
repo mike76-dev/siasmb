@@ -31,14 +31,6 @@ type serverStats struct {
 	// bigBufNeed uint32
 }
 
-// Store implements the minimal store.
-type Store interface {
-	BanHost(host, reason string) error
-	GetAccounts(sh stores.Share) (ars []stores.AccessRights, err error)
-	GetAccountByID(id int) (acc stores.Account, err error)
-	GetShare(name string) (s stores.Share, err error)
-}
-
 // ServerHashLevel values.
 const (
 	HashEnableAll = iota
@@ -73,12 +65,13 @@ type server struct {
 	listener        net.Listener
 	mu              sync.Mutex
 	connectionCount map[string]int
-	store           Store
+	store           *stores.Database
 	debug           bool
+	cfg             stores.IndexdConfig
 }
 
 // newServer returns an initialized SMB server.
-func newServer(l net.Listener, st Store, debug bool) *server {
+func newServer(l net.Listener, db *stores.Database, debug bool, cfg stores.IndexdConfig) *server {
 	s := &server{
 		enabled:            true,
 		serverGuid:         uuid.New(),
@@ -89,8 +82,9 @@ func newServer(l net.Listener, st Store, debug bool) *server {
 		globalClientTable:  make(map[[16]byte]*smbClient),
 		listener:           l,
 		connectionCount:    make(map[string]int),
-		store:              st,
+		store:              db,
 		debug:              debug,
+		cfg:                cfg,
 	}
 	s.stats.start = time.Now()
 	return s

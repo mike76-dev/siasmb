@@ -93,7 +93,7 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 			if err != nil {
 				return nil, errNoShare
 			}
-			sh, err = c.server.registerShare(s, c.server.store)
+			sh, err = c.server.registerShare(s)
 			if err != nil {
 				return nil, err
 			}

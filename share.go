@@ -12,6 +12,7 @@ import (
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/stores"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/sdk"
 )
 
 const (
@@ -46,7 +47,7 @@ type share struct {
 }
 
 // registerShare adds a new share to the SMB server.
-func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
+func (s *server) registerShare(ss stores.Share) (*share, error) {
 	sh := &share{
 		name:            ss.Name,
 		backend:         ss.Type,
@@ -62,7 +63,26 @@ func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
 		compressData:    s.compressionSupported,
 	}
 
-	sh.client = client.New(sh.backend, ss.ServerName, ss.Password)
+	switch sh.backend {
+	case "indexd":
+		builder := sdk.NewBuilder(ss.ServerName, sdk.AppMetadata{
+			ID:          types.HashBytes(append([]byte(s.cfg.Name), []byte(s.cfg.Description)...)),
+			Name:        s.cfg.Name,
+			Description: s.cfg.Description,
+			LogoURL:     s.cfg.LogoURL,
+			ServiceURL:  s.cfg.ServiceURL,
+		})
+		sdkClient, err := builder.SDK(ss.AppKey)
+		if err != nil {
+			return nil, err
+		}
+		sh.client = client.NewIndexdClient(s.store, sdkClient)
+	case "renterd":
+		sh.client = client.NewRenterdClient(ss.ServerName, ss.Password)
+	default:
+		return nil, errors.New("unsupported share type")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -72,7 +92,7 @@ func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
 		return nil, errShareUnavailable
 	}
 
-	ars, err := st.GetAccounts(ss)
+	ars, err := s.store.GetAccounts(ss)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +100,7 @@ func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
 	accs := make(map[int]stores.Account)
 	for _, ar := range ars {
 		if _, exists := accs[ar.AccountID]; !exists {
-			acc, err := st.GetAccountByID(ar.AccountID)
+			acc, err := s.store.GetAccountByID(ar.AccountID)
 			if err != nil {
 				return nil, err
 			}

@@ -86,7 +86,7 @@ func main() {
 	defer l.Close()
 
 	// Start the SMB server.
-	server := newServer(l, db, cfg.Debug)
+	server := newServer(l, db, cfg.Debug, cfg.Indexd)
 	if smb2.MaxSupportedDialect != smb2.SMB_DIALECT_202 {
 		server.serverCapabilities |= smb2.GLOBAL_CAP_LARGE_MTU
 	}
