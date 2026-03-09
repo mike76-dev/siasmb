@@ -863,7 +863,7 @@ func FileFsSizeInfo(si client.StorageInfo) []byte {
 		spu = uint32(si.TotalShards / si.MinShards)
 	}
 	info := make([]byte, 24)
-	binary.LittleEndian.PutUint64(info[:8], si.RemainingStorage+si.UsedStorage/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[:8], (si.RemainingStorage+si.UsedStorage)/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint64(info[8:16], si.RemainingStorage/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint32(info[16:20], spu)
 	binary.LittleEndian.PutUint32(info[20:24], uint32(BytesPerSector))
@@ -879,7 +879,7 @@ func FileFsFullSizeInfo(si client.StorageInfo) []byte {
 		spu = uint32(si.TotalShards / si.MinShards)
 	}
 	info := make([]byte, 32)
-	binary.LittleEndian.PutUint64(info[:8], si.RemainingStorage+si.UsedStorage/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[:8], (si.RemainingStorage+si.UsedStorage)/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint64(info[8:16], si.RemainingStorage/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint64(info[16:24], si.RemainingStorage/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint32(info[24:28], spu)
