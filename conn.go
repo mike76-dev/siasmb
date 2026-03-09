@@ -1917,7 +1917,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			case smb2.FileFsVolumeInformation:
 				info = smb2.FileFsVolumeInfo(tc.share.createdAt, tc.share.serialNo(), tc.share.name)
 			case smb2.FileFsAttributeInformation:
-				info = smb2.FileFsAttributeInfo()
+				info = smb2.FileFsAttributeInfo(tc.share.backend)
 			case smb2.FileFsSizeInformation:
 				si, err := tc.share.client.Storage(op.ctx, tc.share.bucket)
 				if err != nil {

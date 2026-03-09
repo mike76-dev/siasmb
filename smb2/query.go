@@ -844,8 +844,8 @@ func FileFsVolumeInfo(createdAt time.Time, serialNo uint32, label string) []byte
 }
 
 // FileFsAttributeInfo generates the output buffer for the FileFsAttributeInformation info class.
-func FileFsAttributeInfo() []byte {
-	name := utils.EncodeStringToBytes("renterd")
+func FileFsAttributeInfo(fsType string) []byte {
+	name := utils.EncodeStringToBytes(fsType)
 	info := make([]byte, 12+len(name))
 	binary.LittleEndian.PutUint32(info[:4], 0x01100103)
 	binary.LittleEndian.PutUint32(info[4:8], 255)
