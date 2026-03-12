@@ -771,7 +771,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, ss, nil
 			}
 
-			info, err = tc.share.client.Object(ctx, tc.share.bucket, path)
+			info, err = tc.share.client.Object(ctx, path)
 			if err != nil && errors.Is(err, context.DeadlineExceeded) {
 				cancel()
 				resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, 0, nil)
@@ -822,7 +822,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					result = smb2.FILE_CREATED
 					if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
 						info.Key += "/"
-						if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
+						if err := tc.share.client.MakeDirectory(ctx, path); err != nil {
 							cancel()
 							resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, 0, nil)
 							return resp, ss, nil
@@ -847,7 +847,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						result = smb2.FILE_CREATED
 						if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
 							info.Key += "/"
-							if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
+							if err := tc.share.client.MakeDirectory(ctx, path); err != nil {
 								cancel()
 								resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, 0, nil)
 								return resp, ss, nil
@@ -888,7 +888,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						result = smb2.FILE_CREATED
 						if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
 							info.Key += "/"
-							if err := tc.share.client.MakeDirectory(ctx, tc.share.bucket, path); err != nil {
+							if err := tc.share.client.MakeDirectory(ctx, path); err != nil {
 								cancel()
 								resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, 0, nil)
 								return resp, ss, nil
@@ -1011,7 +1011,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			tc.mu.Lock()
 			delete(tc.persistedOpens, op.pathName)
 			tc.mu.Unlock()
-			if err := tc.share.client.Delete(op.ctx, tc.share.bucket, op.pathName, op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0); err != nil {
+			if err := tc.share.client.Delete(op.ctx, op.pathName, op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0); err != nil {
 				log.Println("Error deleting object:", err)
 			}
 		}
@@ -1755,7 +1755,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, ss, nil
 			}
 
-			dir, parentDir, err := tc.share.client.Parents(op.ctx, tc.share.bucket, searchPath)
+			dir, parentDir, err := tc.share.client.Parents(op.ctx, searchPath)
 			if err != nil {
 				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_BAD_NETWORK_NAME, 0, nil)
 				return resp, ss, nil
@@ -1919,7 +1919,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			case smb2.FileFsAttributeInformation:
 				info = smb2.FileFsAttributeInfo(tc.share.backend)
 			case smb2.FileFsSizeInformation:
-				si, err := tc.share.client.Storage(op.ctx, tc.share.bucket)
+				si, err := tc.share.client.Storage(op.ctx)
 				if err != nil {
 					log.Println("Error getting storage info:", err)
 				} else {
@@ -1927,7 +1927,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				}
 			case smb2.FileFsFullSizeInformation:
 				// Same as above.
-				si, err := tc.share.client.Storage(op.ctx, tc.share.bucket)
+				si, err := tc.share.client.Storage(op.ctx)
 				if err != nil {
 					log.Println("Error getting storage info:", err)
 				} else {
@@ -2085,7 +2085,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 						go func() {
 							var resp smb2.GenericResponse
-							empty, err := tc.share.client.IsEmpty(op.ctx, tc.share.bucket, op.pathName+"/")
+							empty, err := tc.share.client.IsEmpty(op.ctx, op.pathName+"/")
 							if err != nil {
 								log.Printf("Error listing directory contents: %v", err)
 								resp = smb2.NewErrorResponse(sir, smb2.STATUS_NETWORK_NAME_DELETED, 0, nil)
@@ -2161,7 +2161,6 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				} else {
 					if err := tc.share.client.Rename(
 						op.ctx,
-						tc.share.bucket,
 						op.pathName,
 						newName,
 						op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,

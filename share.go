@@ -78,7 +78,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		}
 		sh.client = client.NewIndexdClient(s.store, sdkClient, ss.Name, s.cfg.DataShards, s.cfg.ParityShards)
 	case "renterd":
-		sh.client = client.NewRenterdClient(ss.ServerName, ss.Password)
+		sh.client = client.NewRenterdClient(ss.ServerName, ss.Password, ss.Bucket)
 	default:
 		return nil, errors.New("unsupported share type")
 	}
@@ -87,7 +87,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 	defer cancel()
 
 	// Get the share information and test the share at the same time.
-	info, err := sh.client.Info(ctx, ss.Bucket)
+	info, err := sh.client.Info(ctx)
 	if err != nil {
 		return nil, errShareUnavailable
 	}

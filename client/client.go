@@ -42,20 +42,20 @@ type ObjectInfo struct {
 
 // Client provides an interface for accessing Sia-based remote shares.
 type Client interface {
-	Info(ctx context.Context, bucket string) (GeneralInfo, error)
-	Storage(ctx context.Context, bucket string) (StorageInfo, error)
-	IsEmpty(ctx context.Context, bucket, path string) (bool, error)
-	List(ctx context.Context, bucket, path string) ([]ObjectInfo, error)
-	Object(ctx context.Context, bucket, path string) (ObjectInfo, error)
-	Parents(ctx context.Context, bucket, path string) (currentDir, parentDir FileInfo, err error)
-	Read(ctx context.Context, bucket, path string, offset, length uint64, buf io.Writer) error
-	StartUpload(ctx context.Context, bucket, path string) (uploadID string, err error)
-	AbortUpload(ctx context.Context, bucket, path string, uploadID string) (err error)
-	FinishUpload(ctx context.Context, bucket, path string, uploadID string, parts []api.MultipartCompletedPart) error
-	Write(ctx context.Context, r io.Reader, bucket, path string, uploadID string, partNumber int, offset, length uint64) (eTag string, err error)
-	Delete(ctx context.Context, bucket, path string, batch bool) error
-	Rename(ctx context.Context, bucket, oldName, newName string, isDir, force bool) error
-	MakeDirectory(ctx context.Context, bucket, path string) error
+	Info(ctx context.Context) (GeneralInfo, error)
+	Storage(ctx context.Context) (StorageInfo, error)
+	IsEmpty(ctx context.Context, path string) (bool, error)
+	List(ctx context.Context, path string) ([]ObjectInfo, error)
+	Object(ctx context.Context, path string) (ObjectInfo, error)
+	Parents(ctx context.Context, path string) (currentDir, parentDir FileInfo, err error)
+	Read(ctx context.Context, path string, offset, length uint64, buf io.Writer) error
+	StartUpload(ctx context.Context, path string) (uploadID string, err error)
+	AbortUpload(ctx context.Context, path string, uploadID string) (err error)
+	FinishUpload(ctx context.Context, path string, uploadID string, parts []api.MultipartCompletedPart) error
+	Write(ctx context.Context, r io.Reader, path string, uploadID string, partNumber int, offset, length uint64) (eTag string, err error)
+	Delete(ctx context.Context, path string, batch bool) error
+	Rename(ctx context.Context, oldName, newName string, isDir, force bool) error
+	MakeDirectory(ctx context.Context, path string) error
 }
 
 // sizeFromSeeker tries to find out the size of a file.
