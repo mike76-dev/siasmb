@@ -76,7 +76,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		if err != nil {
 			return nil, err
 		}
-		sh.client = client.NewIndexdClient(s.store, sdkClient)
+		sh.client = client.NewIndexdClient(s.store, sdkClient, ss.Name, s.cfg.DataShards, s.cfg.ParityShards)
 	case "renterd":
 		sh.client = client.NewRenterdClient(ss.ServerName, ss.Password)
 	default:

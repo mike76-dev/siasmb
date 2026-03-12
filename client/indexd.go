@@ -16,26 +16,51 @@ var (
 
 // IndexdClient implements a Client for interacting with indexd.
 type IndexdClient struct {
-	db        *stores.Database
-	sdkClient *sdk.SDK
+	share        string
+	db           *stores.Database
+	sdkClient    *sdk.SDK
+	dataShards   int
+	parityShards int
 }
 
 // NewIndexdClient returns an initialized IndexdClient.
-func NewIndexdClient(db *stores.Database, sdkClient *sdk.SDK) Client {
+func NewIndexdClient(db *stores.Database, sdkClient *sdk.SDK, share string, dataShards, parityShards int) Client {
 	return &IndexdClient{
-		db:        db,
-		sdkClient: sdkClient,
+		share:        share,
+		db:           db,
+		sdkClient:    sdkClient,
+		dataShards:   dataShards,
+		parityShards: parityShards,
 	}
 }
 
 // Info queries the general information about the share.
 func (ic *IndexdClient) Info(ctx context.Context, bucketName string) (GeneralInfo, error) {
-	return GeneralInfo{}, nil
+	sh, err := ic.db.GetShare(ic.share)
+	if err != nil {
+		return GeneralInfo{}, err
+	}
+
+	return GeneralInfo{
+		Bucket:    sh.Bucket,
+		CreatedAt: sh.CreatedAt,
+	}, nil
 }
 
 // Storage queries the information about the underlying storage.
-func (ic *IndexdClient) Storage(ctx context.Context, bucket string) (StorageInfo, error) {
-	return StorageInfo{}, nil
+func (ic *IndexdClient) Storage(ctx context.Context, _ string) (StorageInfo, error) {
+	acc, err := ic.sdkClient.Account(ctx)
+	if err != nil {
+		return StorageInfo{}, err
+	}
+
+	return StorageInfo{
+		Type:             "indexd",
+		RemainingStorage: acc.MaxPinnedData - acc.PinnedData,
+		UsedStorage:      acc.PinnedData,
+		MinShards:        ic.dataShards,
+		TotalShards:      ic.parityShards + ic.dataShards,
+	}, nil
 }
 
 // IsEmpty returns true if the directory contains at least one object.
