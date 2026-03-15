@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mike76-dev/siasmb/stores"
 	rhpv4 "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/renterd/v2/api"
@@ -173,7 +174,7 @@ func (rc *RenterdClient) usedStorage(ctx context.Context) (us uint64, err error)
 }
 
 // IsEmpty returns true if the directory contains at least one object.
-func (rc *RenterdClient) IsEmpty(ctx context.Context, path string) (bool, error) {
+func (rc *RenterdClient) IsEmpty(ctx context.Context, _ stores.Account, path string) (bool, error) {
 	values := url.Values{}
 	api.ListObjectOptions{
 		Bucket:    rc.bucket,
@@ -192,7 +193,7 @@ func (rc *RenterdClient) IsEmpty(ctx context.Context, path string) (bool, error)
 }
 
 // List lists the contents of a directory.
-func (rc *RenterdClient) List(ctx context.Context, path string) (ois []ObjectInfo, err error) {
+func (rc *RenterdClient) List(ctx context.Context, _ stores.Account, path string) (ois []ObjectInfo, err error) {
 	values := url.Values{}
 	api.ListObjectOptions{
 		Bucket:    rc.bucket,
@@ -222,7 +223,7 @@ func (rc *RenterdClient) List(ctx context.Context, path string) (ois []ObjectInf
 }
 
 // Object retrieves the information about a file or a directory.
-func (rc *RenterdClient) Object(ctx context.Context, path string) (ObjectInfo, error) {
+func (rc *RenterdClient) Object(ctx context.Context, _ stores.Account, path string) (ObjectInfo, error) {
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	if path == "" {                            // The root path: calculate the total size of the objects
 		info, err := rc.Info(ctx)
@@ -230,7 +231,7 @@ func (rc *RenterdClient) Object(ctx context.Context, path string) (ObjectInfo, e
 			return ObjectInfo{}, err
 		}
 
-		ois, err := rc.List(ctx, "")
+		ois, err := rc.List(ctx, stores.Account{}, "")
 		if err != nil {
 			return ObjectInfo{}, err
 		}
@@ -256,7 +257,7 @@ func (rc *RenterdClient) Object(ctx context.Context, path string) (ObjectInfo, e
 		parentDir = path[:i+1]
 	}
 
-	ois, err := rc.List(ctx, parentDir)
+	ois, err := rc.List(ctx, stores.Account{}, parentDir)
 	if err != nil {
 		return ObjectInfo{}, err
 	}
@@ -271,7 +272,7 @@ func (rc *RenterdClient) Object(ctx context.Context, path string) (ObjectInfo, e
 }
 
 // Parents retrieves the information about the current and the parent directories where the file is located.
-func (rc *RenterdClient) Parents(ctx context.Context, path string) (currentDir, parentDir FileInfo, err error) {
+func (rc *RenterdClient) Parents(ctx context.Context, _ stores.Account, path string) (currentDir, parentDir FileInfo, err error) {
 	var parent, grandParent, name, parentName string
 	if path != "" {
 		name = path + "/"
@@ -306,7 +307,7 @@ func (rc *RenterdClient) Parents(ctx context.Context, path string) (currentDir, 
 
 	var ois []ObjectInfo
 	if parent != "" {
-		ois, err = rc.List(ctx, parent)
+		ois, err = rc.List(ctx, stores.Account{}, parent)
 		if err != nil {
 			return
 		}
@@ -333,7 +334,7 @@ func (rc *RenterdClient) Parents(ctx context.Context, path string) (currentDir, 
 	}
 
 	if grandParent != "" {
-		ois, err = rc.List(ctx, grandParent)
+		ois, err = rc.List(ctx, stores.Account{}, grandParent)
 		if err != nil {
 			return
 		}
@@ -509,7 +510,7 @@ func (rc *RenterdClient) Write(ctx context.Context, r io.Reader, path string, up
 }
 
 // Delete deletes a file or a directory.
-func (rc *RenterdClient) Delete(ctx context.Context, path string, batch bool) (err error) {
+func (rc *RenterdClient) Delete(ctx context.Context, _ stores.Account, path string, batch bool) (err error) {
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	if batch {
 		err = rc.doRequest(ctx, "POST", "/api/worker/objects/remove", api.ObjectsRemoveRequest{
@@ -525,7 +526,7 @@ func (rc *RenterdClient) Delete(ctx context.Context, path string, batch bool) (e
 }
 
 // MakeDirectory creates a new directory in the specified path.
-func (rc *RenterdClient) MakeDirectory(ctx context.Context, path string) error {
+func (rc *RenterdClient) MakeDirectory(ctx context.Context, _ stores.Account, path string) error {
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	path = api.ObjectKeyEscape(path)
 	path += "/"
@@ -535,7 +536,7 @@ func (rc *RenterdClient) MakeDirectory(ctx context.Context, path string) error {
 }
 
 // Rename renames a file or a directory.
-func (rc *RenterdClient) Rename(ctx context.Context, oldName, newName string, isDir, force bool) error {
+func (rc *RenterdClient) Rename(ctx context.Context, _ stores.Account, oldName, newName string, isDir, force bool) error {
 	mode := api.ObjectsRenameModeSingle
 	if isDir {
 		oldName += "/"

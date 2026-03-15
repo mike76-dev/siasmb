@@ -19,6 +19,7 @@ import (
 	"github.com/mike76-dev/siasmb/rpc"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/spnego"
+	"github.com/mike76-dev/siasmb/stores"
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
 	"github.com/oiweiwei/go-msrpc/ndr"
@@ -711,6 +712,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		acc, err := c.server.store.FindAccount(ss.userName, ss.workgroup)
+		if err != nil {
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_USER_SESSION_DELETED, 0, nil)
+			return resp, nil, nil
+		}
+
 		contexts, err := cr.CreateContexts()
 		if err != nil {
 			resp := smb2.NewErrorResponse(cr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
@@ -771,7 +778,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, ss, nil
 			}
 
-			info, err = tc.share.client.Object(ctx, path)
+			info, err = tc.share.client.Object(ctx, acc, path)
 			if err != nil && errors.Is(err, context.DeadlineExceeded) {
 				cancel()
 				resp := smb2.NewErrorResponse(cr, smb2.STATUS_IO_TIMEOUT, 0, nil)
@@ -822,10 +829,16 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					result = smb2.FILE_CREATED
 					if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
 						info.Key += "/"
-						if err := tc.share.client.MakeDirectory(ctx, path); err != nil {
+						if err := tc.share.client.MakeDirectory(ctx, acc, path); err != nil {
 							cancel()
-							resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, 0, nil)
-							return resp, ss, nil
+							if errors.Is(err, stores.ErrDirectoryExists) {
+								resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
+								return resp, ss, nil
+							} else {
+								log.Printf("Couldn't create directory %s: %v\n", path, err)
+								resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, 0, nil)
+								return resp, ss, nil
+							}
 						}
 					}
 				} else {
@@ -847,10 +860,16 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						result = smb2.FILE_CREATED
 						if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
 							info.Key += "/"
-							if err := tc.share.client.MakeDirectory(ctx, path); err != nil {
+							if err := tc.share.client.MakeDirectory(ctx, acc, path); err != nil {
 								cancel()
-								resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, 0, nil)
-								return resp, ss, nil
+								if errors.Is(err, stores.ErrDirectoryExists) {
+									resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
+									return resp, ss, nil
+								} else {
+									log.Printf("Couldn't create directory %s: %v\n", path, err)
+									resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, 0, nil)
+									return resp, ss, nil
+								}
 							}
 						}
 					} else {
@@ -888,10 +907,16 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						result = smb2.FILE_CREATED
 						if cr.CreateOptions()&smb2.FILE_DIRECTORY_FILE > 0 { // Make a new directory
 							info.Key += "/"
-							if err := tc.share.client.MakeDirectory(ctx, path); err != nil {
+							if err := tc.share.client.MakeDirectory(ctx, acc, path); err != nil {
 								cancel()
-								resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, 0, nil)
-								return resp, ss, nil
+								if errors.Is(err, stores.ErrDirectoryExists) {
+									resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
+									return resp, ss, nil
+								} else {
+									log.Printf("Couldn't create directory %s: %v\n", path, err)
+									resp := smb2.NewErrorResponse(cr, smb2.STATUS_OBJECT_NAME_NOT_FOUND, 0, nil)
+									return resp, ss, nil
+								}
 							}
 						}
 					} else {
@@ -983,6 +1008,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		acc, err := c.server.store.FindAccount(ss.userName, ss.workgroup)
+		if err != nil {
+			resp := smb2.NewErrorResponse(cr, smb2.STATUS_USER_SESSION_DELETED, 0, nil)
+			return resp, nil, nil
+		}
+
 		ss.mu.Lock()
 		ss.idleTime = time.Now()
 		tc, found := ss.treeConnectTable[cr.Header().TreeID()]
@@ -1011,8 +1042,8 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			tc.mu.Lock()
 			delete(tc.persistedOpens, op.pathName)
 			tc.mu.Unlock()
-			if err := tc.share.client.Delete(op.ctx, op.pathName, op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0); err != nil {
-				log.Println("Error deleting object:", err)
+			if err := tc.share.client.Delete(op.ctx, acc, op.pathName, op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0); err != nil {
+				log.Printf("Error deleting object %s: %v", op.pathName, err)
 			}
 		}
 
@@ -1704,6 +1735,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		acc, err := c.server.store.FindAccount(ss.userName, ss.workgroup)
+		if err != nil {
+			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_USER_SESSION_DELETED, 0, nil)
+			return resp, nil, nil
+		}
+
 		ss.idleTime = time.Now()
 		if qdr.OutputBufferLength() > uint32(c.maxTransactSize) {
 			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
@@ -1745,18 +1782,20 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			op.searchResults = op.searchResults[num:]
 		} else {
 			// Run a new search.
-			if err := op.queryDirectory(searchPath); err != nil && searchPath != "*" {
+			if err := op.queryDirectory(acc, searchPath); err != nil && searchPath != "*" {
 				if errors.Is(err, errNoFiles) { // No such file exists
 					resp := smb2.NewErrorResponse(qdr, smb2.STATUS_NO_SUCH_FILE, 0, nil)
 					return resp, ss, nil
 				}
 
+				log.Printf("Error running query directory on path %s: %v", searchPath, err)
 				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 				return resp, ss, nil
 			}
 
-			dir, parentDir, err := tc.share.client.Parents(op.ctx, searchPath)
+			dir, parentDir, err := tc.share.client.Parents(op.ctx, acc, searchPath)
 			if err != nil {
+				log.Printf("Error getting parent directories of path %s: %v", searchPath, err)
 				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_BAD_NETWORK_NAME, 0, nil)
 				return resp, ss, nil
 			}
@@ -1789,6 +1828,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		c.mu.Unlock()
 
 		if !found {
+			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_USER_SESSION_DELETED, 0, nil)
+			return resp, nil, nil
+		}
+
+		acc, err := c.server.store.FindAccount(ss.userName, ss.workgroup)
+		if err != nil {
 			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_USER_SESSION_DELETED, 0, nil)
 			return resp, nil, nil
 		}
@@ -1829,7 +1874,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		c.mu.Unlock()
 
 		// Start a thread to monitor the directory for changes.
-		go op.checkForChanges(cnr, ch)
+		go op.checkForChanges(cnr, acc, ch)
 
 		// Send an interim response.
 		resp := smb2.NewErrorResponse(cnr, smb2.STATUS_PENDING, 0, nil)
@@ -2003,6 +2048,12 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		acc, err := c.server.store.FindAccount(ss.userName, ss.workgroup)
+		if err != nil {
+			resp := smb2.NewErrorResponse(sir, smb2.STATUS_USER_SESSION_DELETED, 0, nil)
+			return resp, nil, nil
+		}
+
 		ss.idleTime = time.Now()
 		if len(sir.Buffer()) == 0 || uint64(len(sir.Buffer())) > c.maxTransactSize {
 			resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, 0, nil)
@@ -2085,9 +2136,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 						go func() {
 							var resp smb2.GenericResponse
-							empty, err := tc.share.client.IsEmpty(op.ctx, op.pathName+"/")
+							empty, err := tc.share.client.IsEmpty(op.ctx, acc, op.pathName+"/")
 							if err != nil {
-								log.Printf("Error listing directory contents: %v", err)
+								log.Printf("Error listing directory contents on %s: %v", op.pathName, err)
 								resp = smb2.NewErrorResponse(sir, smb2.STATUS_NETWORK_NAME_DELETED, 0, nil)
 							} else {
 								if empty {
@@ -2161,11 +2212,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				} else {
 					if err := tc.share.client.Rename(
 						op.ctx,
+						acc,
 						op.pathName,
 						newName,
 						op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
 						fri.ReplaceIfExists,
 					); err != nil {
+						log.Printf("Error renaming path %s to %s: %v", op.pathName, newName, err)
 						resp := smb2.NewErrorResponse(sir, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
 						return resp, ss, nil
 					}

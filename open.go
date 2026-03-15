@@ -16,6 +16,7 @@ import (
 	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/rpc"
 	"github.com/mike76-dev/siasmb/smb2"
+	"github.com/mike76-dev/siasmb/stores"
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
@@ -246,13 +247,13 @@ func (s *server) closeOpen(op *open, persist bool) {
 
 // queryDirectory performs a search within the directory using the provided pattern.
 // Wildcards are supported.
-func (op *open) queryDirectory(pattern string) error {
+func (op *open) queryDirectory(acc stores.Account, pattern string) error {
 	if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
 		return errNoDirectory
 	}
 
 	share := op.treeConnect.share
-	ois, err := share.client.List(op.ctx, op.pathName+"/")
+	ois, err := share.client.List(op.ctx, acc, op.pathName+"/")
 	if err != nil {
 		return err
 	}
@@ -451,8 +452,8 @@ func (op *open) newLSAFrame(ctx ntlm.SecurityContext) *rpc.Frame {
 
 // checkForChanges monitors if any significant changes have occurred in the specified directory.
 // Significant changes include: file names, sizes, modify times, or contents.
-func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan struct{}) {
-	ois, err := op.treeConnect.share.client.List(op.ctx, op.pathName)
+func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, acc stores.Account, stopChan chan struct{}) {
+	ois, err := op.treeConnect.share.client.List(op.ctx, acc, op.pathName)
 	if err != nil {
 		return
 	}
@@ -490,7 +491,7 @@ func (op *open) checkForChanges(req smb2.ChangeNotifyRequest, stopChan chan stru
 		case <-time.After(15 * time.Second): // Check every 15 seconds
 		}
 
-		ois, err := op.treeConnect.share.client.List(op.ctx, op.pathName)
+		ois, err := op.treeConnect.share.client.List(op.ctx, acc, op.pathName)
 		if err != nil {
 			continue
 		}
