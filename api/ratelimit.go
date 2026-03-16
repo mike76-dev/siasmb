@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"sync"
@@ -16,7 +17,7 @@ type ratelimiter struct {
 	mu       sync.Mutex
 }
 
-func newRatelimiter(stopChan chan struct{}) *ratelimiter {
+func newRatelimiter(ctx context.Context) *ratelimiter {
 	rl := &ratelimiter{
 		requests: make(map[string]int),
 	}
@@ -25,7 +26,7 @@ func newRatelimiter(stopChan chan struct{}) *ratelimiter {
 	go func() {
 		for range ticker {
 			select {
-			case <-stopChan:
+			case <-ctx.Done():
 				return
 			default:
 			}

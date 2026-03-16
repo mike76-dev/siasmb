@@ -1,8 +1,9 @@
 package api
 
 import (
-	"encoding/hex"
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"github.com/julienschmidt/httprouter"
 	"github.com/mike76-dev/siasmb/stores"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/sdk"
 )
 
 // Store implements the database store.
@@ -34,8 +36,8 @@ type Store interface {
 	ClearAccessRights(acc stores.Account) error
 
 	RegisterShare(s stores.Share) error
-	UnregisterShare(id types.Hash256, name string) error
-	GetShare(id types.Hash256, name string) (s stores.Share, err error)
+	UnregisterShare(name string) error
+	GetShare(name string) (s stores.Share, err error)
 	GetShares(acc stores.Account) (shares []stores.Share, err error)
 	GetAccounts(sh stores.Share) (ars []stores.AccessRights, err error)
 }
@@ -48,27 +50,23 @@ type IsBannedResponse struct {
 
 // API represents the API call handler.
 type API struct {
-	router   httprouter.Router
-	store    Store
-	stopChan chan struct{}
-	rl       *ratelimiter
+	router httprouter.Router
+	store  Store
+	cfg    stores.IndexdConfig
+	ctx    context.Context
+	rl     *ratelimiter
 }
 
 // NewAPI returns an initialized API object.
-func NewAPI(s Store) *API {
-	stopChan := make(chan struct{})
+func NewAPI(ctx context.Context, s Store, cfg stores.IndexdConfig) *API {
 	api := &API{
-		store:    s,
-		stopChan: stopChan,
-		rl:       newRatelimiter(stopChan),
+		store: s,
+		cfg:   cfg,
+		ctx:   ctx,
+		rl:    newRatelimiter(ctx),
 	}
 	api.buildHTTPRoutes()
 	return api
-}
-
-// Close shuts down the handler.
-func (api *API) Close() {
-	close(api.stopChan)
 }
 
 // BasicAuth wraps an http.Handler to force a basic auth with a password.
@@ -133,27 +131,27 @@ func (api *API) buildHTTPRoutes() {
 		api.shareHandlerPOST(w, req, ps)
 	})
 
-	router.GET("/share/:idorname", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
+	router.GET("/share/:name", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
 		api.shareHandlerGET(w, req, ps)
 	})
 
-	router.DELETE("/share/:idorname", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
+	router.DELETE("/share/:name", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
 		api.shareHandlerDELETE(w, req, ps)
 	})
 
-	router.GET("/share/:idorname/accounts", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
+	router.GET("/share/:name/accounts", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
 		api.shareAccountsHandlerGET(w, req, ps)
 	})
 
-	router.GET("/share/:idorname/policy", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
+	router.GET("/share/:name/policy", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
 		api.policyHandlerGET(w, req, ps)
 	})
 
-	router.PUT("/share/:idorname/policy", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
+	router.PUT("/share/:name/policy", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
 		api.policyHandlerPUT(w, req, ps)
 	})
 
-	router.DELETE("/share/:idorname/policy", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
+	router.DELETE("/share/:name/policy", func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
 		api.policyHandlerDELETE(w, req, ps)
 	})
 
@@ -399,6 +397,47 @@ func (api *API) shareHandlerPOST(w http.ResponseWriter, req *http.Request, _ htt
 		return
 	}
 	share.Name = strings.ToLower(share.Name)
+	share.Type = strings.ToLower(share.Type)
+	if share.Type != "renterd" && share.Type != "indexd" {
+		writeError(w, "wrong share type", http.StatusBadRequest)
+		return
+	}
+
+	if share.Type == "indexd" {
+		builder := sdk.NewBuilder(share.ServerName, sdk.AppMetadata{
+			ID:          types.HashBytes(append([]byte(api.cfg.Name), []byte(api.cfg.Description)...)),
+			Name:        api.cfg.Name,
+			Description: api.cfg.Description,
+			LogoURL:     api.cfg.LogoURL,
+			ServiceURL:  api.cfg.ServiceURL,
+		})
+		respURL, err := builder.RequestConnection(api.ctx)
+		if err != nil {
+			log.Printf("failed to request app connection: %v", err)
+			writeError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		fmt.Println("Please approve the app connection by visiting the following URL:", respURL)
+		approved, err := builder.WaitForApproval(api.ctx)
+		if err != nil {
+			log.Printf("failed to wait for app approval: %v", err)
+			writeError(w, "internal error", http.StatusInternalServerError)
+			return
+		} else if !approved {
+			log.Print("app connection was declined")
+			writeError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		client, err := builder.Register(api.ctx, api.cfg.SeedPhrase)
+		if err != nil {
+			log.Printf("failed to register app: %v", err)
+			writeError(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		share.AppKey = make(types.PrivateKey, 64)
+		copy(share.AppKey, client.AppKey()[:])
+		log.Print("app registered successfully")
+	}
 
 	if err := api.store.RegisterShare(share); err != nil {
 		log.Printf("failed to register share: %v", err)
@@ -416,20 +455,13 @@ func (api *API) shareHandlerGET(w http.ResponseWriter, req *http.Request, ps htt
 		return
 	}
 
-	idOrName := ps.ByName("idorname")
-	var shareID types.Hash256
-	var shareName string
-	id, err := hex.DecodeString(idOrName)
-	copy(shareID[:], id)
-	if err != nil {
-		shareName = idOrName
-	}
-	if (shareID == types.Hash256{}) && shareName == "" {
-		writeError(w, "share id and name cannot both be empty", http.StatusBadRequest)
+	shareName := ps.ByName("name")
+	if shareName == "" {
+		writeError(w, "share name cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	share, err := api.store.GetShare(shareID, shareName)
+	share, err := api.store.GetShare(shareName)
 	if err != nil {
 		log.Printf("failed to find share: %v", err)
 		writeError(w, "internal error", http.StatusInternalServerError)
@@ -446,20 +478,13 @@ func (api *API) shareHandlerDELETE(w http.ResponseWriter, req *http.Request, ps 
 		return
 	}
 
-	idOrName := ps.ByName("idorname")
-	var shareID types.Hash256
-	var shareName string
-	id, err := hex.DecodeString(idOrName)
-	copy(shareID[:], id)
-	if err != nil {
-		shareName = idOrName
-	}
-	if (shareID == types.Hash256{}) && shareName == "" {
-		writeError(w, "share id and name cannot both be empty", http.StatusBadRequest)
+	shareName := ps.ByName("name")
+	if shareName == "" {
+		writeError(w, "share name cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	if err := api.store.UnregisterShare(shareID, shareName); err != nil {
+	if err := api.store.UnregisterShare(shareName); err != nil {
 		log.Printf("failed to find share: %v", err)
 		writeError(w, "internal error", http.StatusInternalServerError)
 		return
@@ -475,20 +500,13 @@ func (api *API) shareAccountsHandlerGET(w http.ResponseWriter, req *http.Request
 		return
 	}
 
-	idOrName := ps.ByName("idorname")
-	var shareID types.Hash256
-	var shareName string
-	id, err := hex.DecodeString(idOrName)
-	copy(shareID[:], id)
-	if err != nil {
-		shareName = idOrName
-	}
-	if (shareID == types.Hash256{}) && shareName == "" {
-		writeError(w, "share id and name cannot both be empty", http.StatusBadRequest)
+	shareName := ps.ByName("name")
+	if shareName == "" {
+		writeError(w, "share name cannot be empty", http.StatusBadRequest)
 		return
 	}
 
-	share, err := api.store.GetShare(shareID, shareName)
+	share, err := api.store.GetShare(shareName)
 	if err != nil {
 		log.Printf("failed to find share: %v", err)
 		writeError(w, "internal error", http.StatusInternalServerError)
@@ -512,16 +530,9 @@ func (api *API) policyHandlerGET(w http.ResponseWriter, req *http.Request, ps ht
 		return
 	}
 
-	idOrName := ps.ByName("idorname")
-	var shareID types.Hash256
-	var shareName string
-	id, err := hex.DecodeString(idOrName)
-	copy(shareID[:], id)
-	if err != nil {
-		shareName = idOrName
-	}
-	if (shareID == types.Hash256{}) && shareName == "" {
-		writeError(w, "share id and name cannot both be empty", http.StatusBadRequest)
+	shareName := ps.ByName("name")
+	if shareName == "" {
+		writeError(w, "share name cannot be empty", http.StatusBadRequest)
 		return
 	}
 
@@ -539,7 +550,7 @@ func (api *API) policyHandlerGET(w http.ResponseWriter, req *http.Request, ps ht
 		return
 	}
 
-	share, err := api.store.GetShare(shareID, shareName)
+	share, err := api.store.GetShare(shareName)
 	if err != nil {
 		log.Printf("failed to find share: %v", err)
 		writeError(w, "internal error", http.StatusInternalServerError)
@@ -563,16 +574,19 @@ func (api *API) policyHandlerPUT(w http.ResponseWriter, req *http.Request, ps ht
 		return
 	}
 
-	idOrName := ps.ByName("idorname")
-	var shareID types.Hash256
-	var shareName string
-	id, err := hex.DecodeString(idOrName)
-	copy(shareID[:], id)
-	if err != nil {
-		shareName = idOrName
+	shareName := ps.ByName("name")
+	if shareName == "" {
+		writeError(w, "share name cannot be empty", http.StatusBadRequest)
+		return
 	}
-	if (shareID == types.Hash256{}) && shareName == "" {
-		writeError(w, "share id and name cannot both be empty", http.StatusBadRequest)
+
+	share, err := api.store.GetShare(shareName)
+	if err != nil {
+		log.Printf("failed to find share: %v", err)
+		writeError(w, "internal error", http.StatusInternalServerError)
+		return
+	} else if share.Name == "" {
+		writeError(w, "no such share", http.StatusBadRequest)
 		return
 	}
 
@@ -600,7 +614,6 @@ func (api *API) policyHandlerPUT(w http.ResponseWriter, req *http.Request, ps ht
 	}
 
 	if err := api.store.SetAccessRights(stores.AccessRights{
-		ShareID:       shareID,
 		ShareName:     shareName,
 		AccountID:     acc.ID,
 		ReadAccess:    readAccess,
@@ -623,16 +636,9 @@ func (api *API) policyHandlerDELETE(w http.ResponseWriter, req *http.Request, ps
 		return
 	}
 
-	idOrName := ps.ByName("idorname")
-	var shareID types.Hash256
-	var shareName string
-	id, err := hex.DecodeString(idOrName)
-	copy(shareID[:], id)
-	if err != nil {
-		shareName = idOrName
-	}
-	if (shareID == types.Hash256{}) && shareName == "" {
-		writeError(w, "share id and name cannot both be empty", http.StatusBadRequest)
+	shareName := ps.ByName("name")
+	if shareName == "" {
+		writeError(w, "share name cannot be empty", http.StatusBadRequest)
 		return
 	}
 
@@ -650,7 +656,7 @@ func (api *API) policyHandlerDELETE(w http.ResponseWriter, req *http.Request, ps
 		return
 	}
 
-	share, err := api.store.GetShare(shareID, shareName)
+	share, err := api.store.GetShare(shareName)
 	if err != nil {
 		log.Printf("failed to find share: %v", err)
 		writeError(w, "internal error", http.StatusInternalServerError)

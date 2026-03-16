@@ -844,8 +844,8 @@ func FileFsVolumeInfo(createdAt time.Time, serialNo uint32, label string) []byte
 }
 
 // FileFsAttributeInfo generates the output buffer for the FileFsAttributeInformation info class.
-func FileFsAttributeInfo() []byte {
-	name := utils.EncodeStringToBytes("renterd")
+func FileFsAttributeInfo(fsType string) []byte {
+	name := utils.EncodeStringToBytes(fsType)
 	info := make([]byte, 12+len(name))
 	binary.LittleEndian.PutUint32(info[:4], 0x01100103)
 	binary.LittleEndian.PutUint32(info[4:8], 255)
@@ -856,9 +856,14 @@ func FileFsAttributeInfo() []byte {
 
 // FileFsSizeInfo generates the output buffer for the FileFsSizeInformation info class.
 func FileFsSizeInfo(si client.StorageInfo) []byte {
-	spu := uint32(si.TotalShards / si.MinShards)
+	var spu uint32
+	if si.MinShards == 0 {
+		spu = 1
+	} else {
+		spu = uint32(si.TotalShards / si.MinShards)
+	}
 	info := make([]byte, 24)
-	binary.LittleEndian.PutUint64(info[:8], si.RemainingStorage+si.UsedStorage/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[:8], (si.RemainingStorage+si.UsedStorage)/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint64(info[8:16], si.RemainingStorage/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint32(info[16:20], spu)
 	binary.LittleEndian.PutUint32(info[20:24], uint32(BytesPerSector))
@@ -867,9 +872,14 @@ func FileFsSizeInfo(si client.StorageInfo) []byte {
 
 // FileFsFullSizeInfo generates the output buffer for the FileFsFullSizeInformation info class.
 func FileFsFullSizeInfo(si client.StorageInfo) []byte {
-	spu := uint32(si.TotalShards / si.MinShards)
+	var spu uint32
+	if si.MinShards == 0 {
+		spu = 1
+	} else {
+		spu = uint32(si.TotalShards / si.MinShards)
+	}
 	info := make([]byte, 32)
-	binary.LittleEndian.PutUint64(info[:8], si.RemainingStorage+si.UsedStorage/BytesPerSector/uint64(spu))
+	binary.LittleEndian.PutUint64(info[:8], (si.RemainingStorage+si.UsedStorage)/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint64(info[8:16], si.RemainingStorage/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint64(info[16:24], si.RemainingStorage/BytesPerSector/uint64(spu))
 	binary.LittleEndian.PutUint32(info[24:28], spu)

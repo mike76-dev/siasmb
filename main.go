@@ -19,6 +19,7 @@ import (
 	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/stores"
+	"go.sia.tech/indexd/sdk"
 )
 
 const version = "2.1.0-beta"
@@ -41,18 +42,21 @@ func main() {
 		panic(err)
 	}
 
-	if cfg.Mode == "indexd" {
-		panic("indexd mode not supported yet")
-	} else if cfg.Mode != "renterd" {
-		panic("invalid mode")
-	}
-
 	if len(cfg.Database.Password) < 4 {
-		panic("database password too short")
+		log.Fatal("database password too short")
 	}
 
-	// Create the global context.
-	ctx, cancel := context.WithCancel(context.Background())
+	if cfg.Indexd.SeedPhrase == "" {
+		// Generate a new seed phrase.
+		cfg.Indexd.SeedPhrase = sdk.NewSeedPhrase()
+		if err := stores.SaveConfig(cfg, dir); err != nil {
+			log.Fatalf("failed to generate seed phrase: %v", err)
+		}
+		log.Printf("Generated seed phrase: %s", cfg.Indexd.SeedPhrase)
+	}
+
+	// Start a thread to watch for the stop signal.
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	// Connect to the SQL database.
@@ -68,8 +72,7 @@ func main() {
 		log.Fatal(err)
 	}
 	defer lAPI.Close()
-	a := api.NewAPI(db)
-	defer a.Close()
+	a := api.NewAPI(ctx, db, cfg.Indexd)
 	apiSrv := &http.Server{Handler: api.BasicAuth(cfg.API.Password)(a)}
 	go apiSrv.Serve(lAPI)
 	log.Printf("API: listening at %s ...\n", lAPI.Addr())
@@ -83,7 +86,7 @@ func main() {
 	defer l.Close()
 
 	// Start the SMB server.
-	server := newServer(l, db, cfg.Mode, cfg.Debug)
+	server := newServer(l, db, cfg.Debug, cfg.Indexd)
 	if smb2.MaxSupportedDialect != smb2.SMB_DIALECT_202 {
 		server.serverCapabilities |= smb2.GLOBAL_CAP_LARGE_MTU
 	}
@@ -96,14 +99,11 @@ func main() {
 		server.chainedCompressionSupported = true
 	}
 
-	// Start a thread to watch for the stop signal.
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		func() {
 			for {
 				select {
-				case <-c:
+				case <-ctx.Done():
 					return
 				case <-time.After(10 * time.Minute):
 					// Reset the abuse protection.

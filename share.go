@@ -12,6 +12,7 @@ import (
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/stores"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/sdk"
 )
 
 const (
@@ -24,7 +25,6 @@ var (
 
 // share represents a Share object.
 type share struct {
-	id              types.Hash256
 	name            string
 	serverName      string
 	connectSecurity map[string]struct{}
@@ -38,43 +38,61 @@ type share struct {
 
 	// Auxiliary fields.
 	client    client.Client
+	backend   string
 	bucket    string
+	appKey    types.PrivateKey
 	createdAt time.Time
 	volumeID  uint64
 	mu        sync.Mutex
 }
 
 // registerShare adds a new share to the SMB server.
-func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
-	if s.mode == "indexd" {
-		return nil, nil // indexd is not supported yet.
-	}
-
+func (s *server) registerShare(ss stores.Share) (*share, error) {
 	sh := &share{
-		id:              ss.ID,
 		name:            ss.Name,
+		backend:         ss.Type,
 		serverName:      ss.ServerName,
 		shareType:       smb2.SHARE_TYPE_DISK,
 		maxUses:         maxShareUses,
 		bucket:          ss.Bucket,
 		remark:          ss.Remark,
+		appKey:          ss.AppKey,
 		connectSecurity: make(map[string]struct{}),
 		fileSecurity:    make(map[string]uint32),
 		encryptData:     s.encryptData,
 		compressData:    s.compressionSupported,
 	}
 
-	sh.client = client.New(s.mode, ss.ServerName, ss.Password)
+	switch sh.backend {
+	case "indexd":
+		builder := sdk.NewBuilder(ss.ServerName, sdk.AppMetadata{
+			ID:          types.HashBytes(append([]byte(s.cfg.Name), []byte(s.cfg.Description)...)),
+			Name:        s.cfg.Name,
+			Description: s.cfg.Description,
+			LogoURL:     s.cfg.LogoURL,
+			ServiceURL:  s.cfg.ServiceURL,
+		})
+		sdkClient, err := builder.SDK(ss.AppKey)
+		if err != nil {
+			return nil, err
+		}
+		sh.client = client.NewIndexdClient(s.store, sdkClient, ss.Name, s.cfg.DataShards, s.cfg.ParityShards)
+	case "renterd":
+		sh.client = client.NewRenterdClient(ss.ServerName, ss.Password, ss.Bucket)
+	default:
+		return nil, errors.New("unsupported share type")
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	// Get the share information and test the share at the same time.
-	info, err := sh.client.Info(ctx, ss.Bucket)
+	info, err := sh.client.Info(ctx)
 	if err != nil {
 		return nil, errShareUnavailable
 	}
 
-	ars, err := st.GetAccounts(ss)
+	ars, err := s.store.GetAccounts(ss)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +100,7 @@ func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
 	accs := make(map[int]stores.Account)
 	for _, ar := range ars {
 		if _, exists := accs[ar.AccountID]; !exists {
-			acc, err := st.GetAccountByID(ar.AccountID)
+			acc, err := s.store.GetAccountByID(ar.AccountID)
 			if err != nil {
 				return nil, err
 			}
@@ -104,7 +122,7 @@ func (s *server) registerShare(ss stores.Share, st Store) (*share, error) {
 	sh.createdAt = time.Time(info.CreatedAt)
 	sh.volumeID = binary.LittleEndian.Uint64(vid)
 	s.mu.Lock()
-	s.shareList[string(sh.id[:])+"/"+sh.name] = sh
+	s.shareList[sh.name] = sh
 	s.mu.Unlock()
 
 	return sh, nil

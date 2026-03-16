@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,31 +14,72 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mike76-dev/siasmb/stores"
 	rhpv4 "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
 
-// renterdClient implements a Client for interacting with renterd.
-type renterdClient struct {
-	clientParams
+// RenterdClient implements a Client for interacting with renterd.
+type RenterdClient struct {
+	baseURL  string
+	password string
+	bucket   string
 }
 
-// newRenterdClient returns an initialized renterdClient.
-func newRenterdClient(addr, password string) Client {
-	return &renterdClient{
-		clientParams: clientParams{
-			baseURL:  addr,
-			password: password,
-		},
+// NewRenterdClient returns an initialized RenterdClient.
+func NewRenterdClient(addr, password, bucket string) Client {
+	return &RenterdClient{
+		baseURL:  addr,
+		password: password,
+		bucket:   bucket,
 	}
 }
 
+// doRequest does everything needed to send an HTTP request and receive a response.
+func (rc *RenterdClient) doRequest(ctx context.Context, method, path string, body interface{}, resp interface{}) error {
+	var reqBody io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reqBody = strings.NewReader(string(data))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, rc.baseURL+path, reqBody)
+	if err != nil {
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if rc.password != "" {
+		req.SetBasicAuth("", rc.password)
+	}
+
+	r, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer r.Body.Close()
+
+	if r.StatusCode < 200 || r.StatusCode >= 300 {
+		errMsg, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20)) // 1MiB limit
+		return fmt.Errorf("HTTP error: %s (status: %d)", string(errMsg), r.StatusCode)
+	}
+
+	if resp != nil {
+		return json.NewDecoder(r.Body).Decode(resp)
+	}
+
+	return nil
+}
+
 // Info queries the general information about the share.
-func (rc *renterdClient) Info(ctx context.Context, bucketName string) (GeneralInfo, error) {
+func (rc *RenterdClient) Info(ctx context.Context) (GeneralInfo, error) {
 	var bucket api.Bucket
-	if err := rc.doRequest(ctx, "GET", fmt.Sprintf("/api/bus/bucket/%s", bucketName), nil, &bucket); err != nil {
+	if err := rc.doRequest(ctx, "GET", fmt.Sprintf("/api/bus/bucket/%s", rc.bucket), nil, &bucket); err != nil {
 		return GeneralInfo{}, err
 	}
 
@@ -48,7 +90,7 @@ func (rc *renterdClient) Info(ctx context.Context, bucketName string) (GeneralIn
 }
 
 // Storage queries the information about the underlying storage.
-func (rc *renterdClient) Storage(ctx context.Context, bucket string) (StorageInfo, error) {
+func (rc *RenterdClient) Storage(ctx context.Context) (StorageInfo, error) {
 	r, err := rc.redundancy(ctx)
 	if err != nil {
 		return StorageInfo{}, err
@@ -62,7 +104,7 @@ func (rc *renterdClient) Storage(ctx context.Context, bucket string) (StorageInf
 		return StorageInfo{}, err
 	}
 
-	us, err := rc.usedStorage(ctx, bucket)
+	us, err := rc.usedStorage(ctx)
 	if err != nil {
 		return StorageInfo{}, err
 	}
@@ -77,7 +119,7 @@ func (rc *renterdClient) Storage(ctx context.Context, bucket string) (StorageInf
 }
 
 // redundancy retrieves the renterd redundancy settings.
-func (rc *renterdClient) redundancy(ctx context.Context) (rs api.RedundancySettings, err error) {
+func (rc *RenterdClient) redundancy(ctx context.Context) (rs api.RedundancySettings, err error) {
 	var resp api.UploadSettings
 	err = rc.doRequest(ctx, "GET", "/api/bus/settings/upload", nil, &resp)
 	if err != nil {
@@ -87,19 +129,19 @@ func (rc *renterdClient) redundancy(ctx context.Context) (rs api.RedundancySetti
 }
 
 // contracts retrieves the renterd contracts.
-func (rc *renterdClient) contracts(ctx context.Context) (contracts []api.ContractMetadata, err error) {
+func (rc *RenterdClient) contracts(ctx context.Context) (contracts []api.ContractMetadata, err error) {
 	err = rc.doRequest(ctx, "GET", "/api/bus/contracts", nil, &contracts)
 	return
 }
 
 // host retrieves the information about a particular host by its public key.
-func (rc *renterdClient) host(ctx context.Context, pk types.PublicKey) (h api.Host, err error) {
+func (rc *RenterdClient) host(ctx context.Context, pk types.PublicKey) (h api.Host, err error) {
 	err = rc.doRequest(ctx, "GET", fmt.Sprintf("/api/bus/host/%s", pk), nil, &h)
 	return
 }
 
 // remainingStorage calculates the total remaining storage of all hosts that renterd has active contracts with.
-func (rc *renterdClient) remainingStorage(ctx context.Context) (rs uint64, err error) {
+func (rc *RenterdClient) remainingStorage(ctx context.Context) (rs uint64, err error) {
 	var contracts []api.ContractMetadata
 	contracts, err = rc.contracts(ctx)
 	if err != nil {
@@ -120,9 +162,9 @@ func (rc *renterdClient) remainingStorage(ctx context.Context) (rs uint64, err e
 }
 
 // usedStorage retrieves the "used" storage, meaning the total size of uploaded sectors including redundancy.
-func (rc *renterdClient) usedStorage(ctx context.Context, bucket string) (us uint64, err error) {
+func (rc *RenterdClient) usedStorage(ctx context.Context) (us uint64, err error) {
 	values := url.Values{}
-	values.Set("bucket", bucket)
+	values.Set("bucket", rc.bucket)
 	var osr api.ObjectsStatsResponse
 	err = rc.doRequest(ctx, "GET", "/api/bus/stats/objects?"+values.Encode(), nil, &osr)
 	if err != nil {
@@ -132,10 +174,10 @@ func (rc *renterdClient) usedStorage(ctx context.Context, bucket string) (us uin
 }
 
 // IsEmpty returns true if the directory contains at least one object.
-func (rc *renterdClient) IsEmpty(ctx context.Context, bucket, path string) (bool, error) {
+func (rc *RenterdClient) IsEmpty(ctx context.Context, _ stores.Account, path string) (bool, error) {
 	values := url.Values{}
 	api.ListObjectOptions{
-		Bucket:    bucket,
+		Bucket:    rc.bucket,
 		Delimiter: "/",
 		Limit:     1,
 	}.Apply(values)
@@ -151,10 +193,10 @@ func (rc *renterdClient) IsEmpty(ctx context.Context, bucket, path string) (bool
 }
 
 // List lists the contents of a directory.
-func (rc *renterdClient) List(ctx context.Context, bucket, path string) (ois []ObjectInfo, err error) {
+func (rc *RenterdClient) List(ctx context.Context, _ stores.Account, path string) (ois []ObjectInfo, err error) {
 	values := url.Values{}
 	api.ListObjectOptions{
-		Bucket:    bucket,
+		Bucket:    rc.bucket,
 		Delimiter: "/",
 		Limit:     -1,
 	}.Apply(values)
@@ -181,15 +223,15 @@ func (rc *renterdClient) List(ctx context.Context, bucket, path string) (ois []O
 }
 
 // Object retrieves the information about a file or a directory.
-func (rc *renterdClient) Object(ctx context.Context, bucket, path string) (ObjectInfo, error) {
+func (rc *RenterdClient) Object(ctx context.Context, _ stores.Account, path string) (ObjectInfo, error) {
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	if path == "" {                            // The root path: calculate the total size of the objects
-		info, err := rc.Info(ctx, bucket)
+		info, err := rc.Info(ctx)
 		if err != nil {
 			return ObjectInfo{}, err
 		}
 
-		ois, err := rc.List(ctx, bucket, "")
+		ois, err := rc.List(ctx, stores.Account{}, "")
 		if err != nil {
 			return ObjectInfo{}, err
 		}
@@ -215,7 +257,7 @@ func (rc *renterdClient) Object(ctx context.Context, bucket, path string) (Objec
 		parentDir = path[:i+1]
 	}
 
-	ois, err := rc.List(ctx, bucket, parentDir)
+	ois, err := rc.List(ctx, stores.Account{}, parentDir)
 	if err != nil {
 		return ObjectInfo{}, err
 	}
@@ -230,7 +272,7 @@ func (rc *renterdClient) Object(ctx context.Context, bucket, path string) (Objec
 }
 
 // Parents retrieves the information about the current and the parent directories where the file is located.
-func (rc *renterdClient) Parents(ctx context.Context, bucket, path string) (currentDir, parentDir FileInfo, err error) {
+func (rc *RenterdClient) Parents(ctx context.Context, _ stores.Account, path string) (currentDir, parentDir FileInfo, err error) {
 	var parent, grandParent, name, parentName string
 	if path != "" {
 		name = path + "/"
@@ -257,7 +299,7 @@ func (rc *renterdClient) Parents(ctx context.Context, bucket, path string) (curr
 
 	var info GeneralInfo
 	if parent == "" || grandParent == "" {
-		info, err = rc.Info(ctx, bucket)
+		info, err = rc.Info(ctx)
 		if err != nil {
 			return
 		}
@@ -265,7 +307,7 @@ func (rc *renterdClient) Parents(ctx context.Context, bucket, path string) (curr
 
 	var ois []ObjectInfo
 	if parent != "" {
-		ois, err = rc.List(ctx, bucket, parent)
+		ois, err = rc.List(ctx, stores.Account{}, parent)
 		if err != nil {
 			return
 		}
@@ -292,7 +334,7 @@ func (rc *renterdClient) Parents(ctx context.Context, bucket, path string) (curr
 	}
 
 	if grandParent != "" {
-		ois, err = rc.List(ctx, bucket, grandParent)
+		ois, err = rc.List(ctx, stores.Account{}, grandParent)
 		if err != nil {
 			return
 		}
@@ -326,9 +368,9 @@ func (rc *renterdClient) Parents(ctx context.Context, bucket, path string) (curr
 }
 
 // Read downloads a file from the Sia network.
-func (rc *renterdClient) Read(ctx context.Context, bucket, path string, offset, length uint64, buf io.Writer) (err error) {
+func (rc *RenterdClient) Read(ctx context.Context, path string, offset, length uint64, buf io.Writer) (err error) {
 	values := url.Values{}
-	values.Set("bucket", bucket)
+	values.Set("bucket", rc.bucket)
 
 	// url.PathEscape does the full escape, so we need to convert any escaped forward slashes back.
 	path = strings.ReplaceAll(url.PathEscape(path), "%2F", "/")
@@ -366,14 +408,14 @@ func (rc *renterdClient) Read(ctx context.Context, bucket, path string, offset, 
 }
 
 // StartUpload initiates a multipart upload.
-func (rc *renterdClient) StartUpload(ctx context.Context, bucket, path string) (uploadID string, err error) {
+func (rc *RenterdClient) StartUpload(ctx context.Context, path string) (uploadID string, err error) {
 	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
 		return
 	}
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	var resp api.MultipartCreateResponse
 	if err = rc.doRequest(ctx, "POST", "/api/bus/multipart/create", api.MultipartCreateRequest{
-		Bucket: bucket,
+		Bucket: rc.bucket,
 		Key:    "/" + path,
 	}, &resp); err != nil {
 		return
@@ -382,13 +424,13 @@ func (rc *renterdClient) StartUpload(ctx context.Context, bucket, path string) (
 }
 
 // AbortUpload aborts an initiated multipart upload.
-func (rc *renterdClient) AbortUpload(ctx context.Context, bucket, path string, uploadID string) (err error) {
+func (rc *RenterdClient) AbortUpload(ctx context.Context, path string, uploadID string) (err error) {
 	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
 		return
 	}
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	err = rc.doRequest(ctx, "POST", "/api/bus/multipart/abort", api.MultipartAbortRequest{
-		Bucket:   bucket,
+		Bucket:   rc.bucket,
 		Key:      "/" + path,
 		UploadID: uploadID,
 	}, nil)
@@ -396,7 +438,7 @@ func (rc *renterdClient) AbortUpload(ctx context.Context, bucket, path string, u
 }
 
 // FinishUpload completes a multipart upload.
-func (rc *renterdClient) FinishUpload(ctx context.Context, bucket, path string, uploadID string, parts []api.MultipartCompletedPart) error {
+func (rc *RenterdClient) FinishUpload(ctx context.Context, path string, uploadID string, parts []api.MultipartCompletedPart) error {
 	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
 		return nil
 	}
@@ -406,7 +448,7 @@ func (rc *renterdClient) FinishUpload(ctx context.Context, bucket, path string, 
 	slices.SortFunc(parts, func(a, b api.MultipartCompletedPart) int { return a.PartNumber - b.PartNumber })
 	var resp api.MultipartCompleteResponse
 	return rc.doRequest(ctx, "POST", "/api/bus/multipart/complete", api.MultipartCompleteRequest{
-		Bucket:   bucket,
+		Bucket:   rc.bucket,
 		Key:      "/" + path,
 		UploadID: uploadID,
 		Parts:    parts,
@@ -414,14 +456,14 @@ func (rc *renterdClient) FinishUpload(ctx context.Context, bucket, path string, 
 }
 
 // Write uploads the provided chunk of data to the Sia network.
-func (rc *renterdClient) Write(ctx context.Context, r io.Reader, bucket, path string, uploadID string, partNumber int, offset, length uint64) (eTag string, err error) {
+func (rc *RenterdClient) Write(ctx context.Context, r io.Reader, path string, uploadID string, partNumber int, offset, length uint64) (eTag string, err error) {
 	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
 		return
 	}
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	path = api.ObjectKeyEscape(path)
 	values := make(url.Values)
-	values.Set("bucket", bucket)
+	values.Set("bucket", rc.bucket)
 	values.Set("uploadid", uploadID)
 	values.Set("partnumber", fmt.Sprint(partNumber))
 
@@ -468,33 +510,33 @@ func (rc *renterdClient) Write(ctx context.Context, r io.Reader, bucket, path st
 }
 
 // Delete deletes a file or a directory.
-func (rc *renterdClient) Delete(ctx context.Context, bucket, path string, batch bool) (err error) {
+func (rc *RenterdClient) Delete(ctx context.Context, _ stores.Account, path string, batch bool) (err error) {
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	if batch {
 		err = rc.doRequest(ctx, "POST", "/api/worker/objects/remove", api.ObjectsRemoveRequest{
-			Bucket: bucket,
+			Bucket: rc.bucket,
 			Prefix: "/" + path + "/",
 		}, nil)
 	} else {
 		values := make(url.Values)
-		values.Set("bucket", bucket)
+		values.Set("bucket", rc.bucket)
 		err = rc.doRequest(ctx, "DELETE", fmt.Sprintf("/api/worker/object/%s?"+values.Encode(), path), nil, nil)
 	}
 	return
 }
 
 // MakeDirectory creates a new directory in the specified path.
-func (rc *renterdClient) MakeDirectory(ctx context.Context, bucket, path string) error {
+func (rc *RenterdClient) MakeDirectory(ctx context.Context, _ stores.Account, path string) error {
 	path = strings.ReplaceAll(path, "\\", "/") // Replace Windows formatting with the unified one
 	path = api.ObjectKeyEscape(path)
 	path += "/"
 	values := make(url.Values)
-	values.Set("bucket", bucket)
+	values.Set("bucket", rc.bucket)
 	return rc.doRequest(ctx, "PUT", fmt.Sprintf("/api/worker/object/%s?"+values.Encode(), path), nil, nil)
 }
 
 // Rename renames a file or a directory.
-func (rc *renterdClient) Rename(ctx context.Context, bucket, oldName, newName string, isDir, force bool) error {
+func (rc *RenterdClient) Rename(ctx context.Context, _ stores.Account, oldName, newName string, isDir, force bool) error {
 	mode := api.ObjectsRenameModeSingle
 	if isDir {
 		oldName += "/"
@@ -502,7 +544,7 @@ func (rc *renterdClient) Rename(ctx context.Context, bucket, oldName, newName st
 		mode = api.ObjectsRenameModeMulti
 	}
 	return rc.doRequest(ctx, "POST", "/api/bus/objects/rename", api.ObjectsRenameRequest{
-		Bucket: bucket,
+		Bucket: rc.bucket,
 		Force:  force,
 		From:   "/" + oldName,
 		To:     "/" + newName,

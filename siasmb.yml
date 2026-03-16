@@ -1,5 +1,4 @@
 debug: false
-mode: renterd
 maxConnections: 30
 api:
   port: 9999
@@ -11,3 +10,11 @@ database:
   password: ''
   database: siasmb
   sslMode: verify-full
+indexd:
+  appName: SiaSMB
+  description: SiaSMB server
+  logoURL: https://example.com/logo.png
+  serviceURL: https://example.com/service
+  seedPhrase: ''
+  dataShards: 10
+  parityShards: 20
