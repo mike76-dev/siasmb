@@ -9,9 +9,9 @@ require (
 	github.com/julienschmidt/httprouter v1.3.0
 	github.com/oiweiwei/go-msrpc v1.2.7
 	github.com/pierrec/lz4/v4 v4.1.25
-	go.sia.tech/core v0.19.0
+	go.sia.tech/core v0.19.1-0.20260313152606-1a17a74e466a
 	go.sia.tech/renterd/v2 v2.6.0-beta.4
-	golang.org/x/crypto v0.48.0
+	golang.org/x/crypto v0.49.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -43,16 +43,16 @@ require (
 	github.com/quic-go/webtransport-go v0.10.0 // indirect
 	github.com/rs/zerolog v1.32.0 // indirect
 	go.sia.tech/coreutils v0.21.2-0.20260311150752-49aa8693b89e // indirect
-	go.sia.tech/indexd v0.1.1-0.20260312140546-a5ebbdbff686 // indirect
+	go.sia.tech/indexd v0.1.1-0.20260318223006-84002d55a287 // indirect
 	go.sia.tech/jape v0.14.1 // indirect
 	go.sia.tech/mux v1.4.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect
-	golang.org/x/net v0.49.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.41.0 // indirect
+	golang.org/x/tools v0.42.0 // indirect
 	lukechampine.com/frand v1.5.1 // indirect
 )
