@@ -621,17 +621,35 @@ func (db *Database) DeleteFile(acc Account, share string, path string) error {
 						o.account = c.id
 						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
 					)
+			),
+			doomed_buffers AS (
+				SELECT DISTINCT m.buffer_id
+				FROM metadata m
+				JOIN target t ON m.object_id = t.id
+				WHERE m.buffer_id IS NOT NULL
+			),
+			deleted_objects AS (
+				DELETE FROM objects o
+				USING target t
+				WHERE o.id = t.id
+				RETURNING o.id
+			),
+			deleted_buffers AS (
+				DELETE FROM buffers b
+				USING doomed_buffers db
+				WHERE b.id = db.buffer_id
+				RETURNING b.id
 			)
-			DELETE FROM objects o
-			USING target t
-			WHERE o.id = t.id
+			SELECT COUNT(*)
+			FROM deleted_objects
 		`
 
-		tag, err := tx.Exec(ctx, query, share, path, acc.ID)
+		var n int64
+		err := tx.QueryRow(ctx, query, share, path, acc.ID).Scan(&n)
 		if err != nil {
 			return fmt.Errorf("failed to delete file: %v", err)
 		}
-		if tag.RowsAffected() == 0 {
+		if n == 0 {
 			return ErrNotFound
 		}
 		return nil
@@ -660,28 +678,55 @@ func (db *Database) DeleteDirectory(acc Account, share string, path string) erro
 						OR (d.private = FALSE AND owner.workgroup = c.workgroup)
 					)
 			),
+			target_objects AS (
+				SELECT o.id
+				FROM objects o
+				JOIN src s ON TRUE
+				WHERE o.share_name = $1
+					AND o.full_path LIKE s.full_path || '/%%'
+			),
+			doomed_buffers AS (
+				SELECT DISTINCT m.buffer_id
+				FROM metadata m
+				JOIN target_objects t ON m.object_id = t.id
+				WHERE m.buffer_id IS NOT NULL
+			),
 			delete_files AS (
 				DELETE FROM objects o
 				USING src s
 				WHERE o.share_name = $1
 					AND o.full_path LIKE s.full_path || '/%%'
+				RETURNING o.id
 			),
 			delete_dirs AS (
 				DELETE FROM directories d
 				USING src s
 				WHERE d.share_name = $1
 					AND d.full_path LIKE s.full_path || '/%%'
+				RETURNING d.id
+			),
+			delete_root AS (
+				DELETE FROM directories d
+				USING src s
+				WHERE d.id = s.id
+				RETURNING d.id
+			),
+			deleted_buffers AS (
+				DELETE FROM buffers b
+				USING doomed_buffers db
+				WHERE b.id = db.buffer_id
+				RETURNING b.id
 			)
-			DELETE FROM directories d
-			USING src s
-			WHERE d.id = s.id
+			SELECT COUNT(*)
+			FROM delete_root
 		`
 
-		tag, err := tx.Exec(ctx, query, share, path, acc.ID)
+		var n int64
+		err := tx.QueryRow(ctx, query, share, path, acc.ID).Scan(&n)
 		if err != nil {
 			return fmt.Errorf("failed to delete directory: %v", err)
 		}
-		if tag.RowsAffected() == 0 {
+		if n == 0 {
 			return ErrNotFound
 		}
 		return nil

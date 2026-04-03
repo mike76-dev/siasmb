@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log"
 
 	"github.com/mike76-dev/siasmb/stores"
 	proto "go.sia.tech/core/rhp/v4"
@@ -246,11 +247,21 @@ func (ic *IndexdClient) Write(ctx context.Context, r io.Reader, path string, upl
 
 // Delete deletes a file or a directory.
 func (ic *IndexdClient) Delete(ctx context.Context, acc stores.Account, path string, batch bool) (err error) {
+	slabs, err := ic.db.ListSlabs(acc, ic.share, path)
+	if err != nil {
+		return err
+	}
+
+	for _, key := range slabs {
+		if err := ic.sdkClient.DeleteObject(ctx, key); err != nil {
+			log.Printf("failed to delete slab %x from %s", key, path)
+		}
+	}
+
 	if batch {
 		return ic.db.DeleteDirectory(acc, ic.share, path)
 	}
 
-	// TODO delete slabs.
 	return ic.db.DeleteFile(acc, ic.share, path)
 }
 

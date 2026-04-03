@@ -341,3 +341,101 @@ func (db *Database) ListUploadParts(uploadID string) (parts []types.Hash256, err
 
 	return parts, err
 }
+
+// ListSlabs retrieves the slab keys of all files at or down the specified path.
+func (db *Database) ListSlabs(acc Account, share, path string) (slabs []types.Hash256, err error) {
+	path = normalizePath(path)
+
+	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = `
+			WITH caller AS (
+				SELECT id, workgroup
+				FROM accounts
+				WHERE id = $3
+			),
+			target_file AS (
+				SELECT o.id, o.full_path
+				FROM objects o
+				JOIN accounts owner ON owner.id = o.account
+				CROSS JOIN caller c
+				WHERE o.share_name = $1
+					AND o.full_path = $2
+					AND (
+						o.account = c.id
+						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+					)
+			),
+			target_dir AS (
+				SELECT d.id, d.full_path
+				FROM directories d
+				JOIN accounts owner ON owner.id = d.account
+				CROSS JOIN caller c
+				WHERE d.share_name = $1
+					AND d.full_path = $2
+					AND (
+						d.account = c.id
+						OR (d.private = FALSE AND owner.workgroup = c.workgroup)
+					)
+			),
+			visible_objects AS (
+				SELECT o.id
+				FROM objects o
+				JOIN target_file tf ON tf.id = o.id
+
+				UNION
+
+				SELECT o.id
+				FROM objects o
+				JOIN accounts owner ON owner.id = o.account
+				JOIN target_dir td ON TRUE
+				CROSS JOIN caller c
+				WHERE o.share_name = $1
+					AND o.full_path LIKE td.full_path || '/%%'
+					AND (
+						o.account = c.id
+						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+					)
+			),
+			target_exists AS (
+				SELECT EXISTS (SELECT 1 FROM target_file)
+					OR EXISTS (SELECT 1 FROM target_dir) AS found
+			)
+			SELECT
+				te.found,
+				(
+					SELECT COALESCE(
+						ARRAY_AGG(DISTINCT m.slab_key),
+						'{}'::bytea[]
+					)
+					FROM visible_objects vo
+					JOIN metadata m ON m.object_id = vo.id
+					WHERE m.slab_key IS NOT NULL
+				) AS slab_keys
+			FROM target_exists te
+
+		`
+
+		var found bool
+		var rawKeys [][]byte
+
+		if err := tx.QueryRow(ctx, query, share, path, acc.ID).Scan(&found, &rawKeys); err != nil {
+			return err
+		}
+		if !found {
+			return ErrNotFound
+		}
+
+		slabs = make([]types.Hash256, 0, len(rawKeys))
+		for _, b := range rawKeys {
+			if len(b) != 32 {
+				return fmt.Errorf("invalid slab key length: %d", len(b))
+			}
+			var h types.Hash256
+			copy(h[:], b)
+			slabs = append(slabs, h)
+		}
+		return nil
+	})
+
+	return
+}
