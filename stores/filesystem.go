@@ -18,7 +18,6 @@ var (
 
 // ObjectMeta represents the metadata of an object in the share.
 type ObjectMeta struct {
-	Key        []byte
 	Path       string
 	Size       uint64
 	CreatedAt  time.Time
@@ -53,7 +52,6 @@ func (db *Database) ListObjects(acc Account, shareName, path string) (objects []
 				WHERE id = $3
 			)
 			SELECT
-				NULL::bytea AS key,
 				d.full_path,
 				0::bigint AS size,
 				d.created_at,
@@ -75,7 +73,6 @@ func (db *Database) ListObjects(acc Account, shareName, path string) (objects []
 			UNION ALL
 
 			SELECT
-				o.object_key,
 				o.full_path,
 				o.size,
 				o.created_at,
@@ -121,7 +118,7 @@ func (db *Database) ListObjects(acc Account, shareName, path string) (objects []
 
 		for rows.Next() {
 			var obj ObjectMeta
-			if err := rows.Scan(&obj.Key, &obj.Path, &obj.Size, &obj.CreatedAt, &obj.ModifiedAt, &obj.IsDir); err != nil {
+			if err := rows.Scan(&obj.Path, &obj.Size, &obj.CreatedAt, &obj.ModifiedAt, &obj.IsDir); err != nil {
 				return fmt.Errorf("failed to scan object: %v", err)
 			}
 			objects = append(objects, obj)
@@ -250,10 +247,9 @@ func (db *Database) Object(acc Account, shareName, path string) (object ObjectMe
 				FROM accounts
 				WHERE id = $3
 			)
-			SELECT key, path, size, created_at, modified_at, is_dir
+			SELECT path, size, created_at, modified_at, is_dir
 			FROM (
 				SELECT
-					NULL::bytea AS key,
 					d.full_path AS path,
 					0::bigint AS size,
 					d.created_at,
@@ -272,7 +268,6 @@ func (db *Database) Object(acc Account, shareName, path string) (object ObjectMe
 				UNION ALL
 
 				SELECT
-					o.object_key AS key,
 					o.full_path AS path,
 					o.size,
 					o.created_at,
@@ -291,7 +286,7 @@ func (db *Database) Object(acc Account, shareName, path string) (object ObjectMe
 			LIMIT 1
 		`
 
-		if err := tx.QueryRow(ctx, query, shareName, path, acc.ID).Scan(&object.Key, &object.Path, &object.Size, &object.CreatedAt, &object.ModifiedAt, &object.IsDir); err != nil {
+		if err := tx.QueryRow(ctx, query, shareName, path, acc.ID).Scan(&object.Path, &object.Size, &object.CreatedAt, &object.ModifiedAt, &object.IsDir); err != nil {
 			if err == pgx.ErrNoRows {
 				return ErrNotFound
 			} else {

@@ -37,13 +37,14 @@ type share struct {
 	compressData    bool
 
 	// Auxiliary fields.
-	client    client.Client
-	backend   string
-	bucket    string
-	appKey    types.PrivateKey
-	createdAt time.Time
-	volumeID  uint64
-	mu        sync.Mutex
+	client     client.Client
+	dataShards uint8
+	backend    string
+	bucket     string
+	appKey     types.PrivateKey
+	createdAt  time.Time
+	volumeID   uint64
+	mu         sync.Mutex
 }
 
 // registerShare adds a new share to the SMB server.
@@ -61,6 +62,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		fileSecurity:    make(map[string]uint32),
 		encryptData:     s.encryptData,
 		compressData:    s.compressionSupported,
+		dataShards:      s.cfg.DataShards,
 	}
 
 	switch sh.backend {

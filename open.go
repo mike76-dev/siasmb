@@ -46,6 +46,7 @@ type upload struct {
 	pending    map[uint64]*uploadChunk
 	buf        []byte
 	bufOffset  uint64
+	maxLength  uint64
 	mu         sync.Mutex
 }
 
@@ -342,6 +343,9 @@ func (op *open) fileAllInformation() []byte {
 		},
 		AccessInfo: smb2.FileAccessInfo{
 			AccessFlags: op.grantedAccess,
+		},
+		PositionInfo: smb2.FilePositionInfo{
+			CurrentByteOffset: size,
 		},
 		ModeInfo: smb2.FileModeInfo{
 			Mode: op.createOptions,
@@ -649,7 +653,12 @@ func (op *open) startUpload() error {
 		return nil
 	}
 
-	id, err := op.treeConnect.share.client.StartUpload(op.ctx, op.pathName)
+	acc, err := op.session.connection.server.store.FindAccount(op.session.userName, op.session.workgroup)
+	if err != nil {
+		return err
+	}
+
+	id, err := op.treeConnect.share.client.StartUpload(op.ctx, acc, op.pathName)
 	if err != nil {
 		return err
 	}
@@ -659,6 +668,7 @@ func (op *open) startUpload() error {
 		pending:    make(map[uint64]*uploadChunk),
 		nextOffset: 0,
 		bufOffset:  0,
+		maxLength:  uint64(op.treeConnect.share.dataShards) * proto.SectorSize,
 	}
 
 	return nil
@@ -700,10 +710,18 @@ func (op *open) write(offset uint64, data []byte) error {
 		u.totalSize += uint64(len(ch.data))
 		u.nextOffset += uint64(len(ch.data))
 		delete(u.pending, ch.offset)
+
+		op.mu.Lock()
+		if op.pendingUpload == u {
+			op.size = u.totalSize
+			op.allocated = u.totalSize
+			op.lastModified = time.Now()
+		}
+		op.mu.Unlock()
 	}
 
-	for uint64(len(u.buf)) >= proto.SectorSize {
-		sector := u.buf[:proto.SectorSize]
+	for uint64(len(u.buf)) >= u.maxLength {
+		sector := u.buf[:u.maxLength]
 		partOffset := u.bufOffset
 
 		u.partCount++
@@ -714,7 +732,7 @@ func (op *open) write(offset uint64, data []byte) error {
 			u.uploadID,
 			u.partCount,
 			partOffset,
-			proto.SectorSize,
+			u.maxLength,
 		)
 		if err != nil {
 			return err
@@ -725,8 +743,8 @@ func (op *open) write(offset uint64, data []byte) error {
 			ETag:       eTag,
 		})
 
-		u.buf = u.buf[proto.SectorSize:]
-		u.bufOffset += proto.SectorSize
+		u.buf = u.buf[u.maxLength:]
+		u.bufOffset += u.maxLength
 	}
 
 	return nil

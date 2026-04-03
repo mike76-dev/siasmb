@@ -36,8 +36,8 @@ type IndexdConfig struct {
 	LogoURL      string `yaml:"logoURL"`
 	ServiceURL   string `yaml:"serviceURL"`
 	SeedPhrase   string `yaml:"seedPhrase"`
-	DataShards   int    `yaml:"dataShards"`
-	ParityShards int    `yaml:"parityShards"`
+	DataShards   uint8  `yaml:"dataShards"`
+	ParityShards uint8  `yaml:"parityShards"`
 }
 
 // Config lists the config fields.

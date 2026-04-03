@@ -408,7 +408,7 @@ func (rc *RenterdClient) Read(ctx context.Context, path string, offset, length u
 }
 
 // StartUpload initiates a multipart upload.
-func (rc *RenterdClient) StartUpload(ctx context.Context, path string) (uploadID string, err error) {
+func (rc *RenterdClient) StartUpload(ctx context.Context, _ stores.Account, path string) (uploadID string, err error) {
 	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
 		return
 	}

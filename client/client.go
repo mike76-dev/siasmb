@@ -50,7 +50,7 @@ type Client interface {
 	Object(ctx context.Context, acc stores.Account, path string) (ObjectInfo, error)
 	Parents(ctx context.Context, acc stores.Account, path string) (currentDir, parentDir FileInfo, err error)
 	Read(ctx context.Context, path string, offset, length uint64, buf io.Writer) error
-	StartUpload(ctx context.Context, path string) (uploadID string, err error)
+	StartUpload(ctx context.Context, acc stores.Account, path string) (uploadID string, err error)
 	AbortUpload(ctx context.Context, path string, uploadID string) (err error)
 	FinishUpload(ctx context.Context, path string, uploadID string, parts []api.MultipartCompletedPart) error
 	Write(ctx context.Context, r io.Reader, path string, uploadID string, partNumber int, offset, length uint64) (eTag string, err error)

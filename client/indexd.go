@@ -3,9 +3,11 @@ package client
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/mike76-dev/siasmb/stores"
+	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/indexd/sdk"
 	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
@@ -16,12 +18,12 @@ type IndexdClient struct {
 	share        string
 	db           *stores.Database
 	sdkClient    *sdk.SDK
-	dataShards   int
-	parityShards int
+	dataShards   uint8
+	parityShards uint8
 }
 
 // NewIndexdClient returns an initialized IndexdClient.
-func NewIndexdClient(db *stores.Database, sdkClient *sdk.SDK, share string, dataShards, parityShards int) Client {
+func NewIndexdClient(db *stores.Database, sdkClient *sdk.SDK, share string, dataShards, parityShards uint8) Client {
 	return &IndexdClient{
 		share:        share,
 		db:           db,
@@ -55,8 +57,8 @@ func (ic *IndexdClient) Storage(ctx context.Context) (StorageInfo, error) {
 		Type:             "indexd",
 		RemainingStorage: acc.MaxPinnedData - acc.PinnedData,
 		UsedStorage:      acc.PinnedData,
-		MinShards:        ic.dataShards,
-		TotalShards:      ic.parityShards + ic.dataShards,
+		MinShards:        int(ic.dataShards),
+		TotalShards:      int(ic.parityShards + ic.dataShards),
 	}, nil
 }
 
@@ -182,22 +184,63 @@ func (ic *IndexdClient) Read(ctx context.Context, path string, offset, length ui
 }
 
 // StartUpload initiates a multipart upload.
-func (ic *IndexdClient) StartUpload(ctx context.Context, path string) (uploadID string, err error) {
-	return "", nil
+func (ic *IndexdClient) StartUpload(ctx context.Context, acc stores.Account, path string) (uploadID string, err error) {
+	return ic.db.CreateUpload(acc, ic.share, path, true)
 }
 
 // AbortUpload aborts an initiated multipart upload.
-func (ic *IndexdClient) AbortUpload(ctx context.Context, path string, uploadID string) (err error) {
-	return
+func (ic *IndexdClient) AbortUpload(ctx context.Context, _ string, uploadID string) (err error) {
+	parts, err := ic.db.ListUploadParts(uploadID)
+	if err != nil {
+		return fmt.Errorf("couldn't retrieve upload parts: %v", err)
+	}
+
+	for _, part := range parts {
+		if err := ic.sdkClient.DeleteObject(ctx, part); err != nil {
+			return fmt.Errorf("couldn't delete slab: %v", err)
+		}
+	}
+
+	return ic.db.RemoveUpload(uploadID)
 }
 
 // FinishUpload completes a multipart upload.
-func (ic *IndexdClient) FinishUpload(ctx context.Context, path string, uploadID string, parts []api.MultipartCompletedPart) error {
+func (ic *IndexdClient) FinishUpload(ctx context.Context, path string, uploadID string, _ []api.MultipartCompletedPart) error {
+	if err := ic.db.FinalizeUpload(uploadID); err != nil {
+		return fmt.Errorf("couldn't finalize upload: %v", err)
+	}
+
 	return nil
 }
 
 // Write uploads the provided chunk of data to the Sia network.
-func (ic *IndexdClient) Write(ctx context.Context, r io.Reader, path string, uploadID string, partNumber int, offset, length uint64) (eTag string, err error) {
+func (ic *IndexdClient) Write(ctx context.Context, r io.Reader, path string, uploadID string, partNumber int, offset, length uint64) (_ string, err error) {
+	if length >= proto.SectorSize*uint64(ic.dataShards) {
+		obj := sdk.NewEmptyObject()
+		err = ic.sdkClient.Upload(ctx, &obj, r, sdk.WithRedundancy(ic.dataShards, ic.parityShards))
+		if err != nil {
+			return "", fmt.Errorf("couldn't upload slab: %v", err)
+		}
+
+		if err := ic.sdkClient.PinObject(ctx, obj); err != nil {
+			return "", fmt.Errorf("couldn't pin slab: %v", err)
+		}
+
+		key := obj.ID()
+		if err = ic.db.AddPart(uploadID, partNumber, offset, 0, length, key[:]); err != nil {
+			return "", fmt.Errorf("couldn't add part to the database: %v", err)
+		}
+	} else {
+		buf, err := io.ReadAll(r)
+		if err != nil {
+			return "", fmt.Errorf("couldn't read data: %v", err)
+		}
+
+		if err = ic.db.AddPartialData(uploadID, partNumber, offset, buf); err != nil {
+			return "", fmt.Errorf("couldn't add partial data to the database: %v", err)
+		}
+	}
+
 	return
 }
 
@@ -206,6 +249,8 @@ func (ic *IndexdClient) Delete(ctx context.Context, acc stores.Account, path str
 	if batch {
 		return ic.db.DeleteDirectory(acc, ic.share, path)
 	}
+
+	// TODO delete slabs.
 	return ic.db.DeleteFile(acc, ic.share, path)
 }
 
