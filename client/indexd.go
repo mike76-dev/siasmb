@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"fmt"
@@ -180,8 +181,39 @@ func (ic *IndexdClient) Parents(ctx context.Context, acc stores.Account, path st
 }
 
 // Read downloads a file from the Sia network.
-func (ic *IndexdClient) Read(ctx context.Context, path string, offset, length uint64, buf io.Writer) (err error) {
-	return
+func (ic *IndexdClient) Read(ctx context.Context, acc stores.Account, path string, offset, length uint64, buf io.Writer) (err error) {
+	slabs, partial, err := ic.db.GetMetadata(acc, ic.share, path)
+	if err != nil {
+		return err
+	}
+
+	for _, slab := range slabs {
+		if slab.At+slab.Length <= offset {
+			continue
+		}
+
+		if slab.At >= offset+length {
+			break
+		}
+
+		obj, err := ic.sdkClient.Object(ctx, slab.Key)
+		if err != nil {
+			return err
+		}
+
+		if err = ic.sdkClient.Download(ctx, buf, obj, sdk.WithDownloadRange(slab.Offset, slab.Length)); err != nil {
+			return err
+		}
+	}
+
+	if partial.Data != nil && partial.At < offset+length && partial.At+uint64(len(partial.Data)) > offset {
+		_, err = io.Copy(buf, bytes.NewReader(partial.Data))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // StartUpload initiates a multipart upload.
@@ -200,6 +232,10 @@ func (ic *IndexdClient) AbortUpload(ctx context.Context, _ string, uploadID stri
 		if err := ic.sdkClient.DeleteObject(ctx, part); err != nil {
 			return fmt.Errorf("couldn't delete slab: %v", err)
 		}
+	}
+
+	if err := ic.sdkClient.PruneSlabs(ctx); err != nil {
+		return fmt.Errorf("couldn't prune slabs: %v", err)
 	}
 
 	return ic.db.RemoveUpload(uploadID)
@@ -256,6 +292,10 @@ func (ic *IndexdClient) Delete(ctx context.Context, acc stores.Account, path str
 		if err := ic.sdkClient.DeleteObject(ctx, key); err != nil {
 			log.Printf("failed to delete slab %x from %s", key, path)
 		}
+	}
+
+	if err := ic.sdkClient.PruneSlabs(ctx); err != nil {
+		return fmt.Errorf("couldn't prune slabs: %v", err)
 	}
 
 	if batch {

@@ -49,7 +49,7 @@ type Client interface {
 	List(ctx context.Context, acc stores.Account, path string) ([]ObjectInfo, error)
 	Object(ctx context.Context, acc stores.Account, path string) (ObjectInfo, error)
 	Parents(ctx context.Context, acc stores.Account, path string) (currentDir, parentDir FileInfo, err error)
-	Read(ctx context.Context, path string, offset, length uint64, buf io.Writer) error
+	Read(ctx context.Context, acc stores.Account, path string, offset, length uint64, buf io.Writer) error
 	StartUpload(ctx context.Context, acc stores.Account, path string) (uploadID string, err error)
 	AbortUpload(ctx context.Context, path string, uploadID string) (err error)
 	FinishUpload(ctx context.Context, path string, uploadID string, parts []api.MultipartCompletedPart) error

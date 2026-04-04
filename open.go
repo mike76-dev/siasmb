@@ -580,9 +580,9 @@ func (op *open) getObjectID() []byte {
 // read checks if the requested chunk of data has already been downloaded. If so, it retrieves the data
 // from the buffer. If not, it downloads it from the Sia network and caches it.
 func (op *open) read(offset, length uint64) []byte {
-	readData := func(o, l uint64) ([]byte, error) {
+	readData := func(acc stores.Account, o, l uint64) ([]byte, error) {
 		var buf bytes.Buffer
-		err := op.treeConnect.share.client.Read(op.ctx, op.pathName, o, l, &buf)
+		err := op.treeConnect.share.client.Read(op.ctx, acc, op.pathName, o, l, &buf)
 		if err != nil {
 			return nil, err
 		}
@@ -599,6 +599,12 @@ func (op *open) read(offset, length uint64) []byte {
 
 	var result []byte
 	remaining := int64(length)
+
+	acc, err := op.session.connection.server.store.FindAccount(op.session.userName, op.session.workgroup)
+	if err != nil {
+		log.Printf("Access denied (%s): %v", op.pathName, err)
+		return nil
+	}
 
 	op.mu.Lock()
 	defer op.mu.Unlock()
@@ -620,7 +626,7 @@ func (op *open) read(offset, length uint64) []byte {
 				toRead = op.size - chunkOffset
 			}
 
-			data, err := readData(chunkOffset, toRead)
+			data, err := readData(acc, chunkOffset, toRead)
 			if err != nil {
 				log.Printf("Error reading object: %s: %v", op.pathName, err)
 				return nil

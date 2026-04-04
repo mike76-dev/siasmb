@@ -368,7 +368,7 @@ func (rc *RenterdClient) Parents(ctx context.Context, _ stores.Account, path str
 }
 
 // Read downloads a file from the Sia network.
-func (rc *RenterdClient) Read(ctx context.Context, path string, offset, length uint64, buf io.Writer) (err error) {
+func (rc *RenterdClient) Read(ctx context.Context, _ stores.Account, path string, offset, length uint64, buf io.Writer) (err error) {
 	values := url.Values{}
 	values.Set("bucket", rc.bucket)
 

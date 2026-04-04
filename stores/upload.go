@@ -11,6 +11,15 @@ import (
 	"go.sia.tech/core/types"
 )
 
+// SlabSlice represents a slice of data within an uploaded slab.
+type SlabSlice struct {
+	Key    types.Hash256
+	Offset uint64
+	Length uint64
+	At     uint64
+	Data   []byte
+}
+
 // CreateUpload creates a new upload entry in the database and returns the generated upload ID.
 func (db *Database) CreateUpload(acc Account, share, path string, private bool) (uploadID string, err error) {
 	path = normalizePath(path)
@@ -435,6 +444,101 @@ func (db *Database) ListSlabs(acc Account, share, path string) (slabs []types.Ha
 			slabs = append(slabs, h)
 		}
 		return nil
+	})
+
+	return
+}
+
+// GetMetadata retrieves the metadata of the file at the specified path.
+func (db *Database) GetMetadata(acc Account, share, path string) (slabs []SlabSlice, partial SlabSlice, err error) {
+	path = normalizePath(path)
+
+	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
+		const query = `
+			WITH caller AS (
+				SELECT id, workgroup
+				FROM accounts
+				WHERE id = $3
+			),
+			target AS (
+				SELECT o.id
+				FROM objects o
+				JOIN accounts owner ON owner.id = o.account
+				CROSS JOIN caller c
+				WHERE o.share_name = $1
+					AND o.full_path = $2
+					AND (
+						o.account = c.id
+						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+					)
+			)
+			SELECT
+				m.obj_offset,
+				m.slab_key,
+				m.data_offset,
+				m.data_length,
+				b.data
+			FROM metadata m
+			JOIN target t ON t.id = m.object_id
+			LEFT JOIN buffers b ON b.id = m.buffer_id
+			ORDER BY m.obj_offset
+		`
+
+		rows, err := tx.Query(ctx, query, share, path, acc.ID)
+		if err != nil {
+			return fmt.Errorf("failed to query object metadata: %v", err)
+		}
+		defer rows.Close()
+
+		var found bool
+		for rows.Next() {
+			found = true
+
+			var (
+				objOffset  uint64
+				slabKey    []byte
+				dataOffset uint64
+				dataLength uint64
+				chunk      []byte
+			)
+
+			if err := rows.Scan(&objOffset, &slabKey, &dataOffset, &dataLength, &chunk); err != nil {
+				return fmt.Errorf("failed to scan object metadata: %v", err)
+			}
+
+			if slabKey == nil {
+				partial = SlabSlice{
+					Offset: dataOffset,
+					Length: dataLength,
+					At:     objOffset,
+					Data:   chunk[dataOffset : dataOffset+dataLength],
+				}
+				continue
+			}
+
+			if len(slabKey) != 32 {
+				return fmt.Errorf("invalid key length: %d", len(slabKey))
+			}
+
+			var key types.Hash256
+			copy(key[:], slabKey)
+			slabs = append(slabs, SlabSlice{
+				Key:    key,
+				Offset: dataOffset,
+				Length: dataLength,
+				At:     objOffset,
+			})
+		}
+
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("failed while reading object metadata: %v", err)
+		}
+
+		if found {
+			return nil
+		}
+
+		return ErrNotFound
 	})
 
 	return
