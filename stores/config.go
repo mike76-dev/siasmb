@@ -31,13 +31,11 @@ func (dc DatabaseConfig) String() string {
 
 // IndexdConfig lists all parameters required to connect to an `indexd` node.
 type IndexdConfig struct {
-	Name         string `yaml:"appName"`
-	Description  string `yaml:"description"`
-	LogoURL      string `yaml:"logoURL"`
-	ServiceURL   string `yaml:"serviceURL"`
-	SeedPhrase   string `yaml:"seedPhrase"`
-	DataShards   uint8  `yaml:"dataShards"`
-	ParityShards uint8  `yaml:"parityShards"`
+	Name        string `yaml:"appName"`
+	Description string `yaml:"description"`
+	LogoURL     string `yaml:"logoURL"`
+	ServiceURL  string `yaml:"serviceURL"`
+	SeedPhrase  string `yaml:"seedPhrase"`
 }
 
 // Config lists the config fields.

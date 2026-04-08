@@ -72,7 +72,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		fileSecurity:    make(map[string]uint32),
 		encryptData:     s.encryptData,
 		compressData:    s.compressionSupported,
-		dataShards:      s.cfg.DataShards,
+		dataShards:      ss.DataShards,
 	}
 
 	switch sh.backend {
@@ -88,7 +88,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		if err != nil {
 			return nil, err
 		}
-		sh.client = client.NewIndexdClient(s.store, sdkClient, ss.Name, s.cfg.DataShards, s.cfg.ParityShards)
+		sh.client = client.NewIndexdClient(s.store, sdkClient, ss.Name, ss.DataShards, ss.ParityShards)
 	case "renterd":
 		sh.client = client.NewRenterdClient(ss.ServerName, ss.Password, ss.Bucket)
 	default:

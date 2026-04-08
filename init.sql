@@ -6,6 +6,8 @@ CREATE TABLE shares (
     bucket TEXT NOT NULL DEFAULT '',
     remark TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    data_shards INT NOT NULL DEFAULT 0,
+    parity_shards INT NOT NULL DEFAULT 0,
     app_key BYTEA
 );
 
