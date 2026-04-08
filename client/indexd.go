@@ -11,6 +11,7 @@ import (
 	"github.com/mike76-dev/siasmb/stores"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/indexd/sdk"
+	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
@@ -316,4 +317,41 @@ func (ic *IndexdClient) Rename(ctx context.Context, acc stores.Account, oldName,
 		return ic.db.RenameDirectory(acc, ic.share, oldName, newName, force)
 	}
 	return ic.db.RenameFile(acc, ic.share, oldName, newName, force)
+}
+
+// DeleteAll deletes all objects on the share. This is used when a share is removed to ensure
+// that all data is deleted from the Sia network.
+func (ic *IndexdClient) DeleteAll(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		objs, err := ic.sdkClient.ListObjects(ctx, slabs.Cursor{}, 10)
+		if err != nil {
+			return fmt.Errorf("couldn't list objects: %v", err)
+		}
+		if len(objs) == 0 {
+			break
+		}
+
+		for _, obj := range objs {
+			if err := ic.sdkClient.DeleteObject(ctx, obj.ID()); err != nil {
+				log.Printf("couldn't delete object %x: %v", obj.ID(), err)
+			}
+		}
+	}
+
+	if err := ic.sdkClient.PruneSlabs(ctx); err != nil {
+		return fmt.Errorf("couldn't prune slabs: %v", err)
+	}
+
+	return nil
+}
+
+// Close closes the client and releases all resources.
+func (ic *IndexdClient) Close() error {
+	return ic.sdkClient.Close()
 }

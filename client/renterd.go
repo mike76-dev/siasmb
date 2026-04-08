@@ -551,3 +551,14 @@ func (rc *RenterdClient) Rename(ctx context.Context, _ stores.Account, oldName, 
 		Mode:   mode,
 	}, nil)
 }
+
+// DeleteAll deletes all objects on the share.
+func (rc *RenterdClient) DeleteAll(ctx context.Context) error {
+	// `renterd` maintains all objects in the internal database, so we don't need to worry about this.
+	return nil
+}
+
+// Close closes the client and releases all resources.
+func (rc *RenterdClient) Close() error {
+	return nil
+}

@@ -57,6 +57,8 @@ type Client interface {
 	Delete(ctx context.Context, acc stores.Account, path string, batch bool) error
 	Rename(ctx context.Context, acc stores.Account, oldName, newName string, isDir, force bool) error
 	MakeDirectory(ctx context.Context, acc stores.Account, path string) error
+	DeleteAll(ctx context.Context) error
+	Close() error
 }
 
 // sizeFromSeeker tries to find out the size of a file.

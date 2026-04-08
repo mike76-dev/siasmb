@@ -161,6 +161,12 @@ func (s *server) RemoveShare(ss stores.Share) error {
 	}
 	sh.mu.Unlock()
 
+	if err := sh.client.DeleteAll(s.ctx); err != nil {
+		return err
+	} else if err := sh.client.Close(); err != nil {
+		return err
+	}
+
 	s.mu.Lock()
 	delete(s.shareList, ss.Name)
 	s.mu.Unlock()
