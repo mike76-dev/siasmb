@@ -21,6 +21,9 @@ const (
 
 var (
 	errShareUnavailable = errors.New("share currently unavailable")
+	errShareExists      = errors.New("share with the same name already exists")
+	errShareNotFound    = errors.New("share not found")
+	errShareInUse       = errors.New("share currently in use by one or more clients")
 )
 
 // share represents a Share object.
@@ -49,6 +52,13 @@ type share struct {
 
 // registerShare adds a new share to the SMB server.
 func (s *server) registerShare(ss stores.Share) (*share, error) {
+	s.mu.Lock()
+	_, found := s.shareList[ss.Name]
+	s.mu.Unlock()
+	if found {
+		return nil, errShareExists
+	}
+
 	sh := &share{
 		name:            ss.Name,
 		backend:         ss.Type,
@@ -133,4 +143,27 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 // serialNo is a helper function that derives the share's "serial number" from its "volume ID".
 func (sh *share) serialNo() uint32 {
 	return uint32(sh.volumeID)
+}
+
+// RemoveShare removes a share from the SMB server.
+func (s *server) RemoveShare(ss stores.Share) error {
+	s.mu.Lock()
+	sh, found := s.shareList[ss.Name]
+	s.mu.Unlock()
+	if !found {
+		return errShareNotFound
+	}
+
+	sh.mu.Lock()
+	if sh.currentUses > 0 {
+		sh.mu.Unlock()
+		return errShareInUse
+	}
+	sh.mu.Unlock()
+
+	s.mu.Lock()
+	delete(s.shareList, ss.Name)
+	s.mu.Unlock()
+
+	return nil
 }

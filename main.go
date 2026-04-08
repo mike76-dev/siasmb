@@ -98,6 +98,7 @@ func main() {
 		server.compressionSupported = true
 		server.chainedCompressionSupported = true
 	}
+	db.WithShares(server)
 
 	go func() {
 		func() {

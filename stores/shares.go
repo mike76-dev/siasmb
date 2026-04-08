@@ -44,6 +44,18 @@ func (db *Database) UnregisterShare(name string) error {
 	if name == "" {
 		return nil
 	}
+
+	s, err := db.GetShare(name)
+	if err != nil {
+		return err
+	} else if s.Name == "" {
+		return nil
+	}
+
+	if err := db.shares.RemoveShare(s); err != nil {
+		return fmt.Errorf("failed to close share: %w", err)
+	}
+
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
 			DELETE FROM shares

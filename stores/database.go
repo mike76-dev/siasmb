@@ -11,8 +11,14 @@ import (
 
 // Database represents a PostgreSQL-backed store.
 type Database struct {
-	ctx  context.Context
-	pool *pgxpool.Pool
+	ctx    context.Context
+	pool   *pgxpool.Pool
+	shares Shares
+}
+
+// Shares is the minimal interface of the share manager.
+type Shares interface {
+	RemoveShare(sh Share) error
 }
 
 // Close closes the underlying database connection.
@@ -31,7 +37,15 @@ func NewStore(ctx context.Context, dc DatabaseConfig) (*Database, error) {
 	}
 
 	log.Printf("Connected to SQL database %s, %s:%d\n", dc.Database, dc.Host, dc.Port)
-	return &Database{ctx, pool}, nil
+	return &Database{
+		ctx:  ctx,
+		pool: pool,
+	}, nil
+}
+
+// WithShares adds a share manager to the Database.
+func (db *Database) WithShares(shares Shares) {
+	db.shares = shares
 }
 
 // txn executes a statement within an SQL transaction.
