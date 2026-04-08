@@ -140,13 +140,15 @@ func (db *Database) AddPartialData(uploadID string, partNumber int, offset uint6
 
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const bufQuery = `
-			INSERT INTO buffers (data)
-			VALUES ($1)
+			INSERT INTO buffers (share_name, data)
+			SELECT u.share_name, $2
+			FROM uploads u
+			WHERE u.upload_id = $1
 			RETURNING id
 		`
 
 		var bufferID uint64
-		if err := tx.QueryRow(ctx, bufQuery, data).Scan(&bufferID); err != nil {
+		if err := tx.QueryRow(ctx, bufQuery, id, data).Scan(&bufferID); err != nil {
 			return fmt.Errorf("couldn't parse buffer ID: %v", err)
 		}
 

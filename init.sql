@@ -77,7 +77,9 @@ CREATE INDEX idx_objects_lookup_directory ON objects (directory_id);
 
 CREATE TABLE buffers (
     id BIGSERIAL PRIMARY KEY,
-    data BYTEA NOT NULL
+    share_name TEXT NOT NULL,
+    data BYTEA NOT NULL,
+    CONSTRAINT buffers_share_fk FOREIGN KEY (share_name) REFERENCES shares(share_name) ON DELETE CASCADE
 );
 
 CREATE TABLE metadata (
