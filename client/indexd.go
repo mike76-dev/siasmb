@@ -219,7 +219,7 @@ func (ic *IndexdClient) Read(ctx context.Context, acc stores.Account, path strin
 
 // StartUpload initiates a multipart upload.
 func (ic *IndexdClient) StartUpload(ctx context.Context, acc stores.Account, path string) (uploadID string, err error) {
-	return ic.db.CreateUpload(acc, ic.share, path, true)
+	return ic.db.CreateUpload(acc, ic.share, path)
 }
 
 // AbortUpload aborts an initiated multipart upload.

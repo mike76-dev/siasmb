@@ -79,17 +79,19 @@ func (db *Database) ListObjects(acc Account, shareName, path string) (objects []
 				o.modified_at,
 				FALSE AS is_dir
 			FROM objects o
+			JOIN accounts owner ON owner.id = o.account
+			LEFT JOIN directories od
+				ON od.share_name = o.share_name
+				AND od.id = o.directory_id
 			CROSS JOIN caller c
 			WHERE o.share_name = $1
 				AND o.directory_id IS NOT DISTINCT FROM $2
 				AND (
 					o.account = c.id
-					OR (o.private = FALSE AND EXISTS (
-						SELECT 1
-						FROM accounts a
-						WHERE a.id = o.account
-							AND a.workgroup = c.workgroup
-					))
+					OR (
+						od.private = FALSE
+						AND owner.workgroup = c.workgroup
+					)
 				)
 
 			ORDER BY full_path
@@ -173,12 +175,18 @@ func (db *Database) DirectoryEmpty(acc Account, shareName, path string) (empty b
 					SELECT 1
 					FROM objects o
 					JOIN accounts owner ON o.account = owner.id
+					LEFT JOIN directories od
+						ON od.share_name = o.share_name
+						AND od.id = o.directory_id
 					CROSS JOIN caller c
 					WHERE o.share_name = $1
 						AND o.directory_id IS NOT DISTINCT FROM $2
 						AND (
 							o.account = c.id
-							OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+							OR (
+								od.private = FALSE
+								AND owner.workgroup = c.workgroup
+							)
 						)
 				)
 			) AS is_empty
@@ -275,12 +283,18 @@ func (db *Database) Object(acc Account, shareName, path string) (object ObjectMe
 					FALSE AS is_dir
 				FROM objects o
 				JOIN accounts owner ON owner.id = o.account
+				LEFT JOIN directories od
+					ON od.share_name = o.share_name
+					AND od.id = o.directory_id
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path = $2
 					AND (
 						o.account = c.id
-						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+						OR (
+							od.private = FALSE
+							AND owner.workgroup = c.workgroup
+						)
 					)
 			) t
 			LIMIT 1
@@ -411,10 +425,7 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path = $2
-					AND (
-						o.account = c.id
-						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
-					)
+					AND o.account = c.id
 			),
 			dst_parent AS (
 				SELECT d.id, d.full_path
@@ -574,10 +585,7 @@ func (db *Database) RenameDirectory(acc Account, share string, oldPath, newPath 
 				WHERE owner.id = o.account
 					AND o.share_name = $1
 					AND o.full_path LIKE t.old_path || '/%%'
-					AND (
-						o.account = c.id
-						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
-					)
+					AND o.account = c.id
 			)
 			UPDATE directories d
 			SET
@@ -614,12 +622,18 @@ func (db *Database) DeleteFile(acc Account, share string, path string) error {
 				SELECT o.id
 				FROM objects o
 				JOIN accounts owner ON owner.id = o.account
+				LEFT JOIN directories od
+					ON od.share_name = o.share_name
+					AND od.id = o.directory_id
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path = $2
 					AND (
 						o.account = c.id
-						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+						OR (
+							od.private = FALSE
+							AND owner.workgroup = c.workgroup
+						)
 					)
 			),
 			doomed_buffers AS (

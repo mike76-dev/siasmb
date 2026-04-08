@@ -21,7 +21,7 @@ type SlabSlice struct {
 }
 
 // CreateUpload creates a new upload entry in the database and returns the generated upload ID.
-func (db *Database) CreateUpload(acc Account, share, path string, private bool) (uploadID string, err error) {
+func (db *Database) CreateUpload(acc Account, share, path string) (uploadID string, err error) {
 	path = normalizePath(path)
 	dir, name := splitPath(path)
 	if name == "" {
@@ -63,8 +63,7 @@ func (db *Database) CreateUpload(acc Account, share, path string, private bool) 
 				directory_id,
 				name,
 				full_path,
-				account,
-				private
+				account
 			)
 			SELECT
 				$4,
@@ -72,12 +71,11 @@ func (db *Database) CreateUpload(acc Account, share, path string, private bool) 
 				p.id,
 				$5,
 				$6,
-				$3,
-				$7
+				$3
 			FROM parent p
 		`
 
-		_, err = tx.Exec(ctx, query, share, dir, acc.ID, id, name, path, private)
+		_, err = tx.Exec(ctx, query, share, dir, acc.ID, id, name, path)
 		return err
 	})
 
@@ -234,8 +232,7 @@ func (db *Database) FinalizeUpload(uploadID string) error {
 					u.directory_id,
 					u.name,
 					u.full_path,
-					u.account,
-					u.private
+					u.account
 				FROM uploads u
 				WHERE u.upload_id = $1
 			),
@@ -246,8 +243,7 @@ func (db *Database) FinalizeUpload(uploadID string) error {
 					name,
 					full_path,
 					size,
-					account,
-					private
+					account
 				)
 				SELECT
 					u.share_name,
@@ -255,8 +251,7 @@ func (db *Database) FinalizeUpload(uploadID string) error {
 					u.name,
 					u.full_path,
 					COALESCE(SUM(p.data_length), 0),
-					u.account,
-					u.private
+					u.account
 				FROM target_upload u
 				LEFT JOIN parts p ON p.upload_id = u.id
 				GROUP BY
@@ -265,8 +260,7 @@ func (db *Database) FinalizeUpload(uploadID string) error {
 					u.directory_id,
 					u.name,
 					u.full_path,
-					u.account,
-					u.private
+					u.account
 				RETURNING id
 			),
 			copied_metadata AS (
@@ -291,7 +285,7 @@ func (db *Database) FinalizeUpload(uploadID string) error {
 				ORDER BY p.obj_offset
 				RETURNING id
 			),
-			deketed_upload AS (
+			deleted_upload AS (
 				DELETE FROM uploads u
 				USING target_upload t
 				WHERE u.id = t.id
@@ -368,12 +362,18 @@ func (db *Database) ListSlabs(acc Account, share, path string) (slabs []types.Ha
 				SELECT o.id, o.full_path
 				FROM objects o
 				JOIN accounts owner ON owner.id = o.account
+				LEFT JOIN directories od
+					ON od.share_name = o.share_name
+					AND od.id = o.directory_id
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path = $2
 					AND (
 						o.account = c.id
-						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+						OR (
+							od.private = FALSE
+							AND owner.workgroup = c.workgroup
+						)
 					)
 			),
 			target_dir AS (
@@ -398,13 +398,19 @@ func (db *Database) ListSlabs(acc Account, share, path string) (slabs []types.Ha
 				SELECT o.id
 				FROM objects o
 				JOIN accounts owner ON owner.id = o.account
+				LEFT JOIN directories od
+					ON od.share_name = o.share_name
+					AND od.id = o.directory_id
 				JOIN target_dir td ON TRUE
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path LIKE td.full_path || '/%%'
 					AND (
 						o.account = c.id
-						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+						OR (
+							od.private = FALSE
+							AND owner.workgroup = c.workgroup
+						)
 					)
 			),
 			target_exists AS (
@@ -466,12 +472,18 @@ func (db *Database) GetMetadata(acc Account, share, path string) (slabs []SlabSl
 				SELECT o.id
 				FROM objects o
 				JOIN accounts owner ON owner.id = o.account
+				LEFT JOIN directories od
+					ON od.share_name = o.share_name
+					AND od.id = o.directory_id
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path = $2
 					AND (
 						o.account = c.id
-						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+						OR (
+							od.private = FALSE
+							AND owner.workgroup = c.workgroup
+						)
 					)
 			)
 			SELECT
