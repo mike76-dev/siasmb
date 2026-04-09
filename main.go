@@ -86,7 +86,7 @@ func main() {
 	defer l.Close()
 
 	// Start the SMB server.
-	server := newServer(l, db, cfg.Debug, cfg.Indexd)
+	server := newServer(ctx, l, db, cfg.Debug, cfg.Indexd)
 	if smb2.MaxSupportedDialect != smb2.SMB_DIALECT_202 {
 		server.serverCapabilities |= smb2.GLOBAL_CAP_LARGE_MTU
 	}
@@ -98,6 +98,7 @@ func main() {
 		server.compressionSupported = true
 		server.chainedCompressionSupported = true
 	}
+	db.WithShares(server)
 
 	go func() {
 		func() {
@@ -129,8 +130,12 @@ func main() {
 		server.mu.Lock()
 		server.enabled = false
 		conns := make([]*connection, 0, len(server.connectionList))
+		shares := make([]*share, 0, len(server.shareList))
 		for _, c := range server.connectionList {
 			conns = append(conns, c)
+		}
+		for _, s := range server.shareList {
+			shares = append(shares, s)
 		}
 		server.mu.Unlock()
 
@@ -138,6 +143,10 @@ func main() {
 			log.Printf("Closing connection from client %s\n", connection.clientName)
 			connection.conn.Close()
 			connection.once.Do(func() { close(connection.closeChan) })
+		}
+
+		for _, share := range shares {
+			share.client.Close()
 		}
 
 		apiSrv.Close()

@@ -368,7 +368,7 @@ func (rc *RenterdClient) Parents(ctx context.Context, _ stores.Account, path str
 }
 
 // Read downloads a file from the Sia network.
-func (rc *RenterdClient) Read(ctx context.Context, path string, offset, length uint64, buf io.Writer) (err error) {
+func (rc *RenterdClient) Read(ctx context.Context, _ stores.Account, path string, offset, length uint64, buf io.Writer) (err error) {
 	values := url.Values{}
 	values.Set("bucket", rc.bucket)
 
@@ -408,7 +408,7 @@ func (rc *RenterdClient) Read(ctx context.Context, path string, offset, length u
 }
 
 // StartUpload initiates a multipart upload.
-func (rc *RenterdClient) StartUpload(ctx context.Context, path string) (uploadID string, err error) {
+func (rc *RenterdClient) StartUpload(ctx context.Context, _ stores.Account, path string) (uploadID string, err error) {
 	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
 		return
 	}
@@ -550,4 +550,15 @@ func (rc *RenterdClient) Rename(ctx context.Context, _ stores.Account, oldName, 
 		To:     "/" + newName,
 		Mode:   mode,
 	}, nil)
+}
+
+// DeleteAll deletes all objects on the share.
+func (rc *RenterdClient) DeleteAll(ctx context.Context) error {
+	// `renterd` maintains all objects in the internal database, so we don't need to worry about this.
+	return nil
+}
+
+// Close closes the client and releases all resources.
+func (rc *RenterdClient) Close() error {
+	return nil
 }

@@ -21,6 +21,9 @@ const (
 
 var (
 	errShareUnavailable = errors.New("share currently unavailable")
+	errShareExists      = errors.New("share with the same name already exists")
+	errShareNotFound    = errors.New("share not found")
+	errShareInUse       = errors.New("share currently in use by one or more clients")
 )
 
 // share represents a Share object.
@@ -37,17 +40,25 @@ type share struct {
 	compressData    bool
 
 	// Auxiliary fields.
-	client    client.Client
-	backend   string
-	bucket    string
-	appKey    types.PrivateKey
-	createdAt time.Time
-	volumeID  uint64
-	mu        sync.Mutex
+	client     client.Client
+	dataShards uint8
+	backend    string
+	bucket     string
+	appKey     types.PrivateKey
+	createdAt  time.Time
+	volumeID   uint64
+	mu         sync.Mutex
 }
 
 // registerShare adds a new share to the SMB server.
 func (s *server) registerShare(ss stores.Share) (*share, error) {
+	s.mu.Lock()
+	_, found := s.shareList[ss.Name]
+	s.mu.Unlock()
+	if found {
+		return nil, errShareExists
+	}
+
 	sh := &share{
 		name:            ss.Name,
 		backend:         ss.Type,
@@ -61,6 +72,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		fileSecurity:    make(map[string]uint32),
 		encryptData:     s.encryptData,
 		compressData:    s.compressionSupported,
+		dataShards:      ss.DataShards,
 	}
 
 	switch sh.backend {
@@ -76,7 +88,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		if err != nil {
 			return nil, err
 		}
-		sh.client = client.NewIndexdClient(s.store, sdkClient, ss.Name, s.cfg.DataShards, s.cfg.ParityShards)
+		sh.client = client.NewIndexdClient(s.store, sdkClient, ss.Name, ss.DataShards, ss.ParityShards)
 	case "renterd":
 		sh.client = client.NewRenterdClient(ss.ServerName, ss.Password, ss.Bucket)
 	default:
@@ -131,4 +143,33 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 // serialNo is a helper function that derives the share's "serial number" from its "volume ID".
 func (sh *share) serialNo() uint32 {
 	return uint32(sh.volumeID)
+}
+
+// RemoveShare removes a share from the SMB server.
+func (s *server) RemoveShare(ss stores.Share) error {
+	s.mu.Lock()
+	sh, found := s.shareList[ss.Name]
+	s.mu.Unlock()
+	if !found {
+		return errShareNotFound
+	}
+
+	sh.mu.Lock()
+	if sh.currentUses > 0 {
+		sh.mu.Unlock()
+		return errShareInUse
+	}
+	sh.mu.Unlock()
+
+	if err := sh.client.DeleteAll(s.ctx); err != nil {
+		return err
+	} else if err := sh.client.Close(); err != nil {
+		return err
+	}
+
+	s.mu.Lock()
+	delete(s.shareList, ss.Name)
+	s.mu.Unlock()
+
+	return nil
 }

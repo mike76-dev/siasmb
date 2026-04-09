@@ -485,7 +485,7 @@ func (api *API) shareHandlerDELETE(w http.ResponseWriter, req *http.Request, ps 
 	}
 
 	if err := api.store.UnregisterShare(shareName); err != nil {
-		log.Printf("failed to find share: %v", err)
+		log.Printf("failed to remove share: %v", err)
 		writeError(w, "internal error", http.StatusInternalServerError)
 		return
 	}

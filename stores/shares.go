@@ -13,24 +13,37 @@ import (
 
 // Share represents a renterd bucket, which is mounted as a remote share.
 type Share struct {
-	Name       string           `json:"name"`
-	Type       string           `json:"type"`
-	ServerName string           `json:"serverName"`
-	Password   string           `json:"password,omitempty"`
-	Bucket     string           `json:"bucket,omitempty"`
-	Remark     string           `json:"remark,omitempty"`
-	CreatedAt  time.Time        `json:"createdAt,omitempty"`
-	AppKey     types.PrivateKey `json:"appKey,omitempty"`
+	Name         string           `json:"name"`
+	Type         string           `json:"type"`
+	ServerName   string           `json:"serverName"`
+	Password     string           `json:"password,omitempty"`
+	Bucket       string           `json:"bucket,omitempty"`
+	Remark       string           `json:"remark,omitempty"`
+	CreatedAt    time.Time        `json:"createdAt,omitempty"`
+	DataShards   uint8            `json:"dataShards,omitempty"`
+	ParityShards uint8            `json:"parityShards,omitempty"`
+	AppKey       types.PrivateKey `json:"appKey,omitempty"`
 }
 
 // RegisterShare registers a new share in the database.
 func (db *Database) RegisterShare(s Share) error {
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
-			INSERT INTO shares (share_name, share_type, server_name, api_password, bucket, remark, created_at, app_key)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+			INSERT INTO shares (
+				share_name,
+				share_type,
+				server_name,
+				api_password,
+				bucket,
+				remark,
+				created_at,
+				data_shards,
+				parity_shards,
+				app_key
+			)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 		`
-		_, err := tx.Exec(ctx, query, s.Name, s.Type, s.ServerName, s.Password, s.Bucket, s.Remark, time.Now(), s.AppKey)
+		_, err := tx.Exec(ctx, query, s.Name, s.Type, s.ServerName, s.Password, s.Bucket, s.Remark, time.Now(), s.DataShards, s.ParityShards, s.AppKey)
 		if err != nil {
 			return fmt.Errorf("failed to register share: %w", err)
 		} else {
@@ -44,6 +57,18 @@ func (db *Database) UnregisterShare(name string) error {
 	if name == "" {
 		return nil
 	}
+
+	s, err := db.GetShare(name)
+	if err != nil {
+		return err
+	} else if s.Name == "" {
+		return nil
+	}
+
+	if err := db.shares.RemoveShare(s); err != nil {
+		return fmt.Errorf("failed to close share: %w", err)
+	}
+
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
 			DELETE FROM shares
@@ -65,28 +90,40 @@ func (db *Database) GetShare(name string) (s Share, err error) {
 	}
 	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
-			SELECT share_type, server_name, api_password, bucket, remark, created_at, app_key
+			SELECT
+				share_type,
+				server_name,
+				api_password,
+				bucket,
+				remark,
+				created_at,
+				data_shards,
+				parity_shards,
+				app_key
 			FROM shares
 			WHERE share_name = $1
 		`
 		var backend, server, password, bucket, remark string
 		var created time.Time
+		var dataShards, parityShards int
 		var appKey types.PrivateKey
-		err = tx.QueryRow(ctx, query, name).Scan(&backend, &server, &password, &bucket, &remark, &created, &appKey)
+		err = tx.QueryRow(ctx, query, name).Scan(&backend, &server, &password, &bucket, &remark, &created, &dataShards, &parityShards, &appKey)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		} else if err != nil {
 			return fmt.Errorf("failed to retrieve share: %w", err)
 		}
 		s = Share{
-			Name:       name,
-			Type:       backend,
-			ServerName: server,
-			Password:   password,
-			Bucket:     bucket,
-			Remark:     remark,
-			CreatedAt:  created,
-			AppKey:     appKey,
+			Name:         name,
+			Type:         backend,
+			ServerName:   server,
+			Password:     password,
+			Bucket:       bucket,
+			Remark:       remark,
+			CreatedAt:    created,
+			DataShards:   uint8(dataShards),
+			ParityShards: uint8(parityShards),
+			AppKey:       appKey,
 		}
 		return nil
 	})
@@ -97,7 +134,17 @@ func (db *Database) GetShare(name string) (s Share, err error) {
 func (db *Database) GetShares(acc Account) (shares []Share, err error) {
 	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
-			SELECT DISTINCT s.share_name, s.share_type, s.server_name, s.api_password, s.bucket, s.remark, s.created_at, s.app_key
+			SELECT DISTINCT
+				s.share_name,
+				s.share_type,
+				s.server_name,
+				s.api_password,
+				s.bucket,
+				s.remark,
+				s.created_at,
+				s.data_shards,
+				s.parity_shards,
+				s.app_key
 			FROM shares AS s
 			JOIN policies AS p
 			ON p.share_name = s.share_name
@@ -115,19 +162,22 @@ func (db *Database) GetShares(acc Account) (shares []Share, err error) {
 		for rows.Next() {
 			var name, backend, server, password, bucket, remark string
 			var created time.Time
+			var dataShards, parityShards int
 			var appKey types.PrivateKey
-			if err := rows.Scan(&name, &backend, &server, &password, &bucket, &remark, &created, &appKey); err != nil {
+			if err := rows.Scan(&name, &backend, &server, &password, &bucket, &remark, &created, &dataShards, &parityShards, &appKey); err != nil {
 				return fmt.Errorf("failed to retrieve share: %w", err)
 			}
 			shares = append(shares, Share{
-				Name:       name,
-				Type:       backend,
-				ServerName: server,
-				Password:   password,
-				Bucket:     bucket,
-				Remark:     remark,
-				CreatedAt:  created,
-				AppKey:     appKey,
+				Name:         name,
+				Type:         backend,
+				ServerName:   server,
+				Password:     password,
+				Bucket:       bucket,
+				Remark:       remark,
+				CreatedAt:    created,
+				DataShards:   uint8(dataShards),
+				ParityShards: uint8(parityShards),
+				AppKey:       appKey,
 			})
 		}
 		return nil

@@ -46,6 +46,7 @@ type upload struct {
 	pending    map[uint64]*uploadChunk
 	buf        []byte
 	bufOffset  uint64
+	maxLength  uint64
 	mu         sync.Mutex
 }
 
@@ -343,6 +344,9 @@ func (op *open) fileAllInformation() []byte {
 		AccessInfo: smb2.FileAccessInfo{
 			AccessFlags: op.grantedAccess,
 		},
+		PositionInfo: smb2.FilePositionInfo{
+			CurrentByteOffset: size,
+		},
 		ModeInfo: smb2.FileModeInfo{
 			Mode: op.createOptions,
 		},
@@ -576,9 +580,9 @@ func (op *open) getObjectID() []byte {
 // read checks if the requested chunk of data has already been downloaded. If so, it retrieves the data
 // from the buffer. If not, it downloads it from the Sia network and caches it.
 func (op *open) read(offset, length uint64) []byte {
-	readData := func(o, l uint64) ([]byte, error) {
+	readData := func(acc stores.Account, o, l uint64) ([]byte, error) {
 		var buf bytes.Buffer
-		err := op.treeConnect.share.client.Read(op.ctx, op.pathName, o, l, &buf)
+		err := op.treeConnect.share.client.Read(op.ctx, acc, op.pathName, o, l, &buf)
 		if err != nil {
 			return nil, err
 		}
@@ -595,6 +599,12 @@ func (op *open) read(offset, length uint64) []byte {
 
 	var result []byte
 	remaining := int64(length)
+
+	acc, err := op.session.connection.server.store.FindAccount(op.session.userName, op.session.workgroup)
+	if err != nil {
+		log.Printf("Access denied (%s): %v", op.pathName, err)
+		return nil
+	}
 
 	op.mu.Lock()
 	defer op.mu.Unlock()
@@ -616,7 +626,7 @@ func (op *open) read(offset, length uint64) []byte {
 				toRead = op.size - chunkOffset
 			}
 
-			data, err := readData(chunkOffset, toRead)
+			data, err := readData(acc, chunkOffset, toRead)
 			if err != nil {
 				log.Printf("Error reading object: %s: %v", op.pathName, err)
 				return nil
@@ -649,7 +659,12 @@ func (op *open) startUpload() error {
 		return nil
 	}
 
-	id, err := op.treeConnect.share.client.StartUpload(op.ctx, op.pathName)
+	acc, err := op.session.connection.server.store.FindAccount(op.session.userName, op.session.workgroup)
+	if err != nil {
+		return err
+	}
+
+	id, err := op.treeConnect.share.client.StartUpload(op.ctx, acc, op.pathName)
 	if err != nil {
 		return err
 	}
@@ -659,6 +674,7 @@ func (op *open) startUpload() error {
 		pending:    make(map[uint64]*uploadChunk),
 		nextOffset: 0,
 		bufOffset:  0,
+		maxLength:  uint64(op.treeConnect.share.dataShards) * proto.SectorSize,
 	}
 
 	return nil
@@ -700,10 +716,18 @@ func (op *open) write(offset uint64, data []byte) error {
 		u.totalSize += uint64(len(ch.data))
 		u.nextOffset += uint64(len(ch.data))
 		delete(u.pending, ch.offset)
+
+		op.mu.Lock()
+		if op.pendingUpload == u {
+			op.size = u.totalSize
+			op.allocated = u.totalSize
+			op.lastModified = time.Now()
+		}
+		op.mu.Unlock()
 	}
 
-	for uint64(len(u.buf)) >= proto.SectorSize {
-		sector := u.buf[:proto.SectorSize]
+	for uint64(len(u.buf)) >= u.maxLength {
+		sector := u.buf[:u.maxLength]
 		partOffset := u.bufOffset
 
 		u.partCount++
@@ -714,7 +738,7 @@ func (op *open) write(offset uint64, data []byte) error {
 			u.uploadID,
 			u.partCount,
 			partOffset,
-			proto.SectorSize,
+			u.maxLength,
 		)
 		if err != nil {
 			return err
@@ -725,8 +749,8 @@ func (op *open) write(offset uint64, data []byte) error {
 			ETag:       eTag,
 		})
 
-		u.buf = u.buf[proto.SectorSize:]
-		u.bufOffset += proto.SectorSize
+		u.buf = u.buf[u.maxLength:]
+		u.bufOffset += u.maxLength
 	}
 
 	return nil

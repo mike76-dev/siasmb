@@ -16,5 +16,3 @@ indexd:
   logoURL: https://example.com/logo.png
   serviceURL: https://example.com/service
   seedPhrase: ''
-  dataShards: 10
-  parityShards: 20

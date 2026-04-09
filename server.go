@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
 	"net"
 	"sync"
@@ -68,10 +69,11 @@ type server struct {
 	store           *stores.Database
 	debug           bool
 	cfg             stores.IndexdConfig
+	ctx             context.Context
 }
 
 // newServer returns an initialized SMB server.
-func newServer(l net.Listener, db *stores.Database, debug bool, cfg stores.IndexdConfig) *server {
+func newServer(ctx context.Context, l net.Listener, db *stores.Database, debug bool, cfg stores.IndexdConfig) *server {
 	s := &server{
 		enabled:            true,
 		serverGuid:         uuid.New(),
@@ -85,6 +87,7 @@ func newServer(l net.Listener, db *stores.Database, debug bool, cfg stores.Index
 		store:              db,
 		debug:              debug,
 		cfg:                cfg,
+		ctx:                ctx,
 	}
 	s.stats.start = time.Now()
 	return s

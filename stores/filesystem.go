@@ -18,7 +18,6 @@ var (
 
 // ObjectMeta represents the metadata of an object in the share.
 type ObjectMeta struct {
-	Key        []byte
 	Path       string
 	Size       uint64
 	CreatedAt  time.Time
@@ -53,7 +52,6 @@ func (db *Database) ListObjects(acc Account, shareName, path string) (objects []
 				WHERE id = $3
 			)
 			SELECT
-				NULL::bytea AS key,
 				d.full_path,
 				0::bigint AS size,
 				d.created_at,
@@ -75,24 +73,25 @@ func (db *Database) ListObjects(acc Account, shareName, path string) (objects []
 			UNION ALL
 
 			SELECT
-				o.object_key,
 				o.full_path,
 				o.size,
 				o.created_at,
 				o.modified_at,
 				FALSE AS is_dir
 			FROM objects o
+			JOIN accounts owner ON owner.id = o.account
+			LEFT JOIN directories od
+				ON od.share_name = o.share_name
+				AND od.id = o.directory_id
 			CROSS JOIN caller c
 			WHERE o.share_name = $1
 				AND o.directory_id IS NOT DISTINCT FROM $2
 				AND (
 					o.account = c.id
-					OR (o.private = FALSE AND EXISTS (
-						SELECT 1
-						FROM accounts a
-						WHERE a.id = o.account
-							AND a.workgroup = c.workgroup
-					))
+					OR (
+						od.private = FALSE
+						AND owner.workgroup = c.workgroup
+					)
 				)
 
 			ORDER BY full_path
@@ -121,7 +120,7 @@ func (db *Database) ListObjects(acc Account, shareName, path string) (objects []
 
 		for rows.Next() {
 			var obj ObjectMeta
-			if err := rows.Scan(&obj.Key, &obj.Path, &obj.Size, &obj.CreatedAt, &obj.ModifiedAt, &obj.IsDir); err != nil {
+			if err := rows.Scan(&obj.Path, &obj.Size, &obj.CreatedAt, &obj.ModifiedAt, &obj.IsDir); err != nil {
 				return fmt.Errorf("failed to scan object: %v", err)
 			}
 			objects = append(objects, obj)
@@ -176,12 +175,18 @@ func (db *Database) DirectoryEmpty(acc Account, shareName, path string) (empty b
 					SELECT 1
 					FROM objects o
 					JOIN accounts owner ON o.account = owner.id
+					LEFT JOIN directories od
+						ON od.share_name = o.share_name
+						AND od.id = o.directory_id
 					CROSS JOIN caller c
 					WHERE o.share_name = $1
 						AND o.directory_id IS NOT DISTINCT FROM $2
 						AND (
 							o.account = c.id
-							OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+							OR (
+								od.private = FALSE
+								AND owner.workgroup = c.workgroup
+							)
 						)
 				)
 			) AS is_empty
@@ -250,10 +255,9 @@ func (db *Database) Object(acc Account, shareName, path string) (object ObjectMe
 				FROM accounts
 				WHERE id = $3
 			)
-			SELECT key, path, size, created_at, modified_at, is_dir
+			SELECT path, size, created_at, modified_at, is_dir
 			FROM (
 				SELECT
-					NULL::bytea AS key,
 					d.full_path AS path,
 					0::bigint AS size,
 					d.created_at,
@@ -272,7 +276,6 @@ func (db *Database) Object(acc Account, shareName, path string) (object ObjectMe
 				UNION ALL
 
 				SELECT
-					o.object_key AS key,
 					o.full_path AS path,
 					o.size,
 					o.created_at,
@@ -280,18 +283,24 @@ func (db *Database) Object(acc Account, shareName, path string) (object ObjectMe
 					FALSE AS is_dir
 				FROM objects o
 				JOIN accounts owner ON owner.id = o.account
+				LEFT JOIN directories od
+					ON od.share_name = o.share_name
+					AND od.id = o.directory_id
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path = $2
 					AND (
 						o.account = c.id
-						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+						OR (
+							od.private = FALSE
+							AND owner.workgroup = c.workgroup
+						)
 					)
 			) t
 			LIMIT 1
 		`
 
-		if err := tx.QueryRow(ctx, query, shareName, path, acc.ID).Scan(&object.Key, &object.Path, &object.Size, &object.CreatedAt, &object.ModifiedAt, &object.IsDir); err != nil {
+		if err := tx.QueryRow(ctx, query, shareName, path, acc.ID).Scan(&object.Path, &object.Size, &object.CreatedAt, &object.ModifiedAt, &object.IsDir); err != nil {
 			if err == pgx.ErrNoRows {
 				return ErrNotFound
 			} else {
@@ -416,10 +425,7 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path = $2
-					AND (
-						o.account = c.id
-						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
-					)
+					AND o.account = c.id
 			),
 			dst_parent AS (
 				SELECT d.id, d.full_path
@@ -579,10 +585,7 @@ func (db *Database) RenameDirectory(acc Account, share string, oldPath, newPath 
 				WHERE owner.id = o.account
 					AND o.share_name = $1
 					AND o.full_path LIKE t.old_path || '/%%'
-					AND (
-						o.account = c.id
-						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
-					)
+					AND o.account = c.id
 			)
 			UPDATE directories d
 			SET
@@ -619,24 +622,48 @@ func (db *Database) DeleteFile(acc Account, share string, path string) error {
 				SELECT o.id
 				FROM objects o
 				JOIN accounts owner ON owner.id = o.account
+				LEFT JOIN directories od
+					ON od.share_name = o.share_name
+					AND od.id = o.directory_id
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path = $2
 					AND (
 						o.account = c.id
-						OR (o.private = FALSE AND owner.workgroup = c.workgroup)
+						OR (
+							od.private = FALSE
+							AND owner.workgroup = c.workgroup
+						)
 					)
+			),
+			doomed_buffers AS (
+				SELECT DISTINCT m.buffer_id
+				FROM metadata m
+				JOIN target t ON m.object_id = t.id
+				WHERE m.buffer_id IS NOT NULL
+			),
+			deleted_objects AS (
+				DELETE FROM objects o
+				USING target t
+				WHERE o.id = t.id
+				RETURNING o.id
+			),
+			deleted_buffers AS (
+				DELETE FROM buffers b
+				USING doomed_buffers db
+				WHERE b.id = db.buffer_id
+				RETURNING b.id
 			)
-			DELETE FROM objects o
-			USING target t
-			WHERE o.id = t.id
+			SELECT COUNT(*)
+			FROM deleted_objects
 		`
 
-		tag, err := tx.Exec(ctx, query, share, path, acc.ID)
+		var n int64
+		err := tx.QueryRow(ctx, query, share, path, acc.ID).Scan(&n)
 		if err != nil {
 			return fmt.Errorf("failed to delete file: %v", err)
 		}
-		if tag.RowsAffected() == 0 {
+		if n == 0 {
 			return ErrNotFound
 		}
 		return nil
@@ -665,28 +692,55 @@ func (db *Database) DeleteDirectory(acc Account, share string, path string) erro
 						OR (d.private = FALSE AND owner.workgroup = c.workgroup)
 					)
 			),
+			target_objects AS (
+				SELECT o.id
+				FROM objects o
+				JOIN src s ON TRUE
+				WHERE o.share_name = $1
+					AND o.full_path LIKE s.full_path || '/%%'
+			),
+			doomed_buffers AS (
+				SELECT DISTINCT m.buffer_id
+				FROM metadata m
+				JOIN target_objects t ON m.object_id = t.id
+				WHERE m.buffer_id IS NOT NULL
+			),
 			delete_files AS (
 				DELETE FROM objects o
 				USING src s
 				WHERE o.share_name = $1
 					AND o.full_path LIKE s.full_path || '/%%'
+				RETURNING o.id
 			),
 			delete_dirs AS (
 				DELETE FROM directories d
 				USING src s
 				WHERE d.share_name = $1
 					AND d.full_path LIKE s.full_path || '/%%'
+				RETURNING d.id
+			),
+			delete_root AS (
+				DELETE FROM directories d
+				USING src s
+				WHERE d.id = s.id
+				RETURNING d.id
+			),
+			deleted_buffers AS (
+				DELETE FROM buffers b
+				USING doomed_buffers db
+				WHERE b.id = db.buffer_id
+				RETURNING b.id
 			)
-			DELETE FROM directories d
-			USING src s
-			WHERE d.id = s.id
+			SELECT COUNT(*)
+			FROM delete_root
 		`
 
-		tag, err := tx.Exec(ctx, query, share, path, acc.ID)
+		var n int64
+		err := tx.QueryRow(ctx, query, share, path, acc.ID).Scan(&n)
 		if err != nil {
 			return fmt.Errorf("failed to delete directory: %v", err)
 		}
-		if tag.RowsAffected() == 0 {
+		if n == 0 {
 			return ErrNotFound
 		}
 		return nil
