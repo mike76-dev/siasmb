@@ -2,9 +2,10 @@
 This is an SMB server integrated into the Sia decentralized cloud storage. Users can connect to it from their PCs and access the Sia storage like they would normally do with a regular remote drive.
 
 ## Prerequisites
-* At least one `renterd` node running either locally or on a remote machine is required. The node needs to be funded, have the minimal required number of active storage contracts, and be accessible from the machine where the server is running. `indexd` nodes are not fully supported yet.
-Even though it is possible to use a single or multiple remote nodes, it is recommended to run the node locally, to avoid an overhead caused by the additional Internet traffic.
+* At least one `renterd` or `indexd` node running either locally or on a remote machine is required. The node needs to be funded, have the minimal required number of active storage contracts, and be accessible from the machine where the server is running.
+Even though it is possible to use a single or multiple remote `renterd` nodes, it is recommended to run the node locally, to avoid an overhead caused by the additional Internet traffic.
 How to set up a `renterd` node is described here: [https://github.com/SiaFoundation/renterd](https://github.com/SiaFoundation/renterd).
+The setup process of an `indexd` node is described here: [https://github.com/SiaFoundation/indexd](https://github.com/SiaFoundation/indexd). Alternatively, one can connect to the [Sia Foundation indexer](https://sia.storage/).
 * The SMB port 445 needs to be open on the machine where the server is running.
 
 ## Limitations
@@ -92,8 +93,6 @@ indexd:
   logoURL: https://example.com/logo.png   # URL of the app logo, can be left as it is
   serviceURL: https://example.com/service # URL of the app itself, can be left as it is (SiaSMB has no service page)
   seedPhrase: ''                          # if omitted, the server will generate a new seed phrase and put it here
-  dataShards: 10                          # redundancy settings for file uploads
-  parityShards: 20                        # (dataShards + parityShards = total shards)
 ```
 The server can be started either as a standalone executable or as a service (the latter is preferred). For example, on Linux:
 ```
@@ -109,7 +108,7 @@ curl -u "":<API_PASSWORD> -X POST "http://127.0.0.1:9999/share" -d '{"name":"sha
 ```
 or
 ```
-curl -u "":<API_PASSWORD> -X POST "http://127.0.0.1:9999/share" -d '{"name":"shared","type":"indexd","serverName":"http://127.0.0.1:9982","remark":"indexd"}'
+curl -u "":<API_PASSWORD> -X POST "http://127.0.0.1:9999/share" -d '{"name":"shared","type":"indexd","serverName":"https://sia.storage","remark":"Sia Foundation indexer","dataShards":10,"parityShards":20}'
 ```
 To register a new account, run (for example):
 ```
