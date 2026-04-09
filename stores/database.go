@@ -18,6 +18,7 @@ type Database struct {
 
 // Shares is the minimal interface of the share manager.
 type Shares interface {
+	RegisterShare(sh Share) error
 	RemoveShare(sh Share) error
 }
 

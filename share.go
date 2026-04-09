@@ -50,13 +50,13 @@ type share struct {
 	mu         sync.Mutex
 }
 
-// registerShare adds a new share to the SMB server.
-func (s *server) registerShare(ss stores.Share) (*share, error) {
+// RegisterShare adds a new share to the SMB server.
+func (s *server) RegisterShare(ss stores.Share) error {
 	s.mu.Lock()
 	_, found := s.shareList[ss.Name]
 	s.mu.Unlock()
 	if found {
-		return nil, errShareExists
+		return errShareExists
 	}
 
 	sh := &share{
@@ -86,13 +86,13 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		})
 		sdkClient, err := builder.SDK(ss.AppKey)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		sh.client = client.NewIndexdClient(s.store, sdkClient, ss.Name, ss.DataShards, ss.ParityShards)
 	case "renterd":
 		sh.client = client.NewRenterdClient(ss.ServerName, ss.Password, ss.Bucket)
 	default:
-		return nil, errors.New("unsupported share type")
+		return errors.New("unsupported share type")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -101,12 +101,12 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 	// Get the share information and test the share at the same time.
 	info, err := sh.client.Info(ctx)
 	if err != nil {
-		return nil, errShareUnavailable
+		return errShareUnavailable
 	}
 
 	ars, err := s.store.GetAccounts(ss)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	accs := make(map[int]stores.Account)
@@ -114,7 +114,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		if _, exists := accs[ar.AccountID]; !exists {
 			acc, err := s.store.GetAccountByID(ar.AccountID)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			accs[ar.AccountID] = acc
 		}
@@ -137,7 +137,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 	s.shareList[sh.name] = sh
 	s.mu.Unlock()
 
-	return sh, nil
+	return nil
 }
 
 // serialNo is a helper function that derives the share's "serial number" from its "volume ID".
