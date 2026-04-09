@@ -173,3 +173,42 @@ func (s *server) RemoveShare(ss stores.Share) error {
 
 	return nil
 }
+
+// UpdateAccessRights updates the access policy to the share for the given account.
+func (s *server) UpdateAccessRights(ss stores.Share, ar stores.AccessRights) error {
+	s.mu.Lock()
+	sh, found := s.shareList[ss.Name]
+	s.mu.Unlock()
+	if !found {
+		return errShareNotFound
+	}
+
+	acc, err := s.store.GetAccountByID(ar.AccountID)
+	if err != nil {
+		return err
+	}
+
+	sh.mu.Lock()
+	if ar.ReadAccess || ar.WriteAccess || ar.DeleteAccess || ar.ExecuteAccess {
+		sh.connectSecurity[acc.Workgroup+"/"+acc.Username] = struct{}{}
+		sh.fileSecurity[acc.Workgroup+"/"+acc.Username] = stores.FlagsFromAccessRights(ar)
+	} else {
+		delete(sh.connectSecurity, acc.Workgroup+"/"+acc.Username)
+		delete(sh.fileSecurity, acc.Workgroup+"/"+acc.Username)
+	}
+	sh.mu.Unlock()
+
+	return nil
+}
+
+// RemoveAccess removes the access rights of the given account from all shares.
+func (s *server) RemoveAccess(acc stores.Account) {
+	s.mu.Lock()
+	for _, sh := range s.shareList {
+		sh.mu.Lock()
+		delete(sh.connectSecurity, acc.Workgroup+"/"+acc.Username)
+		delete(sh.fileSecurity, acc.Workgroup+"/"+acc.Username)
+		sh.mu.Unlock()
+	}
+	s.mu.Unlock()
+}

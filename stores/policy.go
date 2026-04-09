@@ -67,6 +67,12 @@ func (db *Database) SetAccessRights(ar AccessRights) error {
 		if err != nil {
 			return fmt.Errorf("failed to update policy: %w", err)
 		} else {
+			sh, err := db.GetShare(ar.ShareName)
+			if err != nil {
+				return fmt.Errorf("failed to retrieve share: %w", err)
+			} else if err := db.shares.UpdateAccessRights(sh, ar); err != nil {
+				return fmt.Errorf("failed to update access rights: %w", err)
+			}
 			return nil
 		}
 	})
@@ -86,9 +92,10 @@ func (db *Database) RemoveAccessRights(share Share, acc Account) error {
 		_, err := tx.Exec(ctx, query, share.Name, acc.ID)
 		if err != nil {
 			return fmt.Errorf("failed to remove policy: %w", err)
-		} else {
-			return nil
+		} else if err := db.shares.UpdateAccessRights(share, AccessRights{AccountID: acc.ID}); err != nil {
+			return fmt.Errorf("failed to update access rights: %w", err)
 		}
+		return nil
 	})
 }
 
@@ -103,6 +110,7 @@ func (db *Database) ClearAccessRights(acc Account) error {
 		if err != nil {
 			return fmt.Errorf("failed to remove policies: %w", err)
 		} else {
+			db.shares.RemoveAccess(acc)
 			return nil
 		}
 	})

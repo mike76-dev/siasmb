@@ -20,6 +20,8 @@ type Database struct {
 type Shares interface {
 	RegisterShare(sh Share) error
 	RemoveShare(sh Share) error
+	UpdateAccessRights(ss Share, ar AccessRights) error
+	RemoveAccess(acc Account)
 }
 
 // Close closes the underlying database connection.
