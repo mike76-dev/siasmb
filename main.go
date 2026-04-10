@@ -161,7 +161,7 @@ func main() {
 			host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 			banned, _, err := db.IsBanned(host)
 			if err != nil {
-				panic(err)
+				log.Printf("Error checking ban status for host %s: %v", host, err)
 			} else if banned {
 				conn.Close()
 				continue

@@ -1,13 +1,14 @@
 package main
 
 import (
+	"log"
 	"net"
 )
 
 // blockHost adds a remote host to the bans store together with the provided reason.
 func (s *server) blockHost(host, reason string) {
 	if err := s.store.BanHost(host, reason); err != nil {
-		panic(err)
+		log.Printf("Error banning host %s: %v", host, err)
 	}
 
 	for addr, c := range s.connectionList {
