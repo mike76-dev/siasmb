@@ -622,6 +622,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		// Validate signature or encryption.
 		if c.negotiateDialect == smb2.SMB_DIALECT_311 {
 			if !tcr.Header().IsFlagSet(smb2.FLAGS_SIGNED) && !tcr.IsEncrypted() {
+				if c.server.debug {
+					log.Println("Unsigned or unencrypted SMB2_TREE_CONNECT request")
+				}
 				return nil, nil, smb2.ErrWrongSecurity
 			}
 		}
@@ -2365,6 +2368,9 @@ func (c *connection) processRequests() {
 		if req != nil {
 			resp, ss, err := c.processRequest(req)
 			if err != nil {
+				if c.server.debug {
+					log.Printf("Error processing request (Message ID: %d, Command: %d): %v", req.Header().MessageID(), req.Header().Command(), err)
+				}
 				c.server.closeConnection(c)
 				return
 			}
