@@ -580,21 +580,28 @@ func (op *open) getObjectID() []byte {
 // read checks if the requested chunk of data has already been downloaded. If so, it retrieves the data
 // from the buffer. If not, it downloads it from the Sia network and caches it.
 func (op *open) read(offset, length uint64) []byte {
+	// Fetch for convenience.
+	op.mu.Lock()
+	chunkSize := op.chunkSize
+	size := op.size
+	path := op.pathName
+	op.mu.Unlock()
+
 	readData := func(acc stores.Account, o, l uint64) ([]byte, error) {
 		var buf bytes.Buffer
-		err := op.treeConnect.share.client.Read(op.ctx, acc, op.pathName, o, l, &buf)
+		err := op.treeConnect.share.client.Read(op.ctx, acc, path, o, l, &buf)
 		if err != nil {
 			return nil, err
 		}
 		return buf.Bytes(), nil
 	}
 
-	if offset >= op.size {
+	if offset >= size {
 		return nil
 	}
 
-	if offset+length >= op.size {
-		length = op.size - offset
+	if offset+length >= size {
+		length = size - offset
 	}
 
 	var result []byte
@@ -602,46 +609,50 @@ func (op *open) read(offset, length uint64) []byte {
 
 	acc, err := op.session.connection.server.store.FindAccount(op.session.userName, op.session.workgroup)
 	if err != nil {
-		log.Printf("Access denied (%s): %v", op.pathName, err)
+		log.Printf("Access denied (%s): %v", path, err)
 		return nil
 	}
 
-	op.mu.Lock()
-	defer op.mu.Unlock()
-
 	for remaining > 0 {
-		chunkOffset := (offset / op.chunkSize) * op.chunkSize
-		chunkStart := offset % op.chunkSize
+		chunkOffset := (offset / chunkSize) * chunkSize
+		chunkStart := offset % chunkSize
 		chunkEnd := chunkStart + uint64(remaining)
 
-		if chunkEnd > op.chunkSize {
-			chunkEnd = op.chunkSize
+		if chunkEnd > chunkSize {
+			chunkEnd = chunkSize
 		}
 
+		op.mu.Lock()
 		if data, ok := op.buffer[chunkOffset]; ok {
+			op.mu.Unlock()
 			result = append(result, data[chunkStart:chunkEnd]...)
 		} else {
-			toRead := op.chunkSize
-			if chunkOffset+toRead > op.size {
-				toRead = op.size - chunkOffset
+			op.mu.Unlock()
+			toRead := chunkSize
+			if chunkOffset+toRead > size {
+				toRead = size - chunkOffset
 			}
 
 			data, err := readData(acc, chunkOffset, toRead)
 			if err != nil {
-				log.Printf("Error reading object: %s: %v", op.pathName, err)
+				log.Printf("Error reading object: %s: %v", path, err)
 				return nil
 			}
 
+			op.mu.Lock()
 			op.buffer[chunkOffset] = data
 			op.cacheOrder = append(op.cacheOrder, chunkOffset)
+			op.mu.Unlock()
 			result = append(result, data[chunkStart:chunkEnd]...)
 		}
 
+		op.mu.Lock()
 		if len(op.buffer) > op.maxCacheSize {
 			oldest := op.cacheOrder[0]
 			delete(op.buffer, oldest)
 			op.cacheOrder = op.cacheOrder[1:]
 		}
+		op.mu.Unlock()
 
 		remaining -= int64(chunkEnd - chunkStart)
 		offset += (chunkEnd - chunkStart)
