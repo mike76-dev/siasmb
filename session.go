@@ -221,7 +221,8 @@ func (ss *session) sign(buf []byte) {
 		case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302:
 			ciph, err := aes.NewCipher(ss.signingKey)
 			if err != nil {
-				panic(err)
+				log.Printf("Error creating cipher for signing: %v", err)
+				return
 			}
 			signer = cmac.New(ciph)
 		case smb2.SMB_DIALECT_311:
@@ -229,7 +230,8 @@ func (ss *session) sign(buf []byte) {
 			case smb2.AES_CMAC:
 				ciph, err := aes.NewCipher(ss.signingKey)
 				if err != nil {
-					panic(err)
+					log.Printf("Error creating cipher for signing: %v", err)
+					return
 				}
 				signer = cmac.New(ciph)
 			case smb2.AES_GMAC:
@@ -242,12 +244,14 @@ func (ss *session) sign(buf []byte) {
 				var err error
 				signer, err = gmac.New(ss.signingKey, nonce)
 				if err != nil {
-					panic(err)
+					log.Printf("Error creating cipher for signing: %v", err)
+					return
 				}
 			default:
 				ciph, err := aes.NewCipher(ss.signingKey)
 				if err != nil {
-					panic(err)
+					log.Printf("Error creating cipher for signing: %v", err)
+					return
 				}
 				signer = cmac.New(ciph)
 			}
@@ -281,7 +285,8 @@ func (ss *session) validateRequest(req *smb2.Request) bool {
 	case smb2.SMB_DIALECT_30, smb2.SMB_DIALECT_302:
 		ciph, err := aes.NewCipher(ss.signingKey)
 		if err != nil {
-			panic(err)
+			log.Printf("Error creating cipher for verifying signature: %v", err)
+			return false
 		}
 		verifier = cmac.New(ciph)
 	case smb2.SMB_DIALECT_311:
@@ -289,7 +294,8 @@ func (ss *session) validateRequest(req *smb2.Request) bool {
 		case smb2.AES_CMAC:
 			ciph, err := aes.NewCipher(ss.signingKey)
 			if err != nil {
-				panic(err)
+				log.Printf("Error creating cipher for verifying signature: %v", err)
+				return false
 			}
 			verifier = cmac.New(ciph)
 		case smb2.AES_GMAC:
@@ -301,12 +307,14 @@ func (ss *session) validateRequest(req *smb2.Request) bool {
 			var err error
 			verifier, err = gmac.New(ss.signingKey, nonce)
 			if err != nil {
-				panic(err)
+				log.Printf("Error creating cipher for verifying signature: %v", err)
+				return false
 			}
 		default:
 			ciph, err := aes.NewCipher(ss.signingKey)
 			if err != nil {
-				panic(err)
+				log.Printf("Error creating cipher for verifying signature: %v", err)
+				return false
 			}
 			verifier = cmac.New(ciph)
 		}
@@ -321,7 +329,8 @@ func (ss *session) validateRequest(req *smb2.Request) bool {
 func (ss *session) encrypt(buf []byte) []byte {
 	ciph, err := aes.NewCipher(ss.encryptionKey)
 	if err != nil {
-		panic(err)
+		log.Printf("Error creating cipher for encryption: %v", err)
+		return nil
 	}
 	var encrypter cipher.AEAD
 	switch ss.connection.negotiateDialect {
@@ -336,7 +345,8 @@ func (ss *session) encrypt(buf []byte) []byte {
 		}
 	}
 	if err != nil {
-		panic(err)
+		log.Printf("Error creating encrypter: %v", err)
+		return nil
 	}
 	nonce := make([]byte, encrypter.NonceSize())
 	rand.Read(nonce)
@@ -357,7 +367,8 @@ func (ss *session) decrypt(buf []byte) []byte {
 	input := append(buf[smb2.SMB2TransformHeaderSize:], smb2.Header(buf).EncryptionSignature()...)
 	ciph, err := aes.NewCipher(ss.decryptionKey)
 	if err != nil {
-		panic(err)
+		log.Printf("Error creating cipher for decryption: %v", err)
+		return nil
 	}
 	var decrypter cipher.AEAD
 	switch ss.connection.negotiateDialect {
@@ -372,7 +383,8 @@ func (ss *session) decrypt(buf []byte) []byte {
 		}
 	}
 	if err != nil {
-		panic(err)
+		log.Printf("Error creating decrypter: %v", err)
+		return nil
 	}
 	msg, err := decrypter.Open(input[:0], smb2.Header(buf).Nonce()[:decrypter.NonceSize()], input, smb2.Header(buf).AssociatedData())
 	if err != nil {
