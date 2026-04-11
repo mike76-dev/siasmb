@@ -179,7 +179,10 @@ func main() {
 
 			// Start serving the connection.
 			go func() {
-				if !server.enabled {
+				server.mu.Lock()
+				enabled := server.enabled
+				server.mu.Unlock()
+				if !enabled {
 					return
 				}
 

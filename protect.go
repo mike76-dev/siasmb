@@ -11,10 +11,20 @@ func (s *server) blockHost(host, reason string) {
 		log.Printf("Error banning host %s: %v", host, err)
 	}
 
+	var conns []*connection
+	s.mu.Lock()
 	for addr, c := range s.connectionList {
-		h, _, _ := net.SplitHostPort(addr)
-		if h == host {
-			s.closeConnection(c)
+		h, _, err := net.SplitHostPort(addr)
+		if err != nil {
+			continue
 		}
+		if h == host {
+			conns = append(conns, c)
+		}
+	}
+	s.mu.Unlock()
+
+	for _, c := range conns {
+		s.closeConnection(c)
 	}
 }
