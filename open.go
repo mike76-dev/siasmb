@@ -20,7 +20,6 @@ import (
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
-	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
@@ -580,11 +579,12 @@ func (op *open) getObjectID() []byte {
 // read checks if the requested chunk of data has already been downloaded. If so, it retrieves the data
 // from the buffer. If not, it downloads it from the Sia network and caches it.
 func (op *open) read(offset, length uint64) []byte {
-	// Fetch for convenience.
+	// Fetch variables for convenience.
 	op.mu.Lock()
-	chunkSize := op.chunkSize
 	size := op.size
 	path := op.pathName
+	chunkSize := op.chunkSize
+	maxCacheSize := op.maxCacheSize
 	op.mu.Unlock()
 
 	readData := func(acc stores.Account, o, l uint64) ([]byte, error) {
@@ -613,6 +613,9 @@ func (op *open) read(offset, length uint64) []byte {
 		return nil
 	}
 
+	op.mu.Lock()
+	defer op.mu.Unlock()
+
 	for remaining > 0 {
 		chunkOffset := (offset / chunkSize) * chunkSize
 		chunkStart := offset % chunkSize
@@ -622,12 +625,9 @@ func (op *open) read(offset, length uint64) []byte {
 			chunkEnd = chunkSize
 		}
 
-		op.mu.Lock()
 		if data, ok := op.buffer[chunkOffset]; ok {
-			op.mu.Unlock()
 			result = append(result, data[chunkStart:chunkEnd]...)
 		} else {
-			op.mu.Unlock()
 			toRead := chunkSize
 			if chunkOffset+toRead > size {
 				toRead = size - chunkOffset
@@ -639,20 +639,16 @@ func (op *open) read(offset, length uint64) []byte {
 				return nil
 			}
 
-			op.mu.Lock()
 			op.buffer[chunkOffset] = data
 			op.cacheOrder = append(op.cacheOrder, chunkOffset)
-			op.mu.Unlock()
 			result = append(result, data[chunkStart:chunkEnd]...)
 		}
 
-		op.mu.Lock()
-		if len(op.buffer) > op.maxCacheSize {
+		if len(op.buffer) > maxCacheSize {
 			oldest := op.cacheOrder[0]
 			delete(op.buffer, oldest)
 			op.cacheOrder = op.cacheOrder[1:]
 		}
-		op.mu.Unlock()
 
 		remaining -= int64(chunkEnd - chunkStart)
 		offset += (chunkEnd - chunkStart)
@@ -685,7 +681,7 @@ func (op *open) startUpload() error {
 		pending:    make(map[uint64]*uploadChunk),
 		nextOffset: 0,
 		bufOffset:  0,
-		maxLength:  uint64(op.treeConnect.share.dataShards) * proto.SectorSize,
+		maxLength:  op.treeConnect.share.maxUploadSize,
 	}
 
 	return nil
