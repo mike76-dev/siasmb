@@ -499,7 +499,11 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				ss.signingRequired = true
 				ss.encryptData = false
 			}
+
+			ss.mu.Lock()
 			ss.idleTime = time.Now()
+			ss.mu.Unlock()
+
 			token = spnego.FinalNegTokenResp
 			if smb2.Is3X(c.negotiateDialect) {
 				c.server.mu.Lock()
@@ -618,6 +622,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		// Validate signature or encryption.
 		if c.negotiateDialect == smb2.SMB_DIALECT_311 {
 			if !tcr.Header().IsFlagSet(smb2.FLAGS_SIGNED) && !tcr.IsEncrypted() {
+				if c.server.debug {
+					log.Println("Unsigned or unencrypted SMB2_TREE_CONNECT request")
+				}
 				return nil, nil, smb2.ErrWrongSecurity
 			}
 		}
@@ -630,7 +637,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.mu.Lock()
 		ss.idleTime = time.Now()
+		ss.mu.Unlock()
+
 		tc, err := c.newTreeConnect(ss, tcr.PathName())
 		if err != nil {
 			if errors.Is(err, errAccessDenied) {
@@ -671,7 +681,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.mu.Lock()
 		ss.idleTime = time.Now()
+		ss.mu.Unlock()
+
 		if err := ss.closeTreeConnect(tdr.Header().TreeID()); err != nil {
 			resp := smb2.NewErrorResponse(tdr, smb2.STATUS_NETWORK_NAME_DELETED, 0, nil)
 			return resp, ss, nil
@@ -940,16 +953,21 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 		}
 
-		if result == smb2.FILE_CREATED && op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // Persist the file for any future requests
+		op.mu.Lock()
+		attr := op.fileAttributes
+		op.mu.Unlock()
+		if result == smb2.FILE_CREATED && attr&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // Persist the file for any future requests
 			tc.mu.Lock()
 			tc.persistedOpens[path] = op
 			tc.mu.Unlock()
 		}
 
 		if result == smb2.FILE_SUPERSEDED || result == smb2.FILE_OVERWRITTEN {
+			op.mu.Lock()
 			op.size = 0
 			op.allocated = 0
 			op.lastModified = time.Now()
+			op.mu.Unlock()
 		}
 
 		respContexts := make(map[uint32][]byte)
@@ -963,12 +981,15 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			case smb2.CREATE_QUERY_ON_DISK_ID:
 				respContexts[id] = smb2.HandleCreateQueryOnDiskID(op.handle, tc.share.volumeID)
 			case smb2.CREATE_ALLOCATION_SIZE: // The file is about to be uploaded, we just got its size
+				op.mu.Lock()
 				op.allocated = binary.LittleEndian.Uint64(ctx)
+				op.mu.Unlock()
 			}
 		}
 
 		resp := &smb2.CreateResponse{}
 		resp.FromRequest(cr)
+		op.mu.Lock()
 		resp.Generate(
 			smb2.OPLOCK_LEVEL_NONE,
 			result,
@@ -980,6 +1001,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			op.durableFileID,
 			respContexts,
 		)
+		op.mu.Unlock()
 
 		gid := req.GroupID()
 		if gid > 0 {
@@ -1031,24 +1053,32 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		if op.pendingUpload != nil { // This SMB2_CLOSE request is a sign for us to flush any active multipart upload
+		op.mu.Lock()
+		pu := op.pendingUpload
+		op.mu.Unlock()
+		if pu != nil { // This SMB2_CLOSE request is a sign for us to flush any active multipart upload
 			if err := op.flush(); err != nil {
 				op.cancelUpload()
 				log.Println("Error completing write:", err)
 			}
 		}
 
-		if op.createOptions&smb2.FILE_DELETE_ON_CLOSE > 0 { // Delete the file or directory
+		op.mu.Lock()
+		co := op.createOptions
+		attr := op.fileAttributes
+		path := op.pathName
+		op.mu.Unlock()
+		if co&smb2.FILE_DELETE_ON_CLOSE > 0 { // Delete the file or directory
 			tc.mu.Lock()
-			delete(tc.persistedOpens, op.pathName)
+			delete(tc.persistedOpens, path)
 			tc.mu.Unlock()
-			if err := tc.share.client.Delete(op.ctx, acc, op.pathName, op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0); err != nil {
-				log.Printf("Error deleting object %s: %v", op.pathName, err)
+			if err := tc.share.client.Delete(op.ctx, acc, path, attr&smb2.FILE_ATTRIBUTE_DIRECTORY > 0); err != nil {
+				log.Printf("Error deleting object %s: %v", path, err)
 			}
 		}
 
 		tc.mu.Lock()
-		_, found = tc.persistedOpens[op.pathName]
+		_, found = tc.persistedOpens[path]
 		tc.mu.Unlock()
 		c.server.closeOpen(op, found)
 
@@ -1072,7 +1102,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		resp := &smb2.CloseResponse{}
 		resp.FromRequest(cr)
+		op.mu.Lock()
 		resp.Generate(op.lastModified, op.size, op.allocated, op.fileAttributes)
+		op.mu.Unlock()
 
 		return resp, ss, nil
 
@@ -1125,7 +1157,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.mu.Lock()
 		ss.idleTime = time.Now()
+		ss.mu.Unlock()
+
 		if rr.Length() > uint32(c.maxReadSize) {
 			resp := smb2.NewErrorResponse(rr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 			return resp, ss, nil
@@ -1138,23 +1173,30 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		if op.grantedAccess&(smb2.FILE_READ_DATA|smb2.GENERIC_READ) == 0 {
+		op.mu.Lock()
+		ga := op.grantedAccess
+		name := op.fileName
+		op.mu.Unlock()
+		if ga&(smb2.FILE_READ_DATA|smb2.GENERIC_READ) == 0 {
 			resp := smb2.NewErrorResponse(rr, smb2.STATUS_ACCESS_DENIED, 0, nil)
 			return resp, ss, nil
 		}
 
 		// A special case: some clients use the SRVSVC named pipe for writing requests to it
 		// and reading responses from it. Usually, an SMB2_IOCTL request serves this purpose.
-		if strings.ToLower(op.fileName) == "srvsvc" {
+		if strings.ToLower(name) == "srvsvc" {
 			if c.negotiateDialect == smb2.SMB_DIALECT_302 || c.negotiateDialect == smb2.SMB_DIALECT_311 {
 				if rr.Flags()&smb2.READFLAG_READ_UNBUFFERED != 0 {
 					resp := smb2.NewErrorResponse(rr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 					return resp, ss, nil
 				}
 			}
-			if op.srvsvcData != nil {
+			op.mu.Lock()
+			data := bytes.Clone(op.srvsvcData)
+			op.mu.Unlock()
+			if data != nil {
 				ip := rpc.InboundPacket{}
-				ip.Read(bytes.NewBuffer(op.srvsvcData))
+				ip.Read(bytes.NewBuffer(data))
 
 				var packet *rpc.OutboundPacket
 				switch ip.Header.PacketType {
@@ -1187,12 +1229,17 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				resp := &smb2.ReadResponse{}
 				resp.FromRequest(rr)
 				resp.Generate(buf.Bytes(), rr.Padding())
+				op.mu.Lock()
 				op.srvsvcData = nil
+				op.mu.Unlock()
 				return resp, ss, nil
 			}
 		}
 
-		if rr.Offset() >= op.size {
+		op.mu.Lock()
+		size := op.size
+		op.mu.Unlock()
+		if rr.Offset() >= size {
 			resp := smb2.NewErrorResponse(rr, smb2.STATUS_END_OF_FILE, 0, nil)
 			return resp, ss, nil
 		}
@@ -1216,8 +1263,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 		go func() {
 			length := uint64(rr.Length())
-			if rr.Offset()+length >= op.size {
-				length = op.size - rr.Offset()
+
+			if rr.Offset()+length >= size {
+				length = size - rr.Offset()
 			}
 
 			var resp smb2.GenericResponse
@@ -1236,6 +1284,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			delete(c.requestList, resp.Header().MessageID())
 			delete(c.asyncCommandList, asyncID)
 			c.mu.Unlock()
+
+			// Check if the context is still valid before sending the response.
+			select {
+			case <-op.ctx.Done():
+				return
+			default:
+			}
 
 			c.server.writeResponse(c, ss, resp)
 		}()
@@ -1262,7 +1317,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.mu.Lock()
 		ss.idleTime = time.Now()
+		ss.mu.Unlock()
+
 		length := uint64(len(wr.Buffer()))
 		if length > c.maxWriteSize {
 			resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
@@ -1276,35 +1334,41 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		op.mu.Lock()
+		co := op.createOptions
+		ga := op.grantedAccess
+		name := op.fileName
+		size := op.size
+		op.mu.Unlock()
 		if c.dialect == "2.1" || c.dialect == "3.0" {
-			if wr.Flags()&smb2.WRITEFLAG_WRITE_THROUGH > 0 && op.createOptions&smb2.FILE_NO_INTERMEDIATE_BUFFERING == 0 {
+			if wr.Flags()&smb2.WRITEFLAG_WRITE_THROUGH > 0 && co&smb2.FILE_NO_INTERMEDIATE_BUFFERING == 0 {
 				resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 				return resp, ss, nil
 			}
 		}
 
 		if c.dialect == "3.0.2" || c.dialect == "3.1.1" {
-			if wr.Flags()&smb2.WRITEFLAG_WRITE_THROUGH > 0 && wr.Flags()&smb2.WRITEFLAG_WRITE_UNBUFFERED == 0 && op.createOptions&smb2.FILE_NO_INTERMEDIATE_BUFFERING == 0 {
+			if wr.Flags()&smb2.WRITEFLAG_WRITE_THROUGH > 0 && wr.Flags()&smb2.WRITEFLAG_WRITE_UNBUFFERED == 0 && co&smb2.FILE_NO_INTERMEDIATE_BUFFERING == 0 {
 				resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 				return resp, ss, nil
 			}
 		}
 
-		if op.fileName != "" && op.fileName[0] == '.' { // Ignore SMB2_WRITE requests to any hidden file (whose name starts with a dot)
+		if name != "" && name[0] == '.' { // Ignore SMB2_WRITE requests to any hidden file (whose name starts with a dot)
 			resp := &smb2.WriteResponse{}
 			resp.FromRequest(wr)
 			resp.Generate(uint32(len(wr.Buffer())))
 			return resp, ss, nil
 		}
 
-		if (length <= op.size && op.grantedAccess&(smb2.FILE_WRITE_DATA|smb2.GENERIC_WRITE) == 0) || op.grantedAccess&(smb2.FILE_APPEND_DATA|smb2.GENERIC_WRITE) == 0 {
+		if (length <= size && ga&(smb2.FILE_WRITE_DATA|smb2.GENERIC_WRITE) == 0) || ga&(smb2.FILE_APPEND_DATA|smb2.GENERIC_WRITE) == 0 {
 			resp := smb2.NewErrorResponse(wr, smb2.STATUS_ACCESS_DENIED, 0, nil)
 			return resp, ss, nil
 		}
 
 		// A special case: some clients use the SRVSVC named pipe for writing requests to it
 		// and reading responses from it. Usually, an SMB2_IOCTL request serves this purpose.
-		if strings.ToLower(op.fileName) == "srvsvc" {
+		if strings.ToLower(name) == "srvsvc" {
 			if smb2.Is3X(c.negotiateDialect) && wr.Flags()&(smb2.WRITEFLAG_WRITE_THROUGH|smb2.WRITEFLAG_WRITE_UNBUFFERED) != 0 {
 				resp := smb2.NewErrorResponse(wr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 				return resp, ss, nil
@@ -1366,6 +1430,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			delete(c.asyncCommandList, asyncID)
 			c.mu.Unlock()
 
+			// Check if the context is still valid before sending the response.
+			select {
+			case <-op.ctx.Done():
+				return
+			default:
+			}
+
 			c.server.writeResponse(c, ss, resp)
 		}()
 
@@ -1425,7 +1496,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		ss.mu.Lock()
 		ss.idleTime = time.Now()
+		ss.mu.Unlock()
+
 		if ir.MaxInputResponse() > uint32(c.maxTransactSize) || ir.MaxOutputResponse() > uint32(c.maxTransactSize) || len(ir.InputBuffer()) > int(c.maxTransactSize) {
 			resp := smb2.NewErrorResponse(ir, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 			return resp, ss, nil
@@ -1499,7 +1573,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			ip.Read(bytes.NewBuffer(ir.InputBuffer()))
 
 			var packet *rpc.OutboundPacket
+			op.mu.Lock()
 			name := strings.ToLower(op.fileName)
+			op.mu.Unlock()
 			switch ip.Header.PacketType {
 			case rpc.PACKET_TYPE_BIND:
 				var addr string
@@ -1683,7 +1759,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				return resp, nil, nil
 			}
 
+			ss.mu.Lock()
 			ss.idleTime = time.Now()
+			ss.mu.Unlock()
 		}
 
 		resp := &smb2.EchoResponse{}
@@ -1741,7 +1819,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.mu.Lock()
 		ss.idleTime = time.Now()
+		ss.mu.Unlock()
+
 		if qdr.OutputBufferLength() > uint32(c.maxTransactSize) {
 			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 			return resp, ss, nil
@@ -1754,12 +1835,16 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // The Open must be a directory
+		op.mu.Lock()
+		attr := op.fileAttributes
+		ga := op.grantedAccess
+		op.mu.Unlock()
+		if attr&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // The Open must be a directory
 			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 			return resp, ss, nil
 		}
 
-		if op.grantedAccess&smb2.FILE_LIST_DIRECTORY == 0 {
+		if ga&smb2.FILE_LIST_DIRECTORY == 0 {
 			resp := smb2.NewErrorResponse(qdr, smb2.STATUS_ACCESS_DENIED, 0, nil)
 			return resp, ss, nil
 		}
@@ -1767,19 +1852,27 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 		searchPath := qdr.FileName()
 		single := qdr.Flags()&smb2.RETURN_SINGLE_ENTRY > 0
 		var buf []byte
-		if op.lastSearch != "" && op.lastSearch == searchPath && qdr.Flags()&smb2.RESTART_SCANS == 0 {
+		op.mu.Lock()
+		ls := op.lastSearch
+		res := op.searchResults
+		op.mu.Unlock()
+		if ls != "" && ls == searchPath && qdr.Flags()&smb2.RESTART_SCANS == 0 {
 			// If the search has already run with the same parameters, and all results have been sent
 			// to the client, respond with the status STATUS_NO_MORE_FILES.
-			if len(op.searchResults) == 0 {
+			if len(res) == 0 {
+				op.mu.Lock()
 				op.lastSearch = ""
+				op.mu.Unlock()
 				resp := smb2.NewErrorResponse(qdr, smb2.STATUS_NO_MORE_FILES, 0, nil)
 				return resp, ss, nil
 			}
 
 			// Send as many search results as the buffer length allows.
 			var num int
-			buf, num = smb2.QueryDirectoryBuffer(qdr.FileInformationClass(), op.searchResults, qdr.OutputBufferLength(), single, false, client.FileInfo{}, client.FileInfo{})
+			buf, num = smb2.QueryDirectoryBuffer(qdr.FileInformationClass(), res, qdr.OutputBufferLength(), single, false, client.FileInfo{}, client.FileInfo{})
+			op.mu.Lock()
 			op.searchResults = op.searchResults[num:]
+			op.mu.Unlock()
 		} else {
 			// Run a new search.
 			if err := op.queryDirectory(acc, searchPath); err != nil && searchPath != "*" {
@@ -1802,8 +1895,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 			// Send as many search results as the buffer length allows.
 			var num int
-			buf, num = smb2.QueryDirectoryBuffer(qdr.FileInformationClass(), op.searchResults, qdr.OutputBufferLength(), single, qdr.FileName() == "*", dir, parentDir)
+			buf, num = smb2.QueryDirectoryBuffer(qdr.FileInformationClass(), res, qdr.OutputBufferLength(), single, qdr.FileName() == "*", dir, parentDir)
+			op.mu.Lock()
 			op.searchResults = op.searchResults[num:]
+			op.mu.Unlock()
 		}
 
 		resp := &smb2.QueryDirectoryResponse{}
@@ -1838,7 +1933,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.mu.Lock()
 		ss.idleTime = time.Now()
+		ss.mu.Unlock()
+
 		if cnr.OutputBufferLength() > uint32(c.maxTransactSize) {
 			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 			return resp, ss, nil
@@ -1851,12 +1949,16 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
-		if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // The Open must be a directory
+		op.mu.Lock()
+		attr := op.fileAttributes
+		ga := op.grantedAccess
+		op.mu.Unlock()
+		if attr&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 { // The Open must be a directory
 			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 			return resp, ss, nil
 		}
 
-		if op.grantedAccess&smb2.FILE_LIST_DIRECTORY == 0 {
+		if ga&smb2.FILE_LIST_DIRECTORY == 0 {
 			resp := smb2.NewErrorResponse(cnr, smb2.STATUS_ACCESS_DENIED, 0, nil)
 			return resp, ss, nil
 		}
@@ -1915,7 +2017,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		ss.mu.Lock()
 		ss.idleTime = time.Now()
+		ss.mu.Unlock()
+
 		if qir.OutputBufferLength() > uint32(c.maxTransactSize) {
 			resp := smb2.NewErrorResponse(qir, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 			return resp, ss, nil
@@ -1927,6 +2032,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			resp := smb2.NewErrorResponse(qir, smb2.STATUS_FILE_CLOSED, 0, nil)
 			return resp, ss, nil
 		}
+
+		op.mu.Lock()
+		ga := op.grantedAccess
+		op.mu.Unlock()
 
 		var info []byte
 		switch qir.InfoType() {
@@ -1996,7 +2105,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			}
 
 		case smb2.INFO_SECURITY:
-			info = smb2.NewSecInfo(ss.securityContext, qir.AdditionalInformation(), op.grantedAccess)
+			info = smb2.NewSecInfo(ss.securityContext, qir.AdditionalInformation(), ga)
 			if qir.OutputBufferLength() < uint32(len(info)) {
 				if c.negotiateDialect == smb2.SMB_DIALECT_311 {
 					ecd := smb2.ErrorContextData(0, binary.LittleEndian.AppendUint32(nil, uint32(len(info))))
@@ -2054,7 +2163,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, nil, nil
 		}
 
+		ss.mu.Lock()
 		ss.idleTime = time.Now()
+		ss.mu.Unlock()
+
 		if len(sir.Buffer()) == 0 || uint64(len(sir.Buffer())) > c.maxTransactSize {
 			resp := smb2.NewErrorResponse(sir, smb2.STATUS_INVALID_PARAMETER, 0, nil)
 			return resp, ss, nil
@@ -2067,11 +2179,17 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			return resp, ss, nil
 		}
 
+		op.mu.Lock()
+		attr := op.fileAttributes
+		ga := op.grantedAccess
+		path := op.pathName
+		op.mu.Unlock()
+
 		switch sir.InfoType() {
 		case smb2.INFO_FILE:
 			switch sir.FileInfoClass() {
 			case smb2.FileEndOfFileInformation:
-				if op.grantedAccess&smb2.FILE_WRITE_DATA == 0 {
+				if ga&smb2.FILE_WRITE_DATA == 0 {
 					resp := smb2.NewErrorResponse(sir, smb2.STATUS_ACCESS_DENIED, 0, nil)
 					return resp, ss, nil
 				}
@@ -2082,7 +2200,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				op.mu.Unlock()
 
 			case smb2.FileBasicInformation:
-				if op.grantedAccess&smb2.FILE_WRITE_ATTRIBUTES == 0 {
+				if ga&smb2.FILE_WRITE_ATTRIBUTES == 0 {
 					resp := smb2.NewErrorResponse(sir, smb2.STATUS_ACCESS_DENIED, 0, nil)
 					return resp, ss, nil
 				}
@@ -2094,6 +2212,7 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				}
 
 				var modTime time.Time
+				op.mu.Lock()
 				if !fbi.CreationTime.IsZero() {
 					modTime = fbi.CreationTime
 				}
@@ -2113,24 +2232,27 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 				if fbi.FileAttributes != 0 {
 					op.fileAttributes = fbi.FileAttributes
 				}
+				op.mu.Unlock()
 
 			case smb2.FileDispositionInformation:
-				if op.grantedAccess&smb2.DELETE == 0 {
+				if ga&smb2.DELETE == 0 {
 					resp := smb2.NewErrorResponse(sir, smb2.STATUS_ACCESS_DENIED, 0, nil)
 					return resp, ss, nil
 				}
 
 				if sir.Buffer()[0] == 1 { // Set the delete flag
-					if op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY != 0 {
-						empty, err := tc.share.client.IsEmpty(op.ctx, acc, op.pathName+"/")
+					if attr&smb2.FILE_ATTRIBUTE_DIRECTORY != 0 {
+						empty, err := tc.share.client.IsEmpty(op.ctx, acc, path+"/")
 						if err != nil {
-							log.Printf("Error listing directory contents on %s: %v", op.pathName, err)
+							log.Printf("Error listing directory contents on %s: %v", path, err)
 							resp := smb2.NewErrorResponse(sir, smb2.STATUS_NETWORK_NAME_DELETED, 0, nil)
 							return resp, ss, nil
 						} else {
 							if empty {
 								if op != nil {
+									op.mu.Lock()
 									op.createOptions |= smb2.FILE_DELETE_ON_CLOSE
+									op.mu.Unlock()
 								}
 							} else {
 								resp := smb2.NewErrorResponse(sir, smb2.STATUS_DIRECTORY_NOT_EMPTY, 0, nil)
@@ -2138,12 +2260,14 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 							}
 						}
 					} else {
+						op.mu.Lock()
 						op.createOptions |= smb2.FILE_DELETE_ON_CLOSE
+						op.mu.Unlock()
 					}
 				}
 
 			case smb2.FileRenameInformation:
-				if op.grantedAccess&smb2.DELETE == 0 {
+				if ga&smb2.DELETE == 0 {
 					resp := smb2.NewErrorResponse(sir, smb2.STATUS_ACCESS_DENIED, 0, nil)
 					return resp, ss, nil
 				}
@@ -2161,7 +2285,10 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 
 				// Rename the file or the directory.
 				newName := strings.ReplaceAll(fri.FileName, "\\", "/")
-				if op.size == 0 && op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
+				op.mu.Lock()
+				size := op.size
+				op.mu.Unlock()
+				if size == 0 && attr&smb2.FILE_ATTRIBUTE_DIRECTORY == 0 {
 					tc.mu.Lock()
 					_, found := tc.persistedOpens[newName]
 					if found {
@@ -2170,28 +2297,30 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 						return resp, ss, nil
 					}
 					tc.persistedOpens[newName] = op
-					delete(tc.persistedOpens, op.pathName)
+					delete(tc.persistedOpens, path)
+					op.mu.Lock()
 					op.pathName = newName
 					op.fileName = utils.TrimPath(op.pathName)
 					op.lastModified = time.Now()
+					op.mu.Unlock()
 					tc.mu.Unlock()
 				} else {
 					if err := tc.share.client.Rename(
 						op.ctx,
 						acc,
-						op.pathName,
+						path,
 						newName,
-						op.fileAttributes&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
+						attr&smb2.FILE_ATTRIBUTE_DIRECTORY > 0,
 						fri.ReplaceIfExists,
 					); err != nil {
-						log.Printf("Error renaming path %s to %s: %v", op.pathName, newName, err)
+						log.Printf("Error renaming path %s to %s: %v", path, newName, err)
 						resp := smb2.NewErrorResponse(sir, smb2.STATUS_OBJECT_NAME_COLLISION, 0, nil)
 						return resp, ss, nil
 					}
 				}
 
 			case smb2.FileAllocationInformation:
-				if op.grantedAccess&smb2.FILE_WRITE_DATA == 0 {
+				if ga&smb2.FILE_WRITE_DATA == 0 {
 					resp := smb2.NewErrorResponse(sir, smb2.STATUS_ACCESS_DENIED, 0, nil)
 					return resp, ss, nil
 				}
@@ -2202,7 +2331,9 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 					return resp, ss, nil
 				}
 
+				op.mu.Lock()
 				op.allocated = binary.LittleEndian.Uint64(buf)
+				op.mu.Unlock()
 
 			default:
 				resp := smb2.NewErrorResponse(sir, smb2.STATUS_NOT_SUPPORTED, 0, nil)
@@ -2237,6 +2368,9 @@ func (c *connection) processRequests() {
 		if req != nil {
 			resp, ss, err := c.processRequest(req)
 			if err != nil {
+				if c.server.debug {
+					log.Printf("Error processing request (Message ID: %d, Command: %d): %v", req.Header().MessageID(), req.Header().Command(), err)
+				}
 				c.server.closeConnection(c)
 				return
 			}
@@ -2444,7 +2578,11 @@ func (c *connection) isStale() bool {
 
 	// Check each individual session: if at least one session is being used, the connection is alive.
 	for _, ss := range c.sessionTable {
-		if time.Since(ss.idleTime) <= staleThreshold {
+		ss.mu.Lock()
+		idle := ss.idleTime
+		ss.mu.Unlock()
+
+		if time.Since(idle) <= staleThreshold {
 			return false
 		}
 	}

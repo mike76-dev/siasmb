@@ -135,7 +135,25 @@ func (s *server) newConnection(conn net.Conn) *connection {
 func (s *server) closeConnection(c *connection) {
 	s.mu.Lock()
 	delete(s.connectionList, c.clientName)
+
+	// Close associated contexts and channels.
+	for _, op := range s.globalOpenTable {
+		if op.connection == c {
+			op.mu.Lock()
+			if op.cancel != nil {
+				op.cancel()
+			}
+			op.mu.Unlock()
+		}
+	}
 	s.mu.Unlock()
+
+	c.mu.Lock()
+	for _, ch := range c.stopChans {
+		close(ch)
+	}
+	c.mu.Unlock()
+
 	c.conn.Close()
 	c.once.Do(func() { close(c.closeChan) })
 }

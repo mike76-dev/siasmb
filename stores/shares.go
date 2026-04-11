@@ -46,6 +46,8 @@ func (db *Database) RegisterShare(s Share) error {
 		_, err := tx.Exec(ctx, query, s.Name, s.Type, s.ServerName, s.Password, s.Bucket, s.Remark, time.Now(), s.DataShards, s.ParityShards, s.AppKey)
 		if err != nil {
 			return fmt.Errorf("failed to register share: %w", err)
+		} else if err := db.shares.RegisterShare(s); err != nil {
+			return fmt.Errorf("failed to add share: %w", err)
 		} else {
 			return nil
 		}

@@ -66,17 +66,6 @@ func main() {
 	}
 	defer db.Close()
 
-	// Start the API server.
-	lAPI, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.API.Port))
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer lAPI.Close()
-	a := api.NewAPI(ctx, db, cfg.Indexd)
-	apiSrv := &http.Server{Handler: api.BasicAuth(cfg.API.Password)(a)}
-	go apiSrv.Serve(lAPI)
-	log.Printf("API: listening at %s ...\n", lAPI.Addr())
-
 	// Start listening on the SMB port 445.
 	l, err := net.Listen("tcp", ":445")
 	if err != nil {
@@ -99,6 +88,17 @@ func main() {
 		server.chainedCompressionSupported = true
 	}
 	db.WithShares(server)
+
+	// Start the API server.
+	lAPI, err := net.Listen("tcp", fmt.Sprintf(":%d", cfg.API.Port))
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer lAPI.Close()
+	a := api.NewAPI(ctx, db, cfg.Indexd)
+	apiSrv := &http.Server{Handler: api.BasicAuth(cfg.API.Password)(a)}
+	go apiSrv.Serve(lAPI)
+	log.Printf("API: listening at %s ...\n", lAPI.Addr())
 
 	go func() {
 		func() {
@@ -161,7 +161,7 @@ func main() {
 			host, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 			banned, _, err := db.IsBanned(host)
 			if err != nil {
-				panic(err)
+				log.Printf("Error checking ban status for host %s: %v", host, err)
 			} else if banned {
 				conn.Close()
 				continue
@@ -179,7 +179,10 @@ func main() {
 
 			// Start serving the connection.
 			go func() {
-				if !server.enabled {
+				server.mu.Lock()
+				enabled := server.enabled
+				server.mu.Unlock()
+				if !enabled {
 					return
 				}
 

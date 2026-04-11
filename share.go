@@ -11,6 +11,7 @@ import (
 	"github.com/mike76-dev/siasmb/client"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/stores"
+	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/sdk"
 )
@@ -40,23 +41,23 @@ type share struct {
 	compressData    bool
 
 	// Auxiliary fields.
-	client     client.Client
-	dataShards uint8
-	backend    string
-	bucket     string
-	appKey     types.PrivateKey
-	createdAt  time.Time
-	volumeID   uint64
-	mu         sync.Mutex
+	client        client.Client
+	maxUploadSize uint64
+	backend       string
+	bucket        string
+	appKey        types.PrivateKey
+	createdAt     time.Time
+	volumeID      uint64
+	mu            sync.Mutex
 }
 
-// registerShare adds a new share to the SMB server.
-func (s *server) registerShare(ss stores.Share) (*share, error) {
+// RegisterShare adds a new share to the SMB server.
+func (s *server) RegisterShare(ss stores.Share) error {
 	s.mu.Lock()
 	_, found := s.shareList[ss.Name]
 	s.mu.Unlock()
 	if found {
-		return nil, errShareExists
+		return errShareExists
 	}
 
 	sh := &share{
@@ -72,7 +73,6 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		fileSecurity:    make(map[string]uint32),
 		encryptData:     s.encryptData,
 		compressData:    s.compressionSupported,
-		dataShards:      ss.DataShards,
 	}
 
 	switch sh.backend {
@@ -86,13 +86,15 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		})
 		sdkClient, err := builder.SDK(ss.AppKey)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		sh.client = client.NewIndexdClient(s.store, sdkClient, ss.Name, ss.DataShards, ss.ParityShards)
+		sh.maxUploadSize = uint64(ss.DataShards) * proto.SectorSize
 	case "renterd":
 		sh.client = client.NewRenterdClient(ss.ServerName, ss.Password, ss.Bucket)
+		sh.maxUploadSize = proto.SectorSize
 	default:
-		return nil, errors.New("unsupported share type")
+		return errors.New("unsupported share type")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -101,12 +103,12 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 	// Get the share information and test the share at the same time.
 	info, err := sh.client.Info(ctx)
 	if err != nil {
-		return nil, errShareUnavailable
+		return errShareUnavailable
 	}
 
 	ars, err := s.store.GetAccounts(ss)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	accs := make(map[int]stores.Account)
@@ -114,7 +116,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 		if _, exists := accs[ar.AccountID]; !exists {
 			acc, err := s.store.GetAccountByID(ar.AccountID)
 			if err != nil {
-				return nil, err
+				return err
 			}
 			accs[ar.AccountID] = acc
 		}
@@ -137,7 +139,7 @@ func (s *server) registerShare(ss stores.Share) (*share, error) {
 	s.shareList[sh.name] = sh
 	s.mu.Unlock()
 
-	return sh, nil
+	return nil
 }
 
 // serialNo is a helper function that derives the share's "serial number" from its "volume ID".
@@ -172,4 +174,43 @@ func (s *server) RemoveShare(ss stores.Share) error {
 	s.mu.Unlock()
 
 	return nil
+}
+
+// UpdateAccessRights updates the access policy to the share for the given account.
+func (s *server) UpdateAccessRights(ss stores.Share, ar stores.AccessRights) error {
+	s.mu.Lock()
+	sh, found := s.shareList[ss.Name]
+	s.mu.Unlock()
+	if !found {
+		return errShareNotFound
+	}
+
+	acc, err := s.store.GetAccountByID(ar.AccountID)
+	if err != nil {
+		return err
+	}
+
+	sh.mu.Lock()
+	if ar.ReadAccess || ar.WriteAccess || ar.DeleteAccess || ar.ExecuteAccess {
+		sh.connectSecurity[acc.Workgroup+"/"+acc.Username] = struct{}{}
+		sh.fileSecurity[acc.Workgroup+"/"+acc.Username] = stores.FlagsFromAccessRights(ar)
+	} else {
+		delete(sh.connectSecurity, acc.Workgroup+"/"+acc.Username)
+		delete(sh.fileSecurity, acc.Workgroup+"/"+acc.Username)
+	}
+	sh.mu.Unlock()
+
+	return nil
+}
+
+// RemoveAccess removes the access rights of the given account from all shares.
+func (s *server) RemoveAccess(acc stores.Account) {
+	s.mu.Lock()
+	for _, sh := range s.shareList {
+		sh.mu.Lock()
+		delete(sh.connectSecurity, acc.Workgroup+"/"+acc.Username)
+		delete(sh.fileSecurity, acc.Workgroup+"/"+acc.Username)
+		sh.mu.Unlock()
+	}
+	s.mu.Unlock()
 }

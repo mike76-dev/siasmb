@@ -93,9 +93,13 @@ func (c *connection) newTreeConnect(ss *session, path string) (*treeConnect, err
 			if err != nil {
 				return nil, errNoShare
 			}
-			sh, err = c.server.registerShare(s)
-			if err != nil {
+			if err := c.server.RegisterShare(s); err != nil {
 				return nil, err
+			} else {
+				sh, exists = c.server.shareList[name]
+				if !exists {
+					return nil, errNoShare
+				}
 			}
 		}
 

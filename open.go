@@ -20,7 +20,6 @@ import (
 	"github.com/mike76-dev/siasmb/utils"
 	"github.com/oiweiwei/go-msrpc/msrpc/dtyp"
 	"github.com/oiweiwei/go-msrpc/msrpc/lsat/lsarpc/v0"
-	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/renterd/v2/api"
 	"golang.org/x/crypto/blake2b"
 )
@@ -580,21 +579,29 @@ func (op *open) getObjectID() []byte {
 // read checks if the requested chunk of data has already been downloaded. If so, it retrieves the data
 // from the buffer. If not, it downloads it from the Sia network and caches it.
 func (op *open) read(offset, length uint64) []byte {
+	// Fetch variables for convenience.
+	op.mu.Lock()
+	size := op.size
+	path := op.pathName
+	chunkSize := op.chunkSize
+	maxCacheSize := op.maxCacheSize
+	op.mu.Unlock()
+
 	readData := func(acc stores.Account, o, l uint64) ([]byte, error) {
 		var buf bytes.Buffer
-		err := op.treeConnect.share.client.Read(op.ctx, acc, op.pathName, o, l, &buf)
+		err := op.treeConnect.share.client.Read(op.ctx, acc, path, o, l, &buf)
 		if err != nil {
 			return nil, err
 		}
 		return buf.Bytes(), nil
 	}
 
-	if offset >= op.size {
+	if offset >= size {
 		return nil
 	}
 
-	if offset+length >= op.size {
-		length = op.size - offset
+	if offset+length >= size {
+		length = size - offset
 	}
 
 	var result []byte
@@ -602,7 +609,7 @@ func (op *open) read(offset, length uint64) []byte {
 
 	acc, err := op.session.connection.server.store.FindAccount(op.session.userName, op.session.workgroup)
 	if err != nil {
-		log.Printf("Access denied (%s): %v", op.pathName, err)
+		log.Printf("Access denied (%s): %v", path, err)
 		return nil
 	}
 
@@ -610,25 +617,25 @@ func (op *open) read(offset, length uint64) []byte {
 	defer op.mu.Unlock()
 
 	for remaining > 0 {
-		chunkOffset := (offset / op.chunkSize) * op.chunkSize
-		chunkStart := offset % op.chunkSize
+		chunkOffset := (offset / chunkSize) * chunkSize
+		chunkStart := offset % chunkSize
 		chunkEnd := chunkStart + uint64(remaining)
 
-		if chunkEnd > op.chunkSize {
-			chunkEnd = op.chunkSize
+		if chunkEnd > chunkSize {
+			chunkEnd = chunkSize
 		}
 
 		if data, ok := op.buffer[chunkOffset]; ok {
 			result = append(result, data[chunkStart:chunkEnd]...)
 		} else {
-			toRead := op.chunkSize
-			if chunkOffset+toRead > op.size {
-				toRead = op.size - chunkOffset
+			toRead := chunkSize
+			if chunkOffset+toRead > size {
+				toRead = size - chunkOffset
 			}
 
 			data, err := readData(acc, chunkOffset, toRead)
 			if err != nil {
-				log.Printf("Error reading object: %s: %v", op.pathName, err)
+				log.Printf("Error reading object: %s: %v", path, err)
 				return nil
 			}
 
@@ -637,7 +644,7 @@ func (op *open) read(offset, length uint64) []byte {
 			result = append(result, data[chunkStart:chunkEnd]...)
 		}
 
-		if len(op.buffer) > op.maxCacheSize {
+		if len(op.buffer) > maxCacheSize {
 			oldest := op.cacheOrder[0]
 			delete(op.buffer, oldest)
 			op.cacheOrder = op.cacheOrder[1:]
@@ -674,7 +681,7 @@ func (op *open) startUpload() error {
 		pending:    make(map[uint64]*uploadChunk),
 		nextOffset: 0,
 		bufOffset:  0,
-		maxLength:  uint64(op.treeConnect.share.dataShards) * proto.SectorSize,
+		maxLength:  op.treeConnect.share.maxUploadSize,
 	}
 
 	return nil
