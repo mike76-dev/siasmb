@@ -1282,6 +1282,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			delete(c.asyncCommandList, asyncID)
 			c.mu.Unlock()
 
+			// Check if the context is still valid before sending the response.
+			select {
+			case <-op.ctx.Done():
+				return
+			default:
+			}
+
 			c.server.writeResponse(c, ss, resp)
 		}()
 
@@ -1419,6 +1426,13 @@ func (c *connection) processRequest(req *smb2.Request) (smb2.GenericResponse, *s
 			delete(c.requestList, resp.Header().MessageID())
 			delete(c.asyncCommandList, asyncID)
 			c.mu.Unlock()
+
+			// Check if the context is still valid before sending the response.
+			select {
+			case <-op.ctx.Done():
+				return
+			default:
+			}
 
 			c.server.writeResponse(c, ss, resp)
 		}()
