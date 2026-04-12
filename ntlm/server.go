@@ -270,8 +270,7 @@ func (s *Server) Authenticate(amsg []byte) (err error) {
 		expectedNtChallengeResponse := make([]byte, len(ntChallengeResponse))
 		ntlmv2ClientChallenge := ntChallengeResponse[16:]
 		USER := utils.EncodeStringToBytes(strings.ToUpper(user))
-		password := utils.EncodeStringToBytes(acc.Password)
-		h := hmac.New(md5.New, ntowfv2(USER, password, domainName))
+		h := hmac.New(md5.New, ntowfv2Hash(USER, acc.NTHash, domainName))
 		serverChallenge := s.cmsg[24:32]
 		timeStamp := ntlmv2ClientChallenge[8:16]
 		clientChallenge := ntlmv2ClientChallenge[16:24]

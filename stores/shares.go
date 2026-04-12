@@ -22,7 +22,7 @@ type Share struct {
 	CreatedAt    time.Time        `json:"createdAt,omitempty"`
 	DataShards   uint8            `json:"dataShards,omitempty"`
 	ParityShards uint8            `json:"parityShards,omitempty"`
-	AppKey       types.PrivateKey `json:"appKey,omitempty"`
+	AppKey       types.PrivateKey `json:"-"`
 }
 
 // RegisterShare registers a new share in the database.

@@ -12,7 +12,7 @@ import (
 	"github.com/julienschmidt/httprouter"
 	"github.com/mike76-dev/siasmb/stores"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/sdk"
+	sdk "go.sia.tech/siastorage"
 )
 
 // Store implements the database store.
@@ -468,6 +468,7 @@ func (api *API) shareHandlerGET(w http.ResponseWriter, req *http.Request, ps htt
 		return
 	}
 
+	share.Password = "" // Do not expose the API password.
 	writeJSON(w, share)
 }
 
@@ -698,6 +699,10 @@ func (api *API) accountSharesHandlerGET(w http.ResponseWriter, req *http.Request
 		log.Printf("failed to find shares: %v", err)
 		writeError(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+
+	for i := range shares {
+		shares[i].Password = "" // Do not expose the API password.
 	}
 
 	writeJSON(w, shares)

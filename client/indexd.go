@@ -10,9 +10,9 @@ import (
 
 	"github.com/mike76-dev/siasmb/stores"
 	proto "go.sia.tech/core/rhp/v4"
-	"go.sia.tech/indexd/sdk"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/renterd/v2/api"
+	sdk "go.sia.tech/siastorage"
 	"golang.org/x/crypto/blake2b"
 )
 

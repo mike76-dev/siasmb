@@ -13,7 +13,7 @@ import (
 	"github.com/mike76-dev/siasmb/stores"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
-	"go.sia.tech/indexd/sdk"
+	sdk "go.sia.tech/siastorage"
 )
 
 const (
@@ -181,8 +181,8 @@ func (s *server) UpdateAccessRights(ss stores.Share, ar stores.AccessRights) err
 	s.mu.Lock()
 	sh, found := s.shareList[ss.Name]
 	s.mu.Unlock()
-	if !found {
-		return errShareNotFound
+	if !found { // Share not loaded yet.
+		return nil
 	}
 
 	acc, err := s.store.GetAccountByID(ar.AccountID)

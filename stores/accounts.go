@@ -7,6 +7,8 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/mike76-dev/siasmb/utils"
+	"golang.org/x/crypto/md4"
 )
 
 // Account represents a user account that can connect to particular shares.
@@ -14,6 +16,7 @@ type Account struct {
 	ID        int    `json:"id"`
 	Username  string `json:"username"`
 	Password  string `json:"password"`
+	NTHash    []byte `json:"-"`
 	Workgroup string `json:"workgroup"`
 }
 
@@ -21,18 +24,19 @@ type Account struct {
 func (db *Database) GetAccountByID(id int) (acc Account, err error) {
 	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
-			SELECT account_name, account_password, workgroup
+			SELECT account_name, password_hash, workgroup
 			FROM accounts
 			WHERE id = $1
 		`
-		var username, password, workgroup string
-		err = tx.QueryRow(ctx, query, id).Scan(&username, &password, &workgroup)
+		var username, workgroup string
+		var pwh []byte
+		err = tx.QueryRow(ctx, query, id).Scan(&username, &pwh, &workgroup)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		} else if err != nil {
 			return fmt.Errorf("failed to retrieve account: %w", err)
 		}
-		acc = Account{id, username, password, workgroup}
+		acc = Account{id, username, "", pwh, workgroup}
 		return nil
 	})
 	return
@@ -42,20 +46,20 @@ func (db *Database) GetAccountByID(id int) (acc Account, err error) {
 func (db *Database) FindAccount(username, workgroup string) (acc Account, err error) {
 	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
-			SELECT id, account_password
+			SELECT id, password_hash
 			FROM accounts
 			WHERE account_name = $1
 			AND workgroup = $2
 		`
 		var id int
-		var password string
-		err = tx.QueryRow(ctx, query, username, workgroup).Scan(&id, &password)
+		var pwh []byte
+		err = tx.QueryRow(ctx, query, username, workgroup).Scan(&id, &pwh)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		} else if err != nil {
 			return fmt.Errorf("failed to retrieve account: %w", err)
 		}
-		acc = Account{id, username, password, workgroup}
+		acc = Account{id, username, "", pwh, workgroup}
 		return nil
 	})
 	return
@@ -65,10 +69,15 @@ func (db *Database) FindAccount(username, workgroup string) (acc Account, err er
 func (db *Database) AddAccount(acc Account) error {
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
-			INSERT INTO accounts (account_name, account_password, workgroup)
+			INSERT INTO accounts (account_name, password_hash, workgroup)
 			VALUES ($1, $2, $3)
 		`
-		_, err := tx.Exec(ctx, query, acc.Username, acc.Password, acc.Workgroup)
+
+		h := md4.New()
+		h.Write(utils.EncodeStringToBytes(acc.Password))
+		acc.NTHash = h.Sum(nil)
+
+		_, err := tx.Exec(ctx, query, acc.Username, acc.NTHash, acc.Workgroup)
 		if err != nil {
 			return fmt.Errorf("failed to add account: %w", err)
 		} else {
@@ -113,7 +122,7 @@ func (db *Database) RemoveAccount(username, workgroup string) error {
 func (db *Database) FindAccounts(workgroup string) (accs []Account, err error) {
 	err = db.txn(func(ctx context.Context, tx pgx.Tx) error {
 		const query = `
-			SELECT id, account_name, account_password
+			SELECT id, account_name, password_hash
 			FROM accounts
 			WHERE workgroup = $1
 		`
@@ -124,14 +133,16 @@ func (db *Database) FindAccounts(workgroup string) (accs []Account, err error) {
 		defer rows.Close()
 		for rows.Next() {
 			var id int
-			var username, password string
-			if err := rows.Scan(&id, &username, &password); err != nil {
+			var username string
+			var pwh []byte
+			if err := rows.Scan(&id, &username, &pwh); err != nil {
 				return fmt.Errorf("failed to fetch accounts: %w", err)
 			}
 			accs = append(accs, Account{
 				ID:        id,
 				Username:  username,
-				Password:  password,
+				Password:  "",
+				NTHash:    pwh,
 				Workgroup: workgroup,
 			})
 		}
