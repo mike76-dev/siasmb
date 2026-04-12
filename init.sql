@@ -14,8 +14,9 @@ CREATE TABLE shares (
 CREATE TABLE accounts (
     id SERIAL PRIMARY KEY,
     account_name TEXT NOT NULL,
-    account_password TEXT NOT NULL,
-    workgroup TEXT NOT NULL
+    password_hash BYTEA NOT NULL,
+    workgroup TEXT NOT NULL,
+    CONSTRAINT accounts_password_hash_length CHECK (octet_length(password_hash) = 16)
 );
 
 CREATE TABLE policies (
