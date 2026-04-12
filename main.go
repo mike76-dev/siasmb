@@ -19,7 +19,7 @@ import (
 	"github.com/mike76-dev/siasmb/ntlm"
 	"github.com/mike76-dev/siasmb/smb2"
 	"github.com/mike76-dev/siasmb/stores"
-	"go.sia.tech/indexd/sdk"
+	sdk "go.sia.tech/siastorage"
 )
 
 const version = "2.1.0-beta"
