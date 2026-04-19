@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
+	"time"
 
 	"github.com/mike76-dev/siasmb/stores"
 	proto "go.sia.tech/core/rhp/v4"
+	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/renterd/v2/api"
 	sdk "go.sia.tech/siastorage"
@@ -23,17 +26,25 @@ type IndexdClient struct {
 	sdkClient    *sdk.SDK
 	dataShards   uint8
 	parityShards uint8
+	closeChan    chan struct{}
 }
 
 // NewIndexdClient returns an initialized IndexdClient.
 func NewIndexdClient(db *stores.Database, sdkClient *sdk.SDK, share string, dataShards, parityShards uint8) Client {
-	return &IndexdClient{
+	cc := make(chan struct{})
+	ic := &IndexdClient{
 		share:        share,
 		db:           db,
 		sdkClient:    sdkClient,
 		dataShards:   dataShards,
 		parityShards: parityShards,
+		closeChan:    cc,
 	}
+
+	// Start background upload thread.
+	go ic.processUploads(ic.closeChan)
+
+	return ic
 }
 
 // Info queries the general information about the share.
@@ -183,34 +194,41 @@ func (ic *IndexdClient) Parents(ctx context.Context, acc stores.Account, path st
 
 // Read downloads a file from the Sia network.
 func (ic *IndexdClient) Read(ctx context.Context, acc stores.Account, path string, offset, length uint64, buf io.Writer) (err error) {
-	slabs, partial, err := ic.db.GetMetadata(acc, ic.share, path)
+	slabs, err := ic.db.GetMetadata(acc, ic.share, path)
 	if err != nil {
 		return err
 	}
 
+	end := offset + length
+
 	for _, slab := range slabs {
-		if slab.At+slab.Length <= offset {
+		slabStart := slab.At
+		slabEnd := slab.At + slab.Length
+		if slabEnd <= offset {
 			continue
 		}
-
-		if slab.At >= offset+length {
+		if slabStart >= end {
 			break
 		}
 
-		obj, err := ic.sdkClient.Object(ctx, slab.Key)
-		if err != nil {
-			return err
-		}
+		readStart := max(offset, slabStart)
+		readEnd := min(end, slabEnd)
+		rangeOffset := slab.Offset + (readStart - slabStart)
+		rangeLength := readEnd - readStart
 
-		if err = ic.sdkClient.Download(ctx, buf, obj, sdk.WithDownloadRange(slab.Offset, slab.Length)); err != nil {
-			return err
-		}
-	}
+		if (slab.Key != types.Hash256{}) {
+			obj, err := ic.sdkClient.Object(ctx, slab.Key)
+			if err != nil {
+				return err
+			}
 
-	if partial.Data != nil && partial.At < offset+length && partial.At+uint64(len(partial.Data)) > offset {
-		_, err = io.Copy(buf, bytes.NewReader(partial.Data))
-		if err != nil {
-			return err
+			if err = ic.sdkClient.Download(ctx, buf, obj, sdk.WithDownloadRange(rangeOffset, rangeLength)); err != nil {
+				return err
+			}
+		} else if slab.Data != nil {
+			if _, err = io.Copy(buf, bytes.NewReader(slab.Data[readStart-slabStart:readEnd-slabStart])); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -224,13 +242,13 @@ func (ic *IndexdClient) StartUpload(ctx context.Context, acc stores.Account, pat
 
 // AbortUpload aborts an initiated multipart upload.
 func (ic *IndexdClient) AbortUpload(ctx context.Context, _ string, uploadID string) (err error) {
-	parts, err := ic.db.ListUploadParts(uploadID)
+	slabs, err := ic.db.RemoveUpload(uploadID)
 	if err != nil {
-		return fmt.Errorf("couldn't retrieve upload parts: %v", err)
+		return fmt.Errorf("couldn't abort upload: %v", err)
 	}
 
-	for _, part := range parts {
-		if err := ic.sdkClient.DeleteObject(ctx, part); err != nil {
+	for _, key := range slabs {
+		if err := ic.sdkClient.DeleteObject(ctx, key); err != nil {
 			return fmt.Errorf("couldn't delete slab: %v", err)
 		}
 	}
@@ -239,7 +257,7 @@ func (ic *IndexdClient) AbortUpload(ctx context.Context, _ string, uploadID stri
 		return fmt.Errorf("couldn't prune slabs: %v", err)
 	}
 
-	return ic.db.RemoveUpload(uploadID)
+	return nil
 }
 
 // FinishUpload completes a multipart upload.
@@ -253,30 +271,16 @@ func (ic *IndexdClient) FinishUpload(ctx context.Context, path string, uploadID 
 
 // Write uploads the provided chunk of data to the Sia network.
 func (ic *IndexdClient) Write(ctx context.Context, r io.Reader, path string, uploadID string, partNumber int, offset, length uint64) (_ string, err error) {
-	if length >= proto.SectorSize*uint64(ic.dataShards) {
-		obj := sdk.NewEmptyObject()
-		err = ic.sdkClient.Upload(ctx, &obj, r, sdk.WithRedundancy(ic.dataShards, ic.parityShards))
-		if err != nil {
-			return "", fmt.Errorf("couldn't upload slab: %v", err)
-		}
+	buf, err := io.ReadAll(r)
+	if err != nil {
+		return "", fmt.Errorf("couldn't read data: %v", err)
+	}
+	if uint64(len(buf)) != length {
+		return "", fmt.Errorf("short read: expected %d bytes, got %d", length, len(buf))
+	}
 
-		if err := ic.sdkClient.PinObject(ctx, obj); err != nil {
-			return "", fmt.Errorf("couldn't pin slab: %v", err)
-		}
-
-		key := obj.ID()
-		if err = ic.db.AddPart(uploadID, partNumber, offset, 0, length, key[:]); err != nil {
-			return "", fmt.Errorf("couldn't add part to the database: %v", err)
-		}
-	} else {
-		buf, err := io.ReadAll(r)
-		if err != nil {
-			return "", fmt.Errorf("couldn't read data: %v", err)
-		}
-
-		if err = ic.db.AddPartialData(uploadID, partNumber, offset, buf); err != nil {
-			return "", fmt.Errorf("couldn't add partial data to the database: %v", err)
-		}
+	if err := ic.db.AddBufferedSlab(uploadID, offset, buf); err != nil {
+		return "", fmt.Errorf("couldn't add buffered slab to the database: %v", err)
 	}
 
 	return
@@ -353,5 +357,54 @@ func (ic *IndexdClient) DeleteAll(ctx context.Context) error {
 
 // Close closes the client and releases all resources.
 func (ic *IndexdClient) Close() error {
+	close(ic.closeChan)
 	return ic.sdkClient.Close()
+}
+
+// processUpload checks if there is a complete slab and uploads it.
+func (ic *IndexdClient) processUpload(ctx context.Context) error {
+	job, err := ic.db.ClaimUploadJob(uint64(ic.dataShards) * proto.SectorSize)
+	if err != nil {
+		return err
+	}
+
+	obj := sdk.NewEmptyObject()
+	if err := ic.sdkClient.Upload(ctx, &obj, bytes.NewReader(job.Data), sdk.WithRedundancy(ic.dataShards, ic.parityShards)); err != nil {
+		_ = ic.db.RequeueUploadJob(job.UploadID, job.MetadataID)
+		return fmt.Errorf("couldn't upload slab: %v", err)
+	}
+
+	if err := ic.sdkClient.PinObject(ctx, obj); err != nil {
+		_ = ic.db.RequeueUploadJob(job.UploadID, job.MetadataID)
+		return fmt.Errorf("couldn't pin slab: %v", err)
+	}
+
+	key := obj.ID()
+	if err := ic.db.CompleteUploadJob(job.MetadataID, job.BufferID, key); err != nil {
+		return fmt.Errorf("couldn't complete upload job: %v", err)
+	}
+
+	return nil
+}
+
+// processUploads runs the upload jobs in the background.
+func (ic *IndexdClient) processUploads(closeChan chan struct{}) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	for {
+		select {
+		case <-closeChan:
+			return
+		default:
+		}
+
+		if err := ic.processUpload(ctx); err != nil {
+			time.Sleep(time.Second)
+			if errors.Is(err, stores.ErrNoUploadJobs) {
+				continue
+			}
+			log.Printf("failed to run upload job: %v", err)
+		}
+	}
 }

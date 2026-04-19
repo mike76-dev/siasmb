@@ -86,6 +86,7 @@ func (db *Database) ListObjects(acc Account, shareName, path string) (objects []
 			CROSS JOIN caller c
 			WHERE o.share_name = $1
 				AND o.directory_id IS NOT DISTINCT FROM $2
+				AND o.temporary = FALSE
 				AND (
 					o.account = c.id
 					OR (
@@ -124,6 +125,10 @@ func (db *Database) ListObjects(acc Account, shareName, path string) (objects []
 				return fmt.Errorf("failed to scan object: %v", err)
 			}
 			objects = append(objects, obj)
+		}
+
+		if rows.Err() != nil {
+			return fmt.Errorf("error iterating over objects: %v", rows.Err())
 		}
 
 		return nil
@@ -289,6 +294,7 @@ func (db *Database) Object(acc Account, shareName, path string) (object ObjectMe
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path = $2
+					AND o.temporary = FALSE
 					AND (
 						o.account = c.id
 						OR (
@@ -412,7 +418,94 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 	}
 
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
-		const query = `
+		const collectQuery = `
+			WITH caller AS (
+				SELECT id, workgroup
+				FROM accounts
+				WHERE id = $6
+			),
+			src AS (
+				SELECT o.id
+				FROM objects o
+				CROSS JOIN caller c
+				WHERE o.share_name = $1
+					AND o.full_path = $2
+					AND o.temporary = FALSE
+					AND o.account = c.id
+			),
+			dst_parent AS (
+				SELECT d.id, d.full_path
+				FROM directories d
+				JOIN accounts owner ON owner.id = d.account
+				CROSS JOIN caller c
+				WHERE d.share_name = $1
+					AND d.full_path = $3
+					AND (
+						d.account = c.id
+						OR (d.private = FALSE AND owner.workgroup = c.workgroup)
+					)
+
+				UNION ALL
+
+				SELECT NULL::bigint, '/'
+				FROM caller
+				WHERE $3 = '/'
+			),
+			target AS (
+				SELECT
+					s.id AS src_id,
+					p.id AS new_parent_id,
+					$4::text AS new_name,
+					$5::text AS new_path
+				FROM src s
+				JOIN dst_parent p ON TRUE
+				WHERE $5 <> $2
+			),
+			check_no_dir_conflict AS (
+				SELECT 1
+				FROM target t
+				WHERE NOT EXISTS (
+					SELECT 1
+					FROM directories d
+					WHERE d.share_name = $1
+						AND d.full_path = t.new_path
+				)
+			),
+			doomed_target AS (
+				SELECT o.id
+				FROM objects o
+				JOIN target t ON o.full_path = t.new_path
+				WHERE o.share_name = $1
+					AND o.temporary = FALSE
+					AND $7::boolean
+			)
+			SELECT DISTINCT m.buffer_id
+			FROM doomed_target dt
+			JOIN check_no_dir_conflict c ON TRUE
+			JOIN metadata m ON m.object_id = dt.id
+			WHERE m.buffer_id IS NOT NULL
+		`
+
+		rows, err := tx.Query(ctx, collectQuery, share, oldPath, dir, name, newPath, acc.ID, force)
+		if err != nil {
+			return fmt.Errorf("failed to collect information for renaming file: %v", err)
+		}
+		var bids []uint64
+		for rows.Next() {
+			var bid uint64
+			if err := rows.Scan(&bid); err != nil {
+				rows.Close()
+				return fmt.Errorf("failed to scan buffer ID: %v", err)
+			}
+			bids = append(bids, bid)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to iterate through buffer IDs: %v", err)
+		}
+		rows.Close()
+
+		const renameQuery = `
 			WITH caller AS (
 				SELECT id, workgroup
 				FROM accounts
@@ -421,10 +514,10 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 			src AS (
 				SELECT o.id, o.full_path
 				FROM objects o
-				JOIN accounts owner ON owner.id = o.account
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path = $2
+					AND o.temporary = FALSE
 					AND o.account = c.id
 			),
 			dst_parent AS (
@@ -468,9 +561,12 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 			delete_existing AS (
 				DELETE FROM objects o
 				USING target t
+				JOIN check_no_dir_conflict c ON TRUE
 				WHERE $7::boolean
 					AND o.share_name = $1
 					AND o.full_path = t.new_path
+					AND o.temporary = FALSE
+				RETURNING o.id
 			)
 			UPDATE objects o
 			SET
@@ -485,13 +581,27 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 		`
 
 		var id uint64
-		err := tx.QueryRow(ctx, query, share, oldPath, dir, name, newPath, acc.ID, force).Scan(&id)
-		if err != nil {
+		if err := tx.QueryRow(ctx, renameQuery, share, oldPath, dir, name, newPath, acc.ID, force).Scan(&id); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
 			return fmt.Errorf("failed to rename file: %v", err)
 		}
+
+		for _, bid := range bids {
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM buffers b
+				WHERE b.id = $1
+					AND NOT EXISTS (
+						SELECT 1
+						FROM metadata m
+						WHERE m.buffer_id = b.id
+					)
+			`, bid); err != nil {
+				return fmt.Errorf("failed to delete orphaned buffer: %v", err)
+			}
+		}
+
 		return nil
 	})
 }
@@ -586,6 +696,7 @@ func (db *Database) RenameDirectory(acc Account, share string, oldPath, newPath 
 					AND o.share_name = $1
 					AND o.full_path LIKE t.old_path || '/%%'
 					AND o.account = c.id
+					AND o.temporary = FALSE
 			)
 			UPDATE directories d
 			SET
@@ -628,6 +739,7 @@ func (db *Database) DeleteFile(acc Account, share string, path string) error {
 				CROSS JOIN caller c
 				WHERE o.share_name = $1
 					AND o.full_path = $2
+					AND o.temporary = FALSE
 					AND (
 						o.account = c.id
 						OR (
@@ -698,6 +810,7 @@ func (db *Database) DeleteDirectory(acc Account, share string, path string) erro
 				JOIN src s ON TRUE
 				WHERE o.share_name = $1
 					AND o.full_path LIKE s.full_path || '/%%'
+					And o.temporary = FALSE
 			),
 			doomed_buffers AS (
 				SELECT DISTINCT m.buffer_id
@@ -710,6 +823,7 @@ func (db *Database) DeleteDirectory(acc Account, share string, path string) erro
 				USING src s
 				WHERE o.share_name = $1
 					AND o.full_path LIKE s.full_path || '/%%'
+					AND o.temporary = FALSE
 				RETURNING o.id
 			),
 			delete_dirs AS (
