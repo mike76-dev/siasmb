@@ -13,17 +13,31 @@ import (
 	"github.com/mike76-dev/siasmb/stores"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/renterd/v2/api"
 	sdk "go.sia.tech/siastorage"
 	"golang.org/x/crypto/blake2b"
 )
 
+// storageSDK is the minimal interface for `indexd` SDK.
+type storageSDK interface {
+	Account(ctx context.Context) (app.AccountResponse, error)
+	Object(ctx context.Context, key types.Hash256) (sdk.Object, error)
+	Download(ctx context.Context, w io.Writer, obj sdk.Object, opts ...sdk.DownloadOption) error
+	Upload(ctx context.Context, obj *sdk.Object, r io.Reader, opts ...sdk.UploadOption) error
+	PinObject(ctx context.Context, obj sdk.Object) error
+	DeleteObject(ctx context.Context, key types.Hash256) error
+	PruneSlabs(ctx context.Context) error
+	ListObjects(ctx context.Context, cursor slabs.Cursor, limit int) ([]sdk.Object, error)
+	Close() error
+}
+
 // IndexdClient implements a Client for interacting with indexd.
 type IndexdClient struct {
 	share        string
 	db           *stores.Database
-	sdkClient    *sdk.SDK
+	sdkClient    storageSDK
 	dataShards   uint8
 	parityShards uint8
 	closeChan    chan struct{}
@@ -31,6 +45,11 @@ type IndexdClient struct {
 
 // NewIndexdClient returns an initialized IndexdClient.
 func NewIndexdClient(db *stores.Database, sdkClient *sdk.SDK, share string, dataShards, parityShards uint8) Client {
+	return newIndexdClient(db, sdkClient, share, dataShards, parityShards)
+}
+
+// newIndexdClient allows using a mock SDK for testing.
+func newIndexdClient(db *stores.Database, sdkClient storageSDK, share string, dataShards, parityShards uint8) Client {
 	cc := make(chan struct{})
 	ic := &IndexdClient{
 		share:        share,
