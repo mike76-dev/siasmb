@@ -10,21 +10,40 @@ import (
 	"time"
 
 	"github.com/mike76-dev/siasmb/stores"
+	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
 	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/slabs"
 )
 
 type fakeBackend struct {
-	mu      sync.Mutex
-	objects map[types.Hash256][]byte
-	nextID  uint64
+	mu         sync.Mutex
+	objects    map[types.Hash256][]byte
+	nextID     uint64
+	uploadGate chan struct{}
 }
 
 func newFakeBackend() *fakeBackend {
 	return &fakeBackend{
 		objects: make(map[types.Hash256][]byte),
 		nextID:  1,
+	}
+}
+
+func newGatedFakeBackend() *fakeBackend {
+	return &fakeBackend{
+		objects:    make(map[types.Hash256][]byte),
+		nextID:     1,
+		uploadGate: make(chan struct{}, 1024),
+	}
+}
+
+func (fb *fakeBackend) allowUploads(n int) {
+	if fb.uploadGate == nil {
+		return
+	}
+	for range n {
+		fb.uploadGate <- struct{}{}
 	}
 }
 
@@ -50,6 +69,14 @@ func (fb *fakeBackend) Account(ctx context.Context) (app.AccountResponse, error)
 }
 
 func (fb *fakeBackend) Upload(ctx context.Context, r io.Reader, dataShards, parityShards uint8) (types.Hash256, error) {
+	if fb.uploadGate != nil {
+		select {
+		case <-ctx.Done():
+			return types.Hash256{}, ctx.Err()
+		case <-fb.uploadGate:
+		}
+	}
+
 	fb.mu.Lock()
 	defer fb.mu.Unlock()
 
@@ -304,5 +331,358 @@ func grantFullAccess(t *testing.T, db *stores.Database, sh stores.Share, acc sto
 	})
 	if err != nil {
 		t.Fatalf("SetAccessRights: %v", err)
+	}
+}
+
+func makeLargeMixedContent() []byte {
+	full := int(proto.SectorSize)
+	buf := make([]byte, 2*full+12345)
+	for i := range buf {
+		buf[i] = byte(i % 251)
+	}
+	return buf
+}
+
+func uploadInThreeChunks(t *testing.T, ctx context.Context, c Client, path, uploadID string, content []byte) {
+	t.Helper()
+
+	full := int(proto.SectorSize)
+
+	parts := []struct {
+		partNumber int
+		offset     uint64
+		data       []byte
+	}{
+		{1, 0, content[:full]},
+		{2, uint64(full), content[full : 2*full]},
+		{3, uint64(2 * full), content[2*full:]},
+	}
+
+	for _, p := range parts {
+		if _, err := c.Write(ctx, bytes.NewReader(p.data), path, uploadID, p.partNumber, p.offset, uint64(len(p.data))); err != nil {
+			t.Fatalf("Write(%s, part %d): %v", path, p.partNumber, err)
+		}
+	}
+}
+
+func mustReadFull(t *testing.T, ctx context.Context, c Client, acc stores.Account, path string, want []byte) {
+	t.Helper()
+
+	var buf bytes.Buffer
+	if err := c.Read(ctx, acc, path, 0, uint64(len(want)), &buf); err != nil {
+		t.Fatalf("Read(%s): %v", path, err)
+	}
+
+	if !bytes.Equal(buf.Bytes(), want) {
+		t.Fatalf("Read(%s) mismatch: got %d bytes, want %d bytes", path, len(buf.Bytes()), len(want))
+	}
+}
+
+func waitForMixedState(t *testing.T, db *stores.Database, acc stores.Account, share, path string, wantRemote, wantLocal int) {
+	t.Helper()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		slabs, err := db.GetMetadata(acc, share, path)
+		if err == nil {
+			var remote, local int
+			for _, s := range slabs {
+				if s.Key != (types.Hash256{}) {
+					remote++
+				} else if s.Data != nil {
+					local++
+				}
+			}
+			if remote == wantRemote && local == wantLocal {
+				return
+			}
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for mixed state on %s: want remote=%d, local=%d", path, wantRemote, wantLocal)
+}
+
+func waitForObjectNotFound(t *testing.T, ctx context.Context, c Client, acc stores.Account, path string) {
+	t.Helper()
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		_, err := c.Object(ctx, acc, path)
+		if errors.Is(err, stores.ErrNotFound) {
+			return
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("timed out waiting for %s to disappear", path)
+}
+
+func TestIndexdClient_RenameDuringMixedUpload(t *testing.T) {
+	ctx := context.Background()
+
+	db := stores.NewTestStore(t, ctx)
+	t.Cleanup(db.Close)
+
+	acc := newTestAccount(t, db, "alice", "secret123", "wrg")
+	share := newTestShare(t, db, "testshare")
+	grantFullAccess(t, db, share, acc)
+
+	backend := newGatedFakeBackend()
+	c := newIndexdClient(db, backend, share.Name, 1, 0)
+	t.Cleanup(func() { _ = c.Close() })
+
+	content := makeLargeMixedContent()
+	origPath := "big.bin"
+
+	uploadID, err := c.StartUpload(ctx, acc, origPath)
+	if err != nil {
+		t.Fatalf("StartUpload: %v", err)
+	}
+
+	uploadInThreeChunks(t, ctx, c, origPath, uploadID, content)
+
+	if err := c.FinishUpload(ctx, origPath, uploadID, nil); err != nil {
+		t.Fatalf("FinishUpload: %v", err)
+	}
+
+	// Initially everything is local: 2 full slabs + 1 short local tail.
+	waitForMixedState(t, db, acc, share.Name, origPath, 0, 3)
+	mustReadFull(t, ctx, c, acc, origPath, content)
+
+	// Let exactly one full slab upload.
+	backend.allowUploads(1)
+	waitForMixedState(t, db, acc, share.Name, origPath, 1, 2)
+	mustReadFull(t, ctx, c, acc, origPath, content)
+
+	// Rename while upload is still in progress.
+	newPath := "big-renamed.bin"
+	if err := c.Rename(ctx, acc, origPath, newPath, false, false); err != nil {
+		t.Fatalf("Rename: %v", err)
+	}
+
+	// Old path should disappear, new path should be fully readable.
+	waitForObjectNotFound(t, ctx, c, acc, origPath)
+	mustReadFull(t, ctx, c, acc, newPath, content)
+
+	// Allow remaining full slab to upload.
+	backend.allowUploads(1)
+
+	// Final state: 2 uploaded slabs, 1 short local tail.
+	waitForMixedState(t, db, acc, share.Name, newPath, 2, 1)
+	mustReadFull(t, ctx, c, acc, newPath, content)
+}
+
+func TestIndexdClient_DeleteDuringMixedUpload(t *testing.T) {
+	ctx := context.Background()
+
+	db := stores.NewTestStore(t, ctx)
+	t.Cleanup(db.Close)
+
+	acc := newTestAccount(t, db, "alice", "secret123", "wrg")
+	share := newTestShare(t, db, "testshare")
+	grantFullAccess(t, db, share, acc)
+
+	backend := newGatedFakeBackend()
+	c := newIndexdClient(db, backend, share.Name, 1, 0)
+	t.Cleanup(func() { _ = c.Close() })
+
+	content := makeLargeMixedContent()
+	path := "big-delete.bin"
+
+	uploadID, err := c.StartUpload(ctx, acc, path)
+	if err != nil {
+		t.Fatalf("StartUpload: %v", err)
+	}
+
+	uploadInThreeChunks(t, ctx, c, path, uploadID, content)
+
+	if err := c.FinishUpload(ctx, path, uploadID, nil); err != nil {
+		t.Fatalf("FinishUpload: %v", err)
+	}
+
+	waitForMixedState(t, db, acc, share.Name, path, 0, 3)
+	mustReadFull(t, ctx, c, acc, path, content)
+
+	// Allow just one slab to upload.
+	backend.allowUploads(1)
+	waitForMixedState(t, db, acc, share.Name, path, 1, 2)
+	mustReadFull(t, ctx, c, acc, path, content)
+
+	// Delete while some slabs are still local.
+	if err := c.Delete(ctx, acc, path, false); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	waitForObjectNotFound(t, ctx, c, acc, path)
+
+	// Reading after delete must fail.
+	var buf bytes.Buffer
+	err = c.Read(ctx, acc, path, 0, uint64(len(content)), &buf)
+	if !errors.Is(err, stores.ErrNotFound) {
+		t.Fatalf("expected Read after delete to return ErrNotFound, got %v", err)
+	}
+
+	// Even if uploads are later unlocked, the file must stay gone.
+	backend.allowUploads(10)
+	waitForObjectNotFound(t, ctx, c, acc, path)
+}
+
+func TestIndexdClient_RenameDirectoryDuringMixedUpload(t *testing.T) {
+	ctx := context.Background()
+
+	db := stores.NewTestStore(t, ctx)
+	t.Cleanup(db.Close)
+
+	acc := newTestAccount(t, db, "alice", "secret123", "wrg")
+	share := newTestShare(t, db, "testshare")
+	grantFullAccess(t, db, share, acc)
+
+	backend := newGatedFakeBackend()
+	c := newIndexdClient(db, backend, share.Name, 1, 0)
+	t.Cleanup(func() { _ = c.Close() })
+
+	dir := "docs"
+	if err := c.MakeDirectory(ctx, acc, dir); err != nil {
+		t.Fatalf("MakeDirectory: %v", err)
+	}
+
+	content := makeLargeMixedContent()
+	origPath := "docs/big.bin"
+
+	uploadID, err := c.StartUpload(ctx, acc, origPath)
+	if err != nil {
+		t.Fatalf("StartUpload: %v", err)
+	}
+
+	uploadInThreeChunks(t, ctx, c, origPath, uploadID, content)
+
+	if err := c.FinishUpload(ctx, origPath, uploadID, nil); err != nil {
+		t.Fatalf("FinishUpload: %v", err)
+	}
+
+	// Initially all slabs are still local.
+	waitForMixedState(t, db, acc, share.Name, origPath, 0, 3)
+	mustReadFull(t, ctx, c, acc, origPath, content)
+
+	// Let one full slab upload.
+	backend.allowUploads(1)
+	waitForMixedState(t, db, acc, share.Name, origPath, 1, 2)
+	mustReadFull(t, ctx, c, acc, origPath, content)
+
+	// Rename the directory while upload is still in progress.
+	newDir := "docs-renamed"
+	if err := c.Rename(ctx, acc, dir, newDir, true, false); err != nil {
+		t.Fatalf("Rename(dir): %v", err)
+	}
+
+	// Old path should disappear.
+	waitForObjectNotFound(t, ctx, c, acc, origPath)
+
+	// New file path should remain fully readable.
+	newPath := "docs-renamed/big.bin"
+	mustReadFull(t, ctx, c, acc, newPath, content)
+
+	// Metadata should have moved with the renamed directory.
+	waitForMixedState(t, db, acc, share.Name, newPath, 1, 2)
+
+	// Let the remaining full slab upload.
+	backend.allowUploads(1)
+
+	// Final state: 2 remote slabs, 1 short local tail.
+	waitForMixedState(t, db, acc, share.Name, newPath, 2, 1)
+	mustReadFull(t, ctx, c, acc, newPath, content)
+}
+
+func TestIndexdClient_OverwriteFileDuringMixedUpload(t *testing.T) {
+	ctx := context.Background()
+
+	db := stores.NewTestStore(t, ctx)
+	t.Cleanup(db.Close)
+
+	acc := newTestAccount(t, db, "alice", "secret123", "wrg")
+	share := newTestShare(t, db, "testshare")
+	grantFullAccess(t, db, share, acc)
+
+	backend := newGatedFakeBackend()
+	c := newIndexdClient(db, backend, share.Name, 1, 0)
+	t.Cleanup(func() { _ = c.Close() })
+
+	origContent := []byte("old content")
+	targetPath := "overwrite.bin"
+
+	uploadID, err := c.StartUpload(ctx, acc, targetPath)
+	if err != nil {
+		t.Fatalf("StartUpload(original): %v", err)
+	}
+	if _, err := c.Write(ctx, bytes.NewReader(origContent), targetPath, uploadID, 1, 0, uint64(len(origContent))); err != nil {
+		t.Fatalf("Write(original): %v", err)
+	}
+	if err := c.FinishUpload(ctx, targetPath, uploadID, nil); err != nil {
+		t.Fatalf("FinishUpload(original): %v", err)
+	}
+	waitForRead(t, ctx, c, acc, targetPath, origContent)
+	mustReadEquals(t, ctx, c, acc, targetPath, origContent)
+
+	// Upload replacement content under a temp name.
+	newContent := makeLargeMixedContent()
+	tempPath := "temp.bin"
+
+	uploadID, err = c.StartUpload(ctx, acc, tempPath)
+	if err != nil {
+		t.Fatalf("StartUpload(replacement): %v", err)
+	}
+
+	uploadInThreeChunks(t, ctx, c, tempPath, uploadID, newContent)
+
+	if err := c.FinishUpload(ctx, tempPath, uploadID, nil); err != nil {
+		t.Fatalf("FinishUpload(replacement): %v", err)
+	}
+
+	// Initially all three slabs are local.
+	waitForMixedState(t, db, acc, share.Name, tempPath, 0, 3)
+	mustReadFull(t, ctx, c, acc, tempPath, newContent)
+
+	// Let one full slab upload.
+	backend.allowUploads(1)
+	waitForMixedState(t, db, acc, share.Name, tempPath, 1, 2)
+	mustReadFull(t, ctx, c, acc, tempPath, newContent)
+
+	// Overwrite the existing file with `force=true` mid-upload.
+	if err := c.Rename(ctx, acc, tempPath, targetPath, false, true); err != nil {
+		t.Fatalf("Rename(force overwrite): %v", err)
+	}
+
+	// The old content should become inaccessible.
+	mustNotReadEquals(t, ctx, c, acc, targetPath, origContent)
+
+	// The temp path should disappear.
+	waitForObjectNotFound(t, ctx, c, acc, tempPath)
+
+	// The target path should now return the new content immediately.
+	mustReadFull(t, ctx, c, acc, targetPath, newContent)
+
+	// And it should still be mid-upload.
+	waitForMixedState(t, db, acc, share.Name, targetPath, 1, 2)
+
+	// Let the remaining full slab upload.
+	backend.allowUploads(1)
+
+	// Final state: 2 remote slabs, 1 short local tail.
+	waitForMixedState(t, db, acc, share.Name, targetPath, 1, 2)
+	mustReadFull(t, ctx, c, acc, targetPath, newContent)
+}
+
+func mustNotReadEquals(t *testing.T, ctx context.Context, c Client, acc stores.Account, path string, notWant []byte) {
+	t.Helper()
+
+	var buf bytes.Buffer
+	if err := c.Read(ctx, acc, path, 0, uint64(len(notWant)), &buf); err != nil {
+		t.Fatalf("Read(%s): %v", path, err)
+	}
+	if bytes.Equal(buf.Bytes(), notWant) {
+		t.Fatalf("Read(%s) unexpectedly matched old content", path)
 	}
 }
