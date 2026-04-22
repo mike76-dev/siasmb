@@ -475,13 +475,13 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 				SELECT o.id
 				FROM objects o
 				JOIN target t ON o.full_path = t.new_path
+				JOIN check_no_dir_conflict c ON TRUE
 				WHERE o.share_name = $1
 					AND o.temporary = FALSE
 					AND $7::boolean
 			)
 			SELECT DISTINCT m.buffer_id
 			FROM doomed_target dt
-			JOIN check_no_dir_conflict c ON TRUE
 			JOIN metadata m ON m.object_id = dt.id
 			WHERE m.buffer_id IS NOT NULL
 		`
@@ -504,6 +504,53 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 			return fmt.Errorf("failed to iterate through buffer IDs: %v", err)
 		}
 		rows.Close()
+
+		if force {
+			const deleteQuery = `
+				WITH caller AS (
+					SELECT id, workgroup
+					FROM accounts
+					WHERE id = $4
+				),
+				dst_parent AS (
+					SELECT d.id, d.full_path
+					FROM directories d
+					JOIN accounts owner ON owner.id = d.account
+					CROSS JOIN caller c
+					WHERE d.share_name = $1
+						AND d.full_path = $2
+						AND (
+							d.account = c.id
+							OR (d.private = FALSE AND owner.workgroup = c.workgroup)
+						)
+
+					UNION ALL
+
+					SELECT NULL::bigint, '/'
+					FROM caller
+					WHERE $2 = '/'
+				),
+				check_no_dir_conflict AS (
+					SELECT 1
+					FROM dst_parent p
+					WHERE NOT EXISTS (
+						SELECT 1
+						FROM directories d
+						WHERE d.share_name = $1
+							AND d.full_path = $3
+					)
+				)
+				DELETE FROM objects o
+				USING check_no_dir_conflict c
+				WHERE o.share_name = $1
+					AND o.full_path = $3
+					AND o.temporary = FALSE
+			`
+
+			if _, err := tx.Exec(ctx, deleteQuery, share, dir, newPath, acc.ID); err != nil {
+				return fmt.Errorf("failed to delete existing destination file: %w", err)
+			}
+		}
 
 		const renameQuery = `
 			WITH caller AS (
@@ -547,26 +594,12 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 				FROM src s
 				JOIN dst_parent p ON TRUE
 				WHERE $5 <> $2
-			),
-			check_no_dir_conflict AS (
-				SELECT 1
-				FROM target t
-				WHERE NOT EXISTS (
-					SELECT 1
-					FROM directories d
-					WHERE d.share_name = $1
-						AND d.full_path = t.new_path
-				)
-			),
-			delete_existing AS (
-				DELETE FROM objects o
-				USING target t
-				JOIN check_no_dir_conflict c ON TRUE
-				WHERE $7::boolean
-					AND o.share_name = $1
-					AND o.full_path = t.new_path
-					AND o.temporary = FALSE
-				RETURNING o.id
+					AND NOT EXISTS (
+						SELECT 1
+						FROM directories d
+						WHERE d.share_name = $1
+							AND d.full_path = $5
+					)
 			)
 			UPDATE objects o
 			SET
@@ -575,13 +608,12 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 				full_path = t.new_path,
 				modified_at = NOW()
 			FROM target t
-			JOIN check_no_dir_conflict c ON TRUE
 			WHERE o.id = t.src_id
 			RETURNING o.id
 		`
 
 		var id uint64
-		if err := tx.QueryRow(ctx, renameQuery, share, oldPath, dir, name, newPath, acc.ID, force).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, renameQuery, share, oldPath, dir, name, newPath, acc.ID).Scan(&id); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
