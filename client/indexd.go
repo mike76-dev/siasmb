@@ -458,6 +458,15 @@ func (ic *IndexdClient) processUpload(ctx context.Context) error {
 	}
 
 	if err := ic.db.CompleteUploadJob(job.MetadataID, job.BufferID, key); err != nil {
+		if errors.Is(err, stores.ErrNotFound) {
+			// The file has likely been deleted.
+			if derr := ic.backend.DeleteObject(ctx, key); derr != nil {
+				log.Printf("failed to delete orphaned uploaded slab %x after late completion: %v", key, derr)
+			} else if perr := ic.backend.PruneSlabs(ctx); perr != nil {
+				log.Printf("failed to prune slabs after late completion for %x: %v", key, perr)
+			}
+			return nil
+		}
 		return fmt.Errorf("couldn't complete upload job: %v", err)
 	}
 
