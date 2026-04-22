@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/mike76-dev/siasmb/stores"
@@ -103,6 +104,7 @@ type IndexdClient struct {
 	dataShards   uint8
 	parityShards uint8
 	closeChan    chan struct{}
+	wg           sync.WaitGroup
 }
 
 // NewIndexdClient returns an initialized IndexdClient.
@@ -123,7 +125,11 @@ func newIndexdClient(db *stores.Database, backend storageBackend, share string, 
 	}
 
 	// Start background upload thread.
-	go ic.processUploads(ic.closeChan)
+	ic.wg.Add(1)
+	go func() {
+		defer ic.wg.Done()
+		ic.processUploads(ic.closeChan)
+	}()
 
 	return ic
 }
@@ -434,6 +440,7 @@ func (ic *IndexdClient) DeleteAll(ctx context.Context) error {
 // Close closes the client and releases all resources.
 func (ic *IndexdClient) Close() error {
 	close(ic.closeChan)
+	ic.wg.Wait()
 	return ic.backend.Close()
 }
 
@@ -470,7 +477,20 @@ func (ic *IndexdClient) processUploads(closeChan chan struct{}) {
 		}
 
 		if err := ic.processUpload(ctx); err != nil {
+			select {
+			case <-closeChan:
+				return
+			default:
+			}
+
 			time.Sleep(time.Second)
+
+			select {
+			case <-closeChan:
+				return
+			default:
+			}
+
 			if errors.Is(err, stores.ErrNoUploadJobs) {
 				continue
 			}
