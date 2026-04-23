@@ -15,11 +15,11 @@ The setup process of an `indexd` node is described here: [https://github.com/Sia
 This section will assume you are running Ubuntu Server 24.04. On the other systems, the commands may be different.
 
 Run the following command:
-```
+```Bash
 sudo apt install postgresql postgresql-contrib -y
 ```
 Verify the installation:
-```
+```Bash
 sudo systemctl status postgresql
 ```
 You should see something like:
@@ -29,15 +29,15 @@ You should see something like:
      Active: active (exited)
 ```
 If it is inactive, start and enable it:
-```
+```Bash
 sudo systemctl enable --now postgresql
 ```
 PostgreSQL creates a Unix user named postgres. Switch to it:
-```
+```Bash
 sudo -i -u postgres
 ```
 Then open the PostgreSQL shell:
-```
+```Bash
 psql
 ```
 You should see:
@@ -48,7 +48,7 @@ Type "help" for help.
 postgres=#
 ```
 Inside the `psql` prompt:
-```
+```SQL
 CREATE DATABASE <DATABASE>;
 CREATE USER <USER> WITH ENCRYPTED PASSWORD <DB_PASSWORD>;
 GRANT ALL PRIVILEGES ON DATABASE <DATABASE> TO <USER>;
@@ -59,22 +59,22 @@ GRANT CREATE ON SCHEMA public TO <USER>;
 ```
 Take a note of `<DATABASE>`, `<USER>`, and `<DB_PASSWORD>`, as you will need these values later on.
 Exit `psql` with:
-```
+```SQL
 \q
 ```
 Now we need to create the tables. Open the PostgreSQL shell under the newly created user:
-```
+```Bash
 psql -U <USER> -d <DATABASE> -h localhost
 ```
 Enter `<DB_PASSWORD>` when prompted to.
 Inside the `psql` prompt:
-```
+```SQL
 \i <PATH_TO_INIT.SQL>
 ```
 
 ## Running the Server
 A config file, `siasmb.yml`, needs to be created in the directory where the server will be running. It should contain the following lines:
-```
+```YAML
 debug: false               # indicates whether to display the session ID and key for tools like Wireshark to decrypt the encrypted data
 maxConnections: 30         # the maximum number of connections accepted from the same IP within 10 minutes
 api:
@@ -95,7 +95,7 @@ indexd:
   seedPhrase: ''                          # if omitted, the server will generate a new seed phrase and put it here
 ```
 The server can be started either as a standalone executable or as a service (the latter is preferred). For example, on Linux:
-```
+```Bash
 sudo siasmb --dir=<PATH_TO_SIASMB.YML>
 ```
 The superuser access is required because of the port 445 that the server is listening on.
@@ -103,19 +103,19 @@ The superuser access is required because of the port 445 that the server is list
 Now, you need to register shares and add user accounts that will be accessing these shares.
 
 To register a share, run (for example):
-```
+```Bash
 curl -u "":<API_PASSWORD> -X POST "http://127.0.0.1:9999/share" -d '{"name":"shared","type":"renterd","serverName":"http://127.0.0.1:9980","password":"1234","bucket":"default","remark":"renterd"}'
 ```
 or
-```
+```Bash
 curl -u "":<API_PASSWORD> -X POST "http://127.0.0.1:9999/share" -d '{"name":"shared","type":"indexd","serverName":"https://sia.storage","remark":"Sia Foundation indexer","dataShards":10,"parityShards":20}'
 ```
 To register a new account, run (for example):
-```
+```Bash
 curl -u "":<API_PASSWORD> -X POST "http://127.0.0.1:9999/account" -d '{"username":"test","password":"123","workgroup":"home"}'
 ```
 To grant the account access to the share, run:
-```
+```Bash
 curl -u "":<API_PASSWORD> -X PUT "http://127.0.0.1:9999/share/shared/policy?username=test&workgroup=home&read=true&write=true&delete=true&execute=true"
 ```
 
@@ -127,7 +127,7 @@ The server also has a built-in abuse protection. If 30 or more connections are d
 Also banned are those remote hosts, which continue sending SMB1 requests after receiving the initial SMB2 response from the server.
 
 The bans are saved in the database, and the reason for the ban is provided. If a host ends up banned by mistake, it can be removed manually:
-```
+```Bash
 curl -u "":<API_PASSWORD> -X DELETE "http://127.0.0.1:9999/bans/<IP_OF_THE_REMOTE_HOST>"
 ```
 
@@ -152,41 +152,54 @@ Please note: Windows 2000/NT/XP and earlier are not supported. The earliest supp
 
 ### Ubuntu CLI
 1. If needed, install `cifs-utils` with
-```
+```Bash
 sudo apt install cifs-utils
 ```
 2. Create a mount path with
-```
+```Bash
 sudo mkdir /mnt/sia
 ```
 and change the ownership with
-```
+```Bash
 sudo chown $USER:$USER /mnt/sia
 ```
 3. Mount the share with
-```
+```Bash
 sudo mount -t cifs //<SERVER_NET_ADDRESS>/<SHARE_NAME> /mnt/sia -o username=<USERNAME>,workgroup=<WORKGROUP>,password=<PASSWORD>
 ```
 4. To unmount, type
-```
+```Bash
 sudo umount /mnt/sia
 ```
 
-## Proposed Testing Scenario
-1. Connect to the share
-2. Copy a file to the share root
-3. Rename the file in the share root
-4. Copy that file from the share root
-5. Make a directory in the share root
-6. Copy a file to that directory
-7. Rename the file in that directory
-8. Copy that file from that directory
-9. Rename that directory
-10. Delete that directory
-11. Delete the file in the root directory
-12. Copy a directory containing files to the share root
-13. Copy that directory from the share root
-14. Disconnect from the share
+## Testing
+
+1. Set up a test database
+
+```Bash
+sudo -u postgres psql
+```
+```SQL
+CREATE DATABASE siasmb_test;
+CREATE USER siasmb_test_user WITH PASSWORD 'siasmb';
+ALTER DATABASE siasmb_test OWNER TO siasmb_test_user;
+GRANT ALL PRIVILEGES ON DATABASE siasmb_test TO siasmb_test_user;
+\q
+```
+2. Set environment variables
+```Bash
+export TEST_DB_HOST=127.0.0.1
+export TEST_DB_PORT=5432
+export TEST_DB_USER=siasmb_test_user
+export TEST_DB_PASSWORD=siasmb
+export TEST_DB_NAME=siasmb_test
+export TEST_DB_SSLMODE=disable
+export TEST_INIT_SQL=../init.sql
+```
+3. Run the tests
+```Bash
+go test ./client -v
+```
 
 ## Bug Reporting
 Please do not hesitate to open an issue if you discover any bugs.
