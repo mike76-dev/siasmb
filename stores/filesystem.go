@@ -475,13 +475,13 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 				SELECT o.id
 				FROM objects o
 				JOIN target t ON o.full_path = t.new_path
+				JOIN check_no_dir_conflict c ON TRUE
 				WHERE o.share_name = $1
 					AND o.temporary = FALSE
 					AND $7::boolean
 			)
 			SELECT DISTINCT m.buffer_id
 			FROM doomed_target dt
-			JOIN check_no_dir_conflict c ON TRUE
 			JOIN metadata m ON m.object_id = dt.id
 			WHERE m.buffer_id IS NOT NULL
 		`
@@ -504,6 +504,53 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 			return fmt.Errorf("failed to iterate through buffer IDs: %v", err)
 		}
 		rows.Close()
+
+		if force {
+			const deleteQuery = `
+				WITH caller AS (
+					SELECT id, workgroup
+					FROM accounts
+					WHERE id = $4
+				),
+				dst_parent AS (
+					SELECT d.id, d.full_path
+					FROM directories d
+					JOIN accounts owner ON owner.id = d.account
+					CROSS JOIN caller c
+					WHERE d.share_name = $1
+						AND d.full_path = $2
+						AND (
+							d.account = c.id
+							OR (d.private = FALSE AND owner.workgroup = c.workgroup)
+						)
+
+					UNION ALL
+
+					SELECT NULL::bigint, '/'
+					FROM caller
+					WHERE $2 = '/'
+				),
+				check_no_dir_conflict AS (
+					SELECT 1
+					FROM dst_parent p
+					WHERE NOT EXISTS (
+						SELECT 1
+						FROM directories d
+						WHERE d.share_name = $1
+							AND d.full_path = $3
+					)
+				)
+				DELETE FROM objects o
+				USING check_no_dir_conflict c
+				WHERE o.share_name = $1
+					AND o.full_path = $3
+					AND o.temporary = FALSE
+			`
+
+			if _, err := tx.Exec(ctx, deleteQuery, share, dir, newPath, acc.ID); err != nil {
+				return fmt.Errorf("failed to delete existing destination file: %w", err)
+			}
+		}
 
 		const renameQuery = `
 			WITH caller AS (
@@ -547,26 +594,12 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 				FROM src s
 				JOIN dst_parent p ON TRUE
 				WHERE $5 <> $2
-			),
-			check_no_dir_conflict AS (
-				SELECT 1
-				FROM target t
-				WHERE NOT EXISTS (
-					SELECT 1
-					FROM directories d
-					WHERE d.share_name = $1
-						AND d.full_path = t.new_path
-				)
-			),
-			delete_existing AS (
-				DELETE FROM objects o
-				USING target t
-				JOIN check_no_dir_conflict c ON TRUE
-				WHERE $7::boolean
-					AND o.share_name = $1
-					AND o.full_path = t.new_path
-					AND o.temporary = FALSE
-				RETURNING o.id
+					AND NOT EXISTS (
+						SELECT 1
+						FROM directories d
+						WHERE d.share_name = $1
+							AND d.full_path = $5
+					)
 			)
 			UPDATE objects o
 			SET
@@ -575,13 +608,12 @@ func (db *Database) RenameFile(acc Account, share string, oldPath, newPath strin
 				full_path = t.new_path,
 				modified_at = NOW()
 			FROM target t
-			JOIN check_no_dir_conflict c ON TRUE
 			WHERE o.id = t.src_id
 			RETURNING o.id
 		`
 
 		var id uint64
-		if err := tx.QueryRow(ctx, renameQuery, share, oldPath, dir, name, newPath, acc.ID, force).Scan(&id); err != nil {
+		if err := tx.QueryRow(ctx, renameQuery, share, oldPath, dir, name, newPath, acc.ID).Scan(&id); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrNotFound
 			}
@@ -723,7 +755,60 @@ func (db *Database) RenameDirectory(acc Account, share string, oldPath, newPath 
 func (db *Database) DeleteFile(acc Account, share string, path string) error {
 	path = normalizePath(path)
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
-		const query = `
+		const collectQuery = `
+			WITH caller AS (
+				SELECT id, workgroup
+				FROM accounts
+				WHERE id = $3
+			),
+			target AS (
+				SELECT o.id
+				FROM objects o
+				JOIN accounts owner ON owner.id = o.account
+				LEFT JOIN directories od
+					ON od.share_name = o.share_name
+					AND od.id = o.directory_id
+				CROSS JOIN caller c
+				WHERE o.share_name = $1
+					AND o.full_path = $2
+					AND o.temporary = FALSE
+					AND (
+						o.account = c.id
+						OR (
+							od.private = FALSE
+							AND owner.workgroup = c.workgroup
+						)
+					)
+			)
+			SELECT DISTINCT m.buffer_id
+			FROM metadata m
+			JOIN target t ON m.object_id = t.id
+			WHERE m.buffer_id IS NOT NULL
+		`
+
+		rows, err := tx.Query(ctx, collectQuery, share, path, acc.ID)
+		if err != nil {
+			return fmt.Errorf("failed to collect file buffers: %w", err)
+		}
+
+		var bids []uint64
+		for rows.Next() {
+			var bid uint64
+			if err := rows.Scan(&bid); err != nil {
+				rows.Close()
+				return fmt.Errorf("failed to scan buffer ID: %w", err)
+			}
+			bids = append(bids, bid)
+		}
+
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to iterate buffer IDs: %w", err)
+		}
+
+		rows.Close()
+
+		const deleteQuery = `
 			WITH caller AS (
 				SELECT id, workgroup
 				FROM accounts
@@ -748,36 +833,39 @@ func (db *Database) DeleteFile(acc Account, share string, path string) error {
 						)
 					)
 			),
-			doomed_buffers AS (
-				SELECT DISTINCT m.buffer_id
-				FROM metadata m
-				JOIN target t ON m.object_id = t.id
-				WHERE m.buffer_id IS NOT NULL
-			),
 			deleted_objects AS (
 				DELETE FROM objects o
 				USING target t
 				WHERE o.id = t.id
 				RETURNING o.id
-			),
-			deleted_buffers AS (
-				DELETE FROM buffers b
-				USING doomed_buffers db
-				WHERE b.id = db.buffer_id
-				RETURNING b.id
 			)
 			SELECT COUNT(*)
 			FROM deleted_objects
 		`
 
 		var n int64
-		err := tx.QueryRow(ctx, query, share, path, acc.ID).Scan(&n)
+		err = tx.QueryRow(ctx, deleteQuery, share, path, acc.ID).Scan(&n)
 		if err != nil {
 			return fmt.Errorf("failed to delete file: %v", err)
 		}
 		if n == 0 {
 			return ErrNotFound
 		}
+
+		for _, bid := range bids {
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM buffers b
+				WHERE b.id = $1
+					AND NOT EXISTS (
+						SELECT 1
+						FROM metadata m
+						WHERE m.buffer_id = b.id
+					)
+			`, bid); err != nil {
+				return fmt.Errorf("failed to delete orphaned buffer: %w", err)
+			}
+		}
+
 		return nil
 	})
 }
@@ -786,7 +874,7 @@ func (db *Database) DeleteFile(acc Account, share string, path string) error {
 func (db *Database) DeleteDirectory(acc Account, share string, path string) error {
 	path = normalizePath(path)
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
-		const query = `
+		const collectQuery = `
 			WITH caller AS (
 				SELECT id, workgroup
 				FROM accounts
@@ -811,12 +899,52 @@ func (db *Database) DeleteDirectory(acc Account, share string, path string) erro
 				WHERE o.share_name = $1
 					AND o.full_path LIKE s.full_path || '/%%'
 					And o.temporary = FALSE
+			)
+			SELECT DISTINCT m.buffer_id
+			FROM metadata m
+			JOIN target_objects t ON m.object_id = t.id
+			WHERE m.buffer_id IS NOT NULL
+		`
+
+		rows, err := tx.Query(ctx, collectQuery, share, path, acc.ID)
+		if err != nil {
+			return fmt.Errorf("failed to collect directory buffers: %w", err)
+		}
+
+		var bids []uint64
+		for rows.Next() {
+			var bid uint64
+			if err := rows.Scan(&bid); err != nil {
+				rows.Close()
+				return fmt.Errorf("failed to scan buffer ID: %w", err)
+			}
+			bids = append(bids, bid)
+		}
+
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("failed to iterate buffer IDs: %w", err)
+		}
+
+		rows.Close()
+
+		const deleteQuery = `
+			WITH caller AS (
+				SELECT id, workgroup
+				FROM accounts
+				WHERE id = $3
 			),
-			doomed_buffers AS (
-				SELECT DISTINCT m.buffer_id
-				FROM metadata m
-				JOIN target_objects t ON m.object_id = t.id
-				WHERE m.buffer_id IS NOT NULL
+			src AS (
+				SELECT d.id, d.full_path
+				FROM directories d
+				JOIN accounts owner ON owner.id = d.account
+				CROSS JOIN caller c
+				WHERE d.share_name = $1
+					AND d.full_path = $2
+					AND (
+						d.account = c.id
+						OR (d.private = FALSE AND owner.workgroup = c.workgroup)
+					)
 			),
 			delete_files AS (
 				DELETE FROM objects o
@@ -838,25 +966,34 @@ func (db *Database) DeleteDirectory(acc Account, share string, path string) erro
 				USING src s
 				WHERE d.id = s.id
 				RETURNING d.id
-			),
-			deleted_buffers AS (
-				DELETE FROM buffers b
-				USING doomed_buffers db
-				WHERE b.id = db.buffer_id
-				RETURNING b.id
 			)
 			SELECT COUNT(*)
 			FROM delete_root
 		`
 
 		var n int64
-		err := tx.QueryRow(ctx, query, share, path, acc.ID).Scan(&n)
+		err = tx.QueryRow(ctx, deleteQuery, share, path, acc.ID).Scan(&n)
 		if err != nil {
 			return fmt.Errorf("failed to delete directory: %v", err)
 		}
 		if n == 0 {
 			return ErrNotFound
 		}
+
+		for _, bid := range bids {
+			if _, err := tx.Exec(ctx, `
+				DELETE FROM buffers b
+				WHERE b.id = $1
+					AND NOT EXISTS (
+						SELECT 1
+						FROM metadata m
+						WHERE m.buffer_id = b.id
+					)
+			`, bid); err != nil {
+				return fmt.Errorf("failed to delete orphaned buffer: %w", err)
+			}
+		}
+
 		return nil
 	})
 }

@@ -8,41 +8,128 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/mike76-dev/siasmb/stores"
 	proto "go.sia.tech/core/rhp/v4"
 	"go.sia.tech/core/types"
+	"go.sia.tech/indexd/api/app"
 	"go.sia.tech/indexd/slabs"
 	"go.sia.tech/renterd/v2/api"
 	sdk "go.sia.tech/siastorage"
 	"golang.org/x/crypto/blake2b"
 )
 
+// storageBackend is the minimal interface for `indexd` SDK.
+type storageBackend interface {
+	Account(ctx context.Context) (app.AccountResponse, error)
+	Upload(ctx context.Context, r io.Reader, dataShards, parityShards uint8) (types.Hash256, error)
+	Download(ctx context.Context, key types.Hash256, offset, length uint64, w io.Writer) error
+	DeleteObject(ctx context.Context, key types.Hash256) error
+	PruneSlabs(ctx context.Context) error
+	ListObjectKeys(ctx context.Context, cursor slabs.Cursor, limit int) ([]types.Hash256, error)
+	Close() error
+}
+
+// sdkBackend is a wrapper around the SDK.
+type sdkBackend struct {
+	sdk *sdk.SDK
+}
+
+// Account calls sdk.Account.
+func (b *sdkBackend) Account(ctx context.Context) (app.AccountResponse, error) {
+	return b.sdk.Account(ctx)
+}
+
+// Upload uploads the object and directly pins it.
+func (b *sdkBackend) Upload(ctx context.Context, r io.Reader, dataShards, parityShards uint8) (types.Hash256, error) {
+	obj := sdk.NewEmptyObject()
+	if err := b.sdk.Upload(ctx, &obj, r, sdk.WithRedundancy(dataShards, parityShards)); err != nil {
+		return types.Hash256{}, err
+	}
+
+	if err := b.sdk.PinObject(ctx, obj); err != nil {
+		return types.Hash256{}, err
+	}
+
+	return obj.ID(), nil
+}
+
+// Download downloads the object by its key.
+func (b *sdkBackend) Download(ctx context.Context, key types.Hash256, offset, length uint64, w io.Writer) error {
+	obj, err := b.sdk.Object(ctx, key)
+	if err != nil {
+		return err
+	}
+
+	return b.sdk.Download(ctx, w, obj, sdk.WithDownloadRange(offset, length))
+}
+
+// DeleteObject calls sdk.DeleteObject.
+func (b *sdkBackend) DeleteObject(ctx context.Context, key types.Hash256) error {
+	return b.sdk.DeleteObject(ctx, key)
+}
+
+// PruneSlabs calls sdk.PruneSlabs.
+func (b *sdkBackend) PruneSlabs(ctx context.Context) error {
+	return b.sdk.PruneSlabs(ctx)
+}
+
+// ListObjectKeys returns a slice of object keys instead of objects.
+func (b *sdkBackend) ListObjectKeys(ctx context.Context, cursor slabs.Cursor, limit int) ([]types.Hash256, error) {
+	objs, err := b.sdk.ListObjects(ctx, cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	keys := make([]types.Hash256, 0, len(objs))
+	for _, obj := range objs {
+		keys = append(keys, obj.ID())
+	}
+
+	return keys, nil
+}
+
+// Close calls sdk.Close.
+func (b *sdkBackend) Close() error {
+	return b.sdk.Close()
+}
+
 // IndexdClient implements a Client for interacting with indexd.
 type IndexdClient struct {
 	share        string
 	db           *stores.Database
-	sdkClient    *sdk.SDK
+	backend      storageBackend
 	dataShards   uint8
 	parityShards uint8
 	closeChan    chan struct{}
+	wg           sync.WaitGroup
 }
 
 // NewIndexdClient returns an initialized IndexdClient.
 func NewIndexdClient(db *stores.Database, sdkClient *sdk.SDK, share string, dataShards, parityShards uint8) Client {
+	return newIndexdClient(db, &sdkBackend{sdk: sdkClient}, share, dataShards, parityShards)
+}
+
+// newIndexdClient allows using a mock SDK for testing.
+func newIndexdClient(db *stores.Database, backend storageBackend, share string, dataShards, parityShards uint8) Client {
 	cc := make(chan struct{})
 	ic := &IndexdClient{
 		share:        share,
 		db:           db,
-		sdkClient:    sdkClient,
+		backend:      backend,
 		dataShards:   dataShards,
 		parityShards: parityShards,
 		closeChan:    cc,
 	}
 
 	// Start background upload thread.
-	go ic.processUploads(ic.closeChan)
+	ic.wg.Add(1)
+	go func() {
+		defer ic.wg.Done()
+		ic.processUploads(ic.closeChan)
+	}()
 
 	return ic
 }
@@ -62,7 +149,7 @@ func (ic *IndexdClient) Info(ctx context.Context) (GeneralInfo, error) {
 
 // Storage queries the information about the underlying storage.
 func (ic *IndexdClient) Storage(ctx context.Context) (StorageInfo, error) {
-	acc, err := ic.sdkClient.Account(ctx)
+	acc, err := ic.backend.Account(ctx)
 	if err != nil {
 		return StorageInfo{}, err
 	}
@@ -217,12 +304,7 @@ func (ic *IndexdClient) Read(ctx context.Context, acc stores.Account, path strin
 		rangeLength := readEnd - readStart
 
 		if (slab.Key != types.Hash256{}) {
-			obj, err := ic.sdkClient.Object(ctx, slab.Key)
-			if err != nil {
-				return err
-			}
-
-			if err = ic.sdkClient.Download(ctx, buf, obj, sdk.WithDownloadRange(rangeOffset, rangeLength)); err != nil {
+			if err = ic.backend.Download(ctx, slab.Key, rangeOffset, rangeLength, buf); err != nil {
 				return err
 			}
 		} else if slab.Data != nil {
@@ -248,12 +330,12 @@ func (ic *IndexdClient) AbortUpload(ctx context.Context, _ string, uploadID stri
 	}
 
 	for _, key := range slabs {
-		if err := ic.sdkClient.DeleteObject(ctx, key); err != nil {
+		if err := ic.backend.DeleteObject(ctx, key); err != nil {
 			return fmt.Errorf("couldn't delete slab: %v", err)
 		}
 	}
 
-	if err := ic.sdkClient.PruneSlabs(ctx); err != nil {
+	if err := ic.backend.PruneSlabs(ctx); err != nil {
 		return fmt.Errorf("couldn't prune slabs: %v", err)
 	}
 
@@ -294,12 +376,12 @@ func (ic *IndexdClient) Delete(ctx context.Context, acc stores.Account, path str
 	}
 
 	for _, key := range slabs {
-		if err := ic.sdkClient.DeleteObject(ctx, key); err != nil {
+		if err := ic.backend.DeleteObject(ctx, key); err != nil {
 			log.Printf("failed to delete slab %x from %s", key, path)
 		}
 	}
 
-	if err := ic.sdkClient.PruneSlabs(ctx); err != nil {
+	if err := ic.backend.PruneSlabs(ctx); err != nil {
 		return fmt.Errorf("couldn't prune slabs: %v", err)
 	}
 
@@ -333,22 +415,22 @@ func (ic *IndexdClient) DeleteAll(ctx context.Context) error {
 		default:
 		}
 
-		objs, err := ic.sdkClient.ListObjects(ctx, slabs.Cursor{}, 10)
+		keys, err := ic.backend.ListObjectKeys(ctx, slabs.Cursor{}, 10)
 		if err != nil {
-			return fmt.Errorf("couldn't list objects: %v", err)
+			return fmt.Errorf("couldn't list object keys: %v", err)
 		}
-		if len(objs) == 0 {
+		if len(keys) == 0 {
 			break
 		}
 
-		for _, obj := range objs {
-			if err := ic.sdkClient.DeleteObject(ctx, obj.ID()); err != nil {
-				log.Printf("couldn't delete object %x: %v", obj.ID(), err)
+		for _, key := range keys {
+			if err := ic.backend.DeleteObject(ctx, key); err != nil {
+				log.Printf("couldn't delete object %x: %v", key, err)
 			}
 		}
 	}
 
-	if err := ic.sdkClient.PruneSlabs(ctx); err != nil {
+	if err := ic.backend.PruneSlabs(ctx); err != nil {
 		return fmt.Errorf("couldn't prune slabs: %v", err)
 	}
 
@@ -358,7 +440,8 @@ func (ic *IndexdClient) DeleteAll(ctx context.Context) error {
 // Close closes the client and releases all resources.
 func (ic *IndexdClient) Close() error {
 	close(ic.closeChan)
-	return ic.sdkClient.Close()
+	ic.wg.Wait()
+	return ic.backend.Close()
 }
 
 // processUpload checks if there is a complete slab and uploads it.
@@ -368,19 +451,22 @@ func (ic *IndexdClient) processUpload(ctx context.Context) error {
 		return err
 	}
 
-	obj := sdk.NewEmptyObject()
-	if err := ic.sdkClient.Upload(ctx, &obj, bytes.NewReader(job.Data), sdk.WithRedundancy(ic.dataShards, ic.parityShards)); err != nil {
+	key, err := ic.backend.Upload(ctx, bytes.NewReader(job.Data), ic.dataShards, ic.parityShards)
+	if err != nil {
 		_ = ic.db.RequeueUploadJob(job.UploadID, job.MetadataID)
 		return fmt.Errorf("couldn't upload slab: %v", err)
 	}
 
-	if err := ic.sdkClient.PinObject(ctx, obj); err != nil {
-		_ = ic.db.RequeueUploadJob(job.UploadID, job.MetadataID)
-		return fmt.Errorf("couldn't pin slab: %v", err)
-	}
-
-	key := obj.ID()
 	if err := ic.db.CompleteUploadJob(job.MetadataID, job.BufferID, key); err != nil {
+		if errors.Is(err, stores.ErrNotFound) {
+			// The file has likely been deleted.
+			if derr := ic.backend.DeleteObject(ctx, key); derr != nil {
+				log.Printf("failed to delete orphaned uploaded slab %x after late completion: %v", key, derr)
+			} else if perr := ic.backend.PruneSlabs(ctx); perr != nil {
+				log.Printf("failed to prune slabs after late completion for %x: %v", key, perr)
+			}
+			return nil
+		}
 		return fmt.Errorf("couldn't complete upload job: %v", err)
 	}
 
@@ -400,7 +486,20 @@ func (ic *IndexdClient) processUploads(closeChan chan struct{}) {
 		}
 
 		if err := ic.processUpload(ctx); err != nil {
+			select {
+			case <-closeChan:
+				return
+			default:
+			}
+
 			time.Sleep(time.Second)
+
+			select {
+			case <-closeChan:
+				return
+			default:
+			}
+
 			if errors.Is(err, stores.ErrNoUploadJobs) {
 				continue
 			}
