@@ -49,11 +49,20 @@ func (b *sdkBackend) Upload(ctx context.Context, r io.Reader, dataShards, parity
 		return types.Hash256{}, err
 	}
 
+	key := obj.ID()
 	if err := b.sdk.PinObject(ctx, obj); err != nil {
-		return types.Hash256{}, err
+		if derr := b.sdk.DeleteObject(ctx, key); derr != nil {
+			return types.Hash256{}, fmt.Errorf("failed to pin slab %x: %w; failed to delete orphaned slab: %w", key, err, derr)
+		}
+
+		if perr := b.sdk.PruneSlabs(ctx); perr != nil {
+			return types.Hash256{}, fmt.Errorf("failed to pin slab %x: %w; failed to prune: %w", key, err, perr)
+		}
+
+		return types.Hash256{}, fmt.Errorf("failed to pin slab %x: %w", key, err)
 	}
 
-	return obj.ID(), nil
+	return key, nil
 }
 
 // Download downloads the object by its key.
