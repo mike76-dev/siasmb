@@ -66,9 +66,7 @@ CREATE TABLE objects (
     modified_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     temporary BOOLEAN NOT NULL DEFAULT FALSE,
     CONSTRAINT objects_share_fk FOREIGN KEY (share_name) REFERENCES shares(share_name) ON DELETE CASCADE,
-    CONSTRAINT objects_directory_fk FOREIGN KEY (share_name, directory_id) REFERENCES directories(share_name, id) ON DELETE CASCADE,
-    CONSTRAINT objects_unique_path UNIQUE (share_name, full_path),
-    CONSTRAINT objects_unique_entry UNIQUE (share_name, directory_id, name)
+    CONSTRAINT objects_directory_fk FOREIGN KEY (share_name, directory_id) REFERENCES directories(share_name, id) ON DELETE CASCADE
 );
 
 CREATE INDEX idx_directories_lookup_path ON directories (share_name, full_path);

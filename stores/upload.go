@@ -383,20 +383,6 @@ func (db *Database) ClaimUploadJob(minSize uint64) (job UploadJob, err error) {
 // with the corresponding metadata entry and removing the buffer if it is no longer referenced.
 func (db *Database) CompleteUploadJob(metadataID uint64, bufferID uint64, slabKey types.Hash256) error {
 	return db.txn(func(ctx context.Context, tx pgx.Tx) error {
-		var uid *uint64
-		const lookupQuery = `
-			SELECT upload_id
-			FROM metadata
-			WHERE id = $1
-		`
-
-		if err := tx.QueryRow(ctx, lookupQuery, metadataID).Scan(&uid); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrNotFound
-			}
-			return fmt.Errorf("failed to look up metadata before completion: %w", err)
-		}
-
 		const updateQuery = `
 			UPDATE metadata
 			SET
@@ -455,37 +441,6 @@ func (db *Database) CompleteUploadJob(metadataID uint64, bufferID uint64, slabKe
 
 		if _, err := tx.Exec(ctx, deleteQuery, bufferID); err != nil {
 			return fmt.Errorf("failed to delete orphaned buffer: %w", err)
-		}
-
-		if uid != nil {
-			var done bool
-			const doneQuery = `
-				SELECT NOT EXISTS (
-					SELECT 1
-					FROM metadata
-					WHERE upload_id = $1
-				)
-				AND NOT EXISTS (
-					SELECT 1
-					FROM upload_jobs
-					WHERE upload_id = $1
-				)
-			`
-
-			if err := tx.QueryRow(ctx, doneQuery, *uid).Scan(&done); err != nil {
-				return fmt.Errorf("failed to check whether upload is complete: %w", err)
-			}
-
-			if done {
-				const deleteUploadQuery = `
-					DELETE FROM uploads
-					WHERE id = $1
-				`
-
-				if _, err := tx.Exec(ctx, deleteUploadQuery, *uid); err != nil {
-					return fmt.Errorf("failed to delete complete upload: %w", err)
-				}
-			}
 		}
 
 		return nil
