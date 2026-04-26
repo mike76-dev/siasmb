@@ -53,14 +53,14 @@ func (b *sdkBackend) Upload(ctx context.Context, r io.Reader, dataShards, parity
 	key := obj.ID()
 	if err := b.sdk.PinObject(ctx, obj); err != nil {
 		if derr := b.sdk.DeleteObject(ctx, key); derr != nil {
-			return types.Hash256{}, fmt.Errorf("failed to pin slab %x: %w; failed to delete orphaned slab: %w", key, err, derr)
+			return types.Hash256{}, fmt.Errorf("failed to pin slab %s: %w; failed to delete orphaned slab: %w", key, err, derr)
 		}
 
 		if perr := b.sdk.PruneSlabs(ctx); perr != nil {
-			return types.Hash256{}, fmt.Errorf("failed to pin slab %x: %w; failed to prune: %w", key, err, perr)
+			return types.Hash256{}, fmt.Errorf("failed to pin slab %s: %w; failed to prune: %w", key, err, perr)
 		}
 
-		return types.Hash256{}, fmt.Errorf("failed to pin slab %x: %w", key, err)
+		return types.Hash256{}, fmt.Errorf("failed to pin slab %s: %w", key, err)
 	}
 
 	return key, nil
@@ -403,7 +403,7 @@ func (ic *IndexdClient) Delete(ctx context.Context, acc stores.Account, path str
 
 	for _, key := range slabs {
 		if err := ic.backend.DeleteObject(ctx, key); err != nil {
-			log.Printf("failed to delete slab %x from %s", key, path)
+			log.Printf("failed to delete slab %s from %s", key, path)
 		}
 	}
 
@@ -451,7 +451,7 @@ func (ic *IndexdClient) DeleteAll(ctx context.Context) error {
 
 		for _, key := range keys {
 			if err := ic.backend.DeleteObject(ctx, key); err != nil {
-				log.Printf("couldn't delete object %x: %v", key, err)
+				log.Printf("couldn't delete object %s: %v", key, err)
 			}
 		}
 	}
@@ -487,9 +487,9 @@ func (ic *IndexdClient) processUpload(ctx context.Context) error {
 		if errors.Is(err, stores.ErrNotFound) {
 			// The file has likely been deleted.
 			if derr := ic.backend.DeleteObject(ctx, key); derr != nil {
-				log.Printf("failed to delete orphaned uploaded slab %x after late completion: %v", key, derr)
+				log.Printf("failed to delete orphaned uploaded slab %s after late completion: %v", key, derr)
 			} else if perr := ic.backend.PruneSlabs(ctx); perr != nil {
-				log.Printf("failed to prune slabs after late completion for %x: %v", key, perr)
+				log.Printf("failed to prune slabs after late completion for %s: %v", key, perr)
 			}
 			return nil
 		}
