@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -328,11 +329,19 @@ func (ic *IndexdClient) Read(ctx context.Context, acc stores.Account, path strin
 
 // StartUpload initiates a multipart upload.
 func (ic *IndexdClient) StartUpload(ctx context.Context, acc stores.Account, path string) (uploadID string, err error) {
+	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
+		return
+	}
+
 	return ic.db.CreateUpload(acc, ic.share, path)
 }
 
 // AbortUpload aborts an initiated multipart upload.
-func (ic *IndexdClient) AbortUpload(ctx context.Context, _ string, uploadID string) (err error) {
+func (ic *IndexdClient) AbortUpload(ctx context.Context, path string, uploadID string) (err error) {
+	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
+		return nil
+	}
+
 	slabs, err := ic.db.RemoveUpload(uploadID)
 	if err != nil {
 		return fmt.Errorf("couldn't abort upload: %v", err)
@@ -353,6 +362,10 @@ func (ic *IndexdClient) AbortUpload(ctx context.Context, _ string, uploadID stri
 
 // FinishUpload completes a multipart upload.
 func (ic *IndexdClient) FinishUpload(ctx context.Context, path string, uploadID string, _ []api.MultipartCompletedPart) error {
+	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
+		return nil
+	}
+
 	if err := ic.db.FinalizeUpload(uploadID); err != nil {
 		return fmt.Errorf("couldn't finalize upload: %v", err)
 	}
@@ -362,6 +375,10 @@ func (ic *IndexdClient) FinishUpload(ctx context.Context, path string, uploadID 
 
 // Write uploads the provided chunk of data to the Sia network.
 func (ic *IndexdClient) Write(ctx context.Context, r io.Reader, path string, uploadID string, partNumber int, offset, length uint64) (_ string, err error) {
+	if strings.HasSuffix(path, ":Zone.Identifier") { // Don't upload Windows' zone identifier files
+		return
+	}
+
 	buf, err := io.ReadAll(r)
 	if err != nil {
 		return "", fmt.Errorf("couldn't read data: %v", err)
