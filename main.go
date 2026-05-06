@@ -22,12 +22,12 @@ import (
 	sdk "go.sia.tech/siastorage"
 )
 
-const version = "2.1.0-beta"
+const version = "2.1.0"
 
 var storesDir = flag.String("dir", ".", "directory for storing persistent data")
 
 func main() {
-	log.Printf("Starting SiaSMB v%s...\n", version)
+	log.Printf("Starting Sombrero v%s...\n", version)
 
 	// Parse command-line args.
 	flag.Parse()

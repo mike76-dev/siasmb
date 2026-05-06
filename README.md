@@ -1,4 +1,4 @@
-# siasmb
+# Sombrero
 This is an SMB server integrated into the Sia decentralized cloud storage. Users can connect to it from their PCs and access the Sia storage like they would normally do with a regular remote drive.
 
 ## Prerequisites
@@ -88,8 +88,8 @@ database:
   database: <DATABASE>     # the name of the PostgreSQL database from the previous section
   sslMode: disable         # the SSL mode of the PostgreSQL server
 indexd:
-  appName: SiaSMB                         # the name of the app, unique to the `indexd` node being connected to
-  description: SiaSMB server              # description of the app
+  appName: Sombrero                       # the name of the app, unique to the `indexd` node being connected to
+  description: Sombrero server            # description of the app
   logoURL: https://example.com/logo.png   # URL of the app logo, can be left as it is
   serviceURL: https://example.com/service # URL of the app itself, can be left as it is (SiaSMB has no service page)
   seedPhrase: ''                          # if omitted, the server will generate a new seed phrase and put it here
